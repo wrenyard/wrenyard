@@ -6,7 +6,7 @@ import type { QuotaSnapshot } from '@/shell-contract';
 
 /**
  * Shared shell snapshot queries. These are the single cache owners for the
- * update, daemon and runtime-alias bridge reads: the app-level query client
+ * update and daemon bridge reads: the app-level query client
  * invalidates the same keys on push events (see `app/query-client`), so the app
  * and pages consume these options instead of re-declaring the bridge call.
  */
@@ -20,12 +20,6 @@ export const daemonQuery = queryOptions({
   queryKey: ['daemon'] as const,
   queryFn: () => shell.getDaemon(),
   staleTime: 5_000,
-});
-
-export const runtimeAliasesQuery = queryOptions({
-  queryKey: ['runtimeAliases'] as const,
-  queryFn: () => shell.runtimeAliasSnapshot(),
-  staleTime: 60_000,
 });
 
 /**

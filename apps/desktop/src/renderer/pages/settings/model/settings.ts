@@ -226,23 +226,6 @@ export function draftMatchesBaseline<T>(
 }
 
 /* ------------------------------------------------------------------ */
-/* Runtime aliases                                                     */
-/* ------------------------------------------------------------------ */
-
-export const ALIAS_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-export const ALIAS_TARGET_MAX_LENGTH = 512;
-
-export type AliasValidationReason = 'invalid-name' | 'empty-target' | 'long-target';
-
-/** Validates the alias name and target; `null` means acceptable. */
-export function validateAlias(name: string, target: string): AliasValidationReason | null {
-  if (!ALIAS_NAME_PATTERN.test(name)) return 'invalid-name';
-  if (target.length === 0) return 'empty-target';
-  if (target.length > ALIAS_TARGET_MAX_LENGTH) return 'long-target';
-  return null;
-}
-
-/* ------------------------------------------------------------------ */
 /* Pet companion                                                       */
 /* ------------------------------------------------------------------ */
 

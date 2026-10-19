@@ -242,9 +242,6 @@ export const SHELL_CHANNELS = {
   commandAction: 'wrenyard-shell:command-action',
   taskSettingsSnapshot: 'wrenyard-shell:task-settings-snapshot',
   taskSettingsSave: 'wrenyard-shell:task-settings-save',
-  runtimeAliasSnapshot: 'wrenyard-shell:runtime-alias-snapshot',
-  runtimeAliasPut: 'wrenyard-shell:runtime-alias-put',
-  runtimeAliasRemove: 'wrenyard-shell:runtime-alias-remove',
   taskRoutingTest: 'wrenyard-shell:task-routing-test',
   taskRoutingTestTasks: 'wrenyard-shell:task-routing-test-tasks',
   execStart: 'wrenyard-shell:exec-start',
@@ -975,13 +972,11 @@ export type TaskSettingsScope = 'global' | 'task';
 export type TaskSettingsMode = 'automatic' | 'explicit';
 
 /**
- * Explicit-mode runtime selection: either a stored runtime alias name or an
- * inline canonical `provider/model:client` target. Desktop never synthesizes a
- * resolved client/provider/model triple and never enumerates catalog candidates.
+ * Explicit-mode runtime selection: an inline canonical `provider/model:client`
+ * target. Desktop never synthesizes a resolved client/provider/model triple and
+ * never enumerates catalog candidates.
  */
-export type TaskSettingsExplicitReference =
-  | { kind: 'alias'; name: string }
-  | { kind: 'target'; target: string };
+export type TaskSettingsExplicitReference = { kind: 'target'; target: string };
 
 /** Automatic dispatch field enums (mirrors the task dispatch requirements). */
 export type TaskSettingsIntelligence = 'low' | 'mid' | 'high' | 'premium';
@@ -1144,7 +1139,7 @@ export interface TaskSettingsExplicitRow {
  * resolves.
  */
 export interface TaskSettingsAutomaticSelection {
-  /** Exact runtime reference (alias name or target) that produced the automatic selection. */
+  /** Exact runtime target that produced the automatic selection. */
   exact_runtime: string;
   /** Daemon-resolved dispatch of the automatic selection. */
   resolved: TaskResolvedDispatch;
@@ -1196,8 +1191,6 @@ export interface TaskSettingsSnapshot {
   /** Persisted user-global settings layer. */
   user_global: TaskSettingsLayer;
   rows: TaskSettingsTaskRow[];
-  /** Read-only runtime alias projection used to suggest explicit references. */
-  aliases: RuntimeAliasEntry[];
   /** Optional backend load failures surfaced when some task sources could not be read. */
   load_errors?: Array<{
     source_path: string;
@@ -1206,44 +1199,6 @@ export interface TaskSettingsSnapshot {
     project?: string;
     project_display_name?: string;
   }>;
-}
-
-/** A validation problem surfaced by the daemon for a runtime alias entry. */
-export interface RuntimeAliasIssue {
-  code: string;
-  message: string;
-  field?: string;
-}
-
-/**
- * One stored runtime alias binding a name to a canonical `provider/model:client`
- * target. Names follow `^[a-z0-9][a-z0-9._-]{0,63}$`; the store is daemon-owned.
- */
-export interface RuntimeAliasEntry {
-  name: string;
-  target: string;
-  created_at?: string;
-  updated_at?: string;
-  issues?: RuntimeAliasIssue[];
-}
-
-/** Snapshot of the daemon-owned runtime alias store. */
-export interface RuntimeAliasSnapshot {
-  revision: string;
-  aliases: RuntimeAliasEntry[];
-}
-
-/** Bounded request for runtime.alias.put; CAS on the store revision. */
-export interface RuntimeAliasPutRequest {
-  expected_revision: string;
-  name: string;
-  target: string;
-}
-
-/** Bounded request for runtime.alias.remove; CAS on the store revision. */
-export interface RuntimeAliasRemoveRequest {
-  expected_revision: string;
-  name: string;
 }
 
 /** Bounded save request for task.settings.save. */
@@ -2044,9 +1999,6 @@ export interface WrenyardShellApi {
     method: M,
     params?: AgentMethodMap[M]['params'],
   ): Promise<AgentMethodMap[M]['result']>;
-  runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
-  runtimeAliasPut(request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot>;
-  runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
   execStart(request: ExecStartRequest): Promise<ExecSnapshotDto>;

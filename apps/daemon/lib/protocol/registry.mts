@@ -457,18 +457,6 @@ export type {
   WorkspaceVcsPullResult,
 } from './methods/workspace-vcs.mts'
 import {
-  runtimeAliasPutParamsSchema,
-  runtimeAliasPutResultSchema,
-  runtimeAliasRemoveParamsSchema,
-  runtimeAliasRemoveResultSchema,
-  runtimeAliasSnapshotParamsSchema,
-  runtimeAliasSnapshotResultSchema,
-  type RuntimeAliasPutParams,
-  type RuntimeAliasRemoveParams,
-  type RuntimeAliasSnapshotParams,
-  type RuntimeAliasSnapshotResult,
-} from './methods/runtime-alias.mts'
-import {
   execCancelParamsSchema,
   execCancelResultSchema,
   execEventsParamsSchema,
@@ -635,14 +623,6 @@ export {
   todoUpdateParamsSchema,
   todoUpdateResultSchema,
 } from './methods/workspace-todo.mts'
-export type {
-  RuntimeAliasPutParams,
-  RuntimeAliasPutResult,
-  RuntimeAliasRemoveParams,
-  RuntimeAliasRemoveResult,
-  RuntimeAliasSnapshotParams,
-  RuntimeAliasSnapshotResult,
-} from './methods/runtime-alias.mts'
 export type {
   ExecCancelParams,
   ExecCancelResult,
@@ -1034,9 +1014,6 @@ export interface ForemanMethodParams {
   'remote.host.list': RemoteHostListParams
   'remote.host.save': RemoteHostSaveParams
   'remote.host.rename': RemoteHostRenameParams
-  'runtime.alias.snapshot': RuntimeAliasSnapshotParams
-  'runtime.alias.put': RuntimeAliasPutParams
-  'runtime.alias.remove': RuntimeAliasRemoveParams
   'exec.start': ExecStartParams
   'exec.get': ExecGetParams
   'exec.events': ExecEventsParams
@@ -1157,9 +1134,6 @@ export interface ForemanMethodResults {
   'remote.host.list': RemoteHostListResult
   'remote.host.save': RemoteHostMutationResult
   'remote.host.rename': RemoteHostMutationResult
-  'runtime.alias.snapshot': RuntimeAliasSnapshotResult
-  'runtime.alias.put': RuntimeAliasSnapshotResult
-  'runtime.alias.remove': RuntimeAliasSnapshotResult
   'exec.start': ExecStartResult
   'exec.get': ExecGetResult
   'exec.events': ExecEventsResult
@@ -1547,18 +1521,6 @@ export const methodRegistry: {
     params: remoteHostRenameParamsSchema,
     result: remoteHostMutationResultSchema,
     description: 'Rename a saved remote host display name. Refuses with not_found when the alias is not saved.',
-  },
-  'runtime.alias.snapshot': {
-    params: runtimeAliasSnapshotParamsSchema,
-    result: runtimeAliasSnapshotResultSchema,
-  },
-  'runtime.alias.put': {
-    params: runtimeAliasPutParamsSchema,
-    result: runtimeAliasPutResultSchema,
-  },
-  'runtime.alias.remove': {
-    params: runtimeAliasRemoveParamsSchema,
-    result: runtimeAliasRemoveResultSchema,
   },
   'exec.start': {
     params: execStartParamsSchema,

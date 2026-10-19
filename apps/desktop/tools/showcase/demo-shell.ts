@@ -36,7 +36,6 @@ import {
   type QuotaSnapshot,
   type QuotaWindowSnapshot,
   type ResolvedAppearance,
-  type RuntimeAliasSnapshot,
   type SettingsSnapshot,
   type ShellPage,
   type StatsDailySnapshot,
@@ -941,10 +940,6 @@ const TASK_SETTINGS: TaskSettingsSnapshot = {
   project: 'aurora',
   user_global: {},
   rows: TASK_ROWS,
-  aliases: [
-    { name: 'fast', target: 'deepseek/deepseek-v4.1-flash:codex', updated_at: iso(NOW - 2 * DAY) },
-    { name: 'strong', target: 'anthropic/claude-opus-5.5:claude', updated_at: iso(NOW - 5 * DAY) },
-  ],
 };
 
 const ROUTING_TASKS: TaskRoutingTestTask[] = TASK_ROWS.map((row) => ({
@@ -1430,18 +1425,6 @@ export function createDemoShell(control?: DemoControl): DemoShell {
 
     getTaskSettings: async () => TASK_SETTINGS,
     saveTaskSettings: async () => TASK_SETTINGS,
-    runtimeAliasSnapshot: async (): Promise<RuntimeAliasSnapshot> => ({
-      revision: TASK_SETTINGS.revision,
-      aliases: TASK_SETTINGS.aliases,
-    }),
-    runtimeAliasPut: async (): Promise<RuntimeAliasSnapshot> => ({
-      revision: TASK_SETTINGS.revision,
-      aliases: TASK_SETTINGS.aliases,
-    }),
-    runtimeAliasRemove: async (): Promise<RuntimeAliasSnapshot> => ({
-      revision: TASK_SETTINGS.revision,
-      aliases: TASK_SETTINGS.aliases,
-    }),
     requestTaskRoutingTest: async (): Promise<TaskRoutingTestResult> => ({
       rows: ROUTING_CANDIDATES.map((candidate, index) => ({
         ...candidate,

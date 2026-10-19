@@ -60,10 +60,8 @@ import { ExecService } from '@wrenyard/exec'
 import { ProviderService } from '@wrenyard/provider-service'
 import { OperationComponents } from './services/operation-components.mts'
 import { desktopLane, OperationAdapter } from './execution/operation-adapter.mts'
-import { RuntimeAliasService } from './services/runtime-alias-service.mts'
 import { RemoteHostRegistryService } from '../remote/host-registry.mts'
 import { createWorkspaceControl } from './services/workspace-control.mts'
-import RuntimeAliasStore from '../runtime-aliases/store.mts'
 import { ForemanConfigManager } from '../config/manager.mts'
 import { getForemanEventBus } from '../events/event-bus.mts'
 import { initializeLocalSpeedSamples, readLocalSpeedSamplesCached, updateLocalSpeedSample } from '../events/tps.mts'
@@ -809,15 +807,6 @@ async function createForemanDaemonResources(
   // reused here so the gateway, RPC surface, and the running daemon all share
   // the identical resolver instance.
   const { catalog, providerRuntime, dispatchPlans, taskDispatchResolver } = runtime
-  // One daemon-owned RuntimeAliasStore + RuntimeAliasService back the
-  // runtime.alias.* IPC surface. The store resolves the
-  // WRENYARD_CONFIG_HOME/~/.config/wrenyard/dispatch/config.json path itself, and no
-  // alias target is cached: every snapshot/put/remove/resolve reloads at call
-  // time so the service never serves a stale copied triple. This single alias
-  // owner is constructed before TaskSettingsService and shared with it — task
-  // settings resolves alias references freshly through the same instance.
-  const runtimeAliasStore = new RuntimeAliasStore()
-  const runtimeAliasService = new RuntimeAliasService(runtimeAliasStore)
   // One private current-CodeBuddy-active-snapshot loader bound to the catalog
   // codebuddy provider definition and the existing provider runtime. Every
   // snapshot() request and every exact-codebuddy readiness probe resolves the
@@ -1160,7 +1149,6 @@ async function createForemanDaemonResources(
       workspaceRoot,
       configPath: authoritativeConfigPath,
       resolver: taskDispatchResolver,
-      aliases: runtimeAliasService,
       quotaSnapshots: autoRoutingQuotaSnapshots,
       // The same shared Gateway instance and route-status callable already used
       // by session and auxiliary routing: Task automatic candidates and explicit
@@ -1487,7 +1475,6 @@ async function createForemanDaemonResources(
       return providerService.quotaSnapshot(params)
     },
     taskSettings: workspaceScoped.taskSettingsService,
-    runtimeAlias: runtimeAliasService,
     execService: runtime.execService,
     operationComponents: runtime.operationComponents,
     operationAdapter: runtime.operationAdapter,
@@ -1627,7 +1614,6 @@ async function createForemanDaemonResources(
     'workspace.doc.create', 'workspace.doc.update', 'workspace.doc.edit', 'workspace.doc.delete',
     'routine.create', 'routine.update', 'routine.run', 'routine.delete',
     'agent.wake',
-    'runtime.alias.put', 'runtime.alias.remove',
     'bot.create', 'bot.update', 'bot.control', 'bot.delete', 'bot.tick', 'bot.item.action',
   ])
   // In-flight requests that mutate workspace-scoped state or admit work count
@@ -1644,7 +1630,6 @@ async function createForemanDaemonResources(
     'workspace.doc.create', 'workspace.doc.update', 'workspace.doc.edit', 'workspace.doc.delete',
     'routine.create', 'routine.update', 'routine.run', 'routine.delete',
     'agent.wake',
-    'runtime.alias.put', 'runtime.alias.remove',
     'bot.create', 'bot.update', 'bot.control', 'bot.delete', 'bot.tick', 'bot.item.action',
   ]
   rpcRouter.setAdmissionGate((method, params) => {

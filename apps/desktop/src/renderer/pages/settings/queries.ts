@@ -7,7 +7,6 @@ import {
   daemonQuery,
   preferencesQuery,
   preferencesQueryKey,
-  runtimeAliasesQuery,
   settingsQuery,
   settingsQueryKey,
   taskSettingsQuery,
@@ -17,8 +16,8 @@ import { mergeSnapshots } from '@/renderer/pages/tasks/model/settings.js';
 import { applyLocalPreference, draftMatchesBaseline, errorMessage } from './model/settings.js';
 
 /**
- * Page-scoped queries for the Settings page. The update, daemon, runtime alias,
- * preferences and settings snapshots are shared shell queries owned by
+ * Page-scoped queries for the Settings page. The update, daemon, preferences
+ * and settings snapshots are shared shell queries owned by
  * `lib/queries` and refreshed by the app-level push subscriptions (see
  * `app/query-client`); the settings page only owns its quota snapshots.
  */
@@ -27,7 +26,6 @@ export {
   daemonQuery,
   preferencesQuery,
   preferencesQueryKey,
-  runtimeAliasesQuery,
   settingsQuery,
   settingsQueryKey,
   updateQuery,
@@ -35,7 +33,6 @@ export {
 
 export const daemonQueryKey = daemonQuery.queryKey;
 export const updateQueryKey = updateQuery.queryKey;
-export const runtimeAliasesQueryKey = runtimeAliasesQuery.queryKey;
 
 /** Provider catalog projection; drives the read-only provider count. */
 export const quotaQueryKey = ['quota'] as const;
@@ -56,10 +53,6 @@ export function useDaemonQuery() {
 
 export function useUpdateQuery() {
   return useQuery(updateQuery);
-}
-
-export function useRuntimeAliasesQuery() {
-  return useQuery(runtimeAliasesQuery);
 }
 
 export function useQuotaQuery() {
@@ -315,7 +308,6 @@ export const SETTINGS_QUERY_KEYS = [
   settingsQueryKey,
   daemonQueryKey,
   updateQueryKey,
-  runtimeAliasesQueryKey,
   quotaQueryKey,
   preferencesQueryKey,
 ] as const;

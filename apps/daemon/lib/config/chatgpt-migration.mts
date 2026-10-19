@@ -74,21 +74,12 @@ export function migrateProviderTargetId(value: string): string {
   return `${stageProviderId(value.slice(0, slash))}${value.slice(slash)}`;
 }
 
-/** Public target migration for callers outside a full document pass. */
-export function migrateStoredProviderTargetId(value: string): string {
-  return unstageProviderSentinel(migrateProviderTargetId(value));
-}
-
 function migrate<T>(original: T, apply: (record: RecordValue) => void): { record: T; changed: boolean } {
   if (!object(original)) return { record: original, changed: false };
   const record = structuredClone(original);
   apply(record);
   const changed = JSON.stringify(record) !== JSON.stringify(original);
   return { record: changed ? record : original, changed };
-}
-function isProviderKey(value: string): boolean {
-  if (isStagedProvider(value)) return false;
-  return stageProviderId(value) !== value;
 }
 
 function migrateLayer(layer: unknown): void {
@@ -145,51 +136,6 @@ export function migrateForemanChatGPTReferences<T>(record: T): { record: T; chan
   return finalize(record, staged.record);
 }
 
-/** Build a runtime provider-map migrator. `migrateKey` stages the rewrite so a
- *  later stage of the same pass cannot chain it; an id already present in the
- *  source wins over a mapped legacy alias, which otherwise carries its value to
- *  the canonical key. */
-function providerKeyMigrator(
-  migrateKey: (value: string) => string,
-): (value: unknown) => unknown {
-  return (value: unknown): unknown => {
-    if (!object(value)) return value;
-    if (!Object.keys(value).some(isProviderKey)) return value;
-    const next: RecordValue = {};
-    for (const [key, entry] of Object.entries(value)) {
-      const staged = migrateKey(key);
-      // An explicit canonical entry already in the source wins over a mapped
-      // legacy alias; look it up under its plain (unstaged) id.
-      const canonical = unstageProviderSentinel(staged);
-      const canonicalIsStable = stageProviderId(canonical) === canonical;
-      next[staged] = staged === key || !canonicalIsStable ? entry : (value[canonical] ?? entry);
-    }
-    return next;
-  };
-}
-
-const migrateRuntimeProviderKey = providerKeyMigrator(stageProviderId);
-const migratePolicyProviderKey = providerKeyMigrator(migrateProviderTargetId);
-
-/** Migrate persisted runtime alias references: alias targets, provider keys,
- *  and policy provider keys. Callers gate this on
- *  {@link hasRuntimeProviderMigrationMarker}. */
-export function migrateRuntimeChatGPTReferences<T>(record: T): { record: T; changed: boolean } {
-  const staged = migrate(record, (root) => {
-    if (object(root.aliases)) {
-      for (const [name, target] of Object.entries(root.aliases)) {
-        if (typeof target === 'string') root.aliases[name] = migrateProviderTargetId(target);
-      }
-    }
-    if (root.providers !== undefined) root.providers = migrateRuntimeProviderKey(root.providers);
-    if (root.policy_max_usage_pct !== undefined) {
-      root.policy_max_usage_pct = migratePolicyProviderKey(root.policy_max_usage_pct);
-    }
-  });
-  if (!staged.changed) return staged;
-  return finalize(record, staged.record);
-}
-
 /** Recursively strip the inner-stage sentinel from every string in a migrated
  *  document so the persisted value is the plain canonical id. */
 function unstageDeep(value: unknown): unknown {
@@ -210,30 +156,7 @@ function finalize<T>(original: T, staged: T): { record: T; changed: boolean } {
   return { record, changed: JSON.stringify(record) !== JSON.stringify(original) };
 }
 
-/** Marker key for the runtime alias document. Underscore-prefixed so it cannot
- *  collide with an alias name, and unrelated top-level fields stay verbatim. */
-export const RUNTIME_PROVIDER_MIGRATION_MARKER_KEY = '_providerMigration';
-export const RUNTIME_PROVIDER_MIGRATION_MARKER = 'provider-identity-v1';
-
-export function hasRuntimeProviderMigrationMarker(record: unknown): boolean {
-  return (
-    object(record) &&
-    record[RUNTIME_PROVIDER_MIGRATION_MARKER_KEY] === RUNTIME_PROVIDER_MIGRATION_MARKER
-  );
-}
-
-export function markRuntimeProviderMigration<T>(record: T): { record: T; changed: boolean } {
-  return migrate(record, (root) => {
-    if (root[RUNTIME_PROVIDER_MIGRATION_MARKER_KEY] === RUNTIME_PROVIDER_MIGRATION_MARKER) return;
-    root[RUNTIME_PROVIDER_MIGRATION_MARKER_KEY] = RUNTIME_PROVIDER_MIGRATION_MARKER;
-  });
-}
-
 /** `providerMigration` entry used when generating a fresh foreman config, so a
  *  first-run document starts pre-marked and never triggers a legacy rewrite. */
 export const FOREMAN_PROVIDER_MIGRATION_MARKER_ENTRY: Readonly<Record<string, string>> =
   Object.freeze({ providerMigration: FOREMAN_PROVIDER_MIGRATION_MARKER });
-
-/** Marker entry used when generating a fresh runtime alias document. */
-export const RUNTIME_PROVIDER_MIGRATION_MARKER_ENTRY: Readonly<Record<string, string>> =
-  Object.freeze({ [RUNTIME_PROVIDER_MIGRATION_MARKER_KEY]: RUNTIME_PROVIDER_MIGRATION_MARKER });

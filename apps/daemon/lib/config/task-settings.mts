@@ -17,10 +17,10 @@ import { type TaskDispatchRequirements as AutoRoutingTaskDispatchRequirements, v
  * Runtime selection is mode-driven and has exactly two modes:
  *   - `automatic` ignores any explicit reference found on lower/inherited
  *     layers (a stale reference is dropped, never validated nor resolved).
- *   - `explicit` requires one structural explicit reference (an alias name or
- *     an inline target) to be effective. This module never resolves aliases
- *     nor checks compatibility against a catalog: it only carries the
- *     structural reference forward for the daemon to honor.
+ *   - `explicit` requires one structural explicit reference (an inline target)
+ *     to be effective. This module never resolves references nor checks
+ *     compatibility against a catalog: it only carries the structural
+ *     reference forward for the daemon to honor.
  *
  * Task definitions never pin a runtime; every Task defaults to `automatic`.
  * The only per-task user selection source is the persisted
@@ -144,13 +144,11 @@ const REASONING_EFFORT_FIELDS: ReadonlySet<TaskDispatchField> = new Set(['expect
  * -------------------------------------------------------------------------- */
 
 /**
- * Structural user explicit selection. `alias` names a registered alias to be
- * resolved by the daemon; `target` is an inline runtime target. This module
- * validates the shape but never resolves aliases or compatibility.
+ * Structural user explicit selection. `target` is an inline runtime target.
+ * This module validates the shape but never resolves references or
+ * compatibility.
  */
-export type TaskExplicitRuntime =
-  | { kind: 'alias'; name: string }
-  | { kind: 'target'; target: string }
+export type TaskExplicitRuntime = { kind: 'target'; target: string }
 
 export interface TaskSettingsLayer {
   selectionMode?: TaskSelectionMode
@@ -280,14 +278,13 @@ function normalizeNonEmptyStringList(value: unknown, scope: string, label: strin
 }
 
 const EXPLICIT_RUNTIME_KEYS = {
-  alias: ['kind', 'name'],
   target: ['kind', 'target'],
 } as const
 
 /**
  * Validates one explicit runtime reference. The reference must be exactly
- * `{ kind: 'alias', name }` or `{ kind: 'target', target }` with a non-empty
- * trimmed value; extra fields and mixed alias/target fields are rejected.
+ * `{ kind: 'target', target }` with a non-empty trimmed value; extra fields
+ * are rejected.
  */
 function normalizeExplicitRuntime(raw: unknown, scope: string): TaskExplicitRuntime {
   if (!isPlainObject(raw)) {
@@ -295,22 +292,14 @@ function normalizeExplicitRuntime(raw: unknown, scope: string): TaskExplicitRunt
   }
   const record = raw as Record<string, unknown>
   const kind = record.kind
-  if (kind !== 'alias' && kind !== 'target') {
-    fail(scope, `explicitRuntime.kind must be "alias" or "target", got ${String(kind)}`)
+  if (kind !== 'target') {
+    fail(scope, `explicitRuntime.kind must be "target", got ${String(kind)}`)
   }
-  const allowed: readonly string[] =
-    kind === 'alias' ? EXPLICIT_RUNTIME_KEYS.alias : EXPLICIT_RUNTIME_KEYS.target
+  const allowed: readonly string[] = EXPLICIT_RUNTIME_KEYS.target
   for (const key of Object.keys(record)) {
     if (!allowed.includes(key)) {
       fail(scope, `explicitRuntime ${kind} reference does not accept field "${key}"`)
     }
-  }
-  if (kind === 'alias') {
-    const name = record.name
-    if (typeof name !== 'string' || name.trim() === '') {
-      fail(scope, 'explicitRuntime alias requires a non-empty trimmed name')
-    }
-    return { kind: 'alias', name: name.trim() }
   }
   const target = record.target
   if (typeof target !== 'string' || target.trim() === '') {
@@ -606,7 +595,7 @@ function assertExplicitReference(
   scope: string,
 ): void {
   if (explicitRuntime === undefined) {
-    fail(scope, 'explicit mode requires an explicit runtime reference (alias or target)')
+    fail(scope, 'explicit mode requires an explicit runtime reference (target)')
   }
 }
 

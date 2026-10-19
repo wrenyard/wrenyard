@@ -8,8 +8,6 @@ import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
 import type {
   ExecEventsRequest,
   ExecStartRequest,
-  RuntimeAliasPutRequest,
-  RuntimeAliasRemoveRequest,
   TaskRoutingTestParams,
   TaskSettingsAutomaticDispatch,
   TaskSettingsSaveRequest,
@@ -31,9 +29,6 @@ export const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
 ]);
 export const TASK_SETTINGS_INTELLIGENCE_VALUES = new Set(['low', 'mid', 'high', 'premium']);
 export const TASK_SETTINGS_CAPABILITY_VALUES = new Set(['text', 'image']);
-export const RUNTIME_ALIAS_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-export const RUNTIME_ALIAS_REVISION_MAX = 512;
-export const RUNTIME_ALIAS_TARGET_MAX = 512;
 export const TASK_SETTINGS_STRING_MAX = 512;
 export const TASK_SETTINGS_STRING_ARRAY_MAX = 64;
 export const TASK_SETTINGS_CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
@@ -58,22 +53,10 @@ export function isBoundedString(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= max;
 }
 
-export function isBoundedRevision(value: unknown): value is string {
-  return isBoundedString(value, RUNTIME_ALIAS_REVISION_MAX);
-}
-
 export function validateExplicitReferenceValue(explicitReference: unknown): void {
   if (explicitReference === undefined || explicitReference === null) return;
   if (!isBoundedPlainObject(explicitReference)) throw new Error('显式运行时引用无效');
   const kind = explicitReference.kind;
-  if (kind === 'alias') {
-    for (const field of Object.keys(explicitReference)) {
-      if (field !== 'kind' && field !== 'name') throw new Error('显式运行时引用无效');
-    }
-    const name = explicitReference.name;
-    if (typeof name !== 'string' || !RUNTIME_ALIAS_NAME.test(name)) throw new Error('显式运行时引用无效');
-    return;
-  }
   if (kind === 'target') {
     for (const field of Object.keys(explicitReference)) {
       if (field !== 'kind' && field !== 'target') throw new Error('显式运行时引用无效');
@@ -172,33 +155,6 @@ export function validateTaskSettingsSaveRequest(value: unknown): TaskSettingsSav
   if (taskId !== undefined && taskId !== null) request.task_id = taskId;
   if (project !== undefined) request.project = project;
   return request;
-}
-
-/**
- * IPC-boundary validation for runtime.alias.put. Desktop validates the public
- * DTO shape and bounds only; the alias store itself stays daemon-owned.
- */
-export function validateRuntimeAliasPutRequest(value: unknown): RuntimeAliasPutRequest {
-  if (!isBoundedPlainObject(value)) throw new Error('运行时别名请求无效');
-  const expectedRevision = value.expected_revision;
-  if (!isBoundedRevision(expectedRevision)) throw new Error('运行时别名版本基线无效');
-  const name = value.name;
-  if (typeof name !== 'string' || !RUNTIME_ALIAS_NAME.test(name)) throw new Error('运行时别名格式无效');
-  const target = value.target;
-  if (typeof target !== 'string' || !target || target.length > RUNTIME_ALIAS_TARGET_MAX || TASK_SETTINGS_CONTROL_CHARS.test(target)) {
-    throw new Error('运行时目标无效');
-  }
-  return { expected_revision: expectedRevision, name, target };
-}
-
-/** IPC-boundary validation for runtime.alias.remove; CAS on the store revision. */
-export function validateRuntimeAliasRemoveRequest(value: unknown): RuntimeAliasRemoveRequest {
-  if (!isBoundedPlainObject(value)) throw new Error('运行时别名请求无效');
-  const expectedRevision = value.expected_revision;
-  if (!isBoundedRevision(expectedRevision)) throw new Error('运行时别名版本基线无效');
-  const name = value.name;
-  if (typeof name !== 'string' || !RUNTIME_ALIAS_NAME.test(name)) throw new Error('运行时别名格式无效');
-  return { expected_revision: expectedRevision, name };
 }
 
 /**

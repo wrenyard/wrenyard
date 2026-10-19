@@ -1,23 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { CircleHelp, RotateCcw, X } from 'lucide-react';
 import { Alert, AlertAction, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
-import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxList,
-} from '@/renderer/components/ui/combobox';
 import { Input } from '@/renderer/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/renderer/components/ui/select';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { cn } from 'cn';
 import type {
-  RuntimeAliasEntry,
   TaskSettingsMode,
   TaskSettingsPatch,
   TaskSettingsTaskRow,
@@ -33,13 +24,10 @@ import {
   taskRuntimeLine,
   timeoutHint,
 } from '../model/settings.js';
-import { useRuntimeAliasesQuery } from '../queries.js';
 import { TemplatePreview } from './TemplatePreview.js';
 
 export interface TaskDetailProps {
   row: TaskSettingsTaskRow;
-  /** Snapshot-carried aliases used before the scoped alias query resolves. */
-  fallbackAliases: RuntimeAliasEntry[];
   loading: boolean;
   busy: boolean;
   /** Bumped by the page after a successful save/reset to re-seed the draft. */
@@ -54,7 +42,6 @@ export interface TaskDetailProps {
 /** One task's settings panel: header actions, aligned settings grid and a height-bounded template preview. */
 export function TaskDetail({
   row,
-  fallbackAliases,
   loading,
   busy,
   reseedNonce,
@@ -78,10 +65,6 @@ export function TaskDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [row.identity, reseedNonce]);
 
-  const aliasesQuery = useRuntimeAliasesQuery(mode === 'explicit');
-  const aliases = aliasesQuery.data?.aliases ?? fallbackAliases;
-  const aliasNames = useMemo(() => aliases.map((entry) => entry.name), [aliases]);
-
   const runtimeLine = taskRuntimeLine(row);
   const failure = taskResolutionFailureMessage(row);
   const hint = timeoutHint(row);
@@ -94,7 +77,7 @@ export function TaskDetail({
 
   const save = (): void => {
     try {
-      onCommit(buildLayerPatch(row, mode, runtime, timeoutText, aliases));
+      onCommit(buildLayerPatch(row, mode, runtime, timeoutText));
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -165,26 +148,14 @@ export function TaskDetail({
           {mode === 'explicit' ? (
             <SettingRow label={copy.RUNTIME_LABEL}>
               <div className="flex w-full max-w-md min-w-0 items-center gap-1">
-                <Combobox
-                  items={aliasNames}
+                <Input
+                  className="w-full font-mono"
+                  placeholder={copy.RUNTIME_PLACEHOLDER}
                   value={runtime}
-                  inputValue={runtime}
-                  onValueChange={(next) => setRuntime(typeof next === 'string' ? next : '')}
-                  onInputValueChange={(text) => setRuntime(text)}
                   disabled={disabled}
-                >
-                  <ComboboxInput
-                    className="w-full font-mono"
-                    placeholder={copy.RUNTIME_PLACEHOLDER}
-                    showClear
-                  />
-                  <ComboboxContent>
-                    <ComboboxEmpty>{copy.RUNTIME_NO_ALIASES}</ComboboxEmpty>
-                    <ComboboxList>
-                      {(name: string) => <ComboboxItem key={name} value={name}>{name}</ComboboxItem>}
-                    </ComboboxList>
-                  </ComboboxContent>
-                </Combobox>
+                  aria-label={copy.RUNTIME_LABEL}
+                  onChange={(event) => setRuntime(event.target.value)}
+                />
                 <Tooltip>
                   <TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label={copy.RUNTIME_HELP_LABEL} />}>
                     <CircleHelp />

@@ -629,14 +629,11 @@ export interface TaskSettingsRuntimeTriple {
 }
 
 /**
- * Structural explicit selection stored by Task settings. Explicit mode either
- * names a runtime alias (resolved through the runtime-alias protocol) or an
- * inline exact run target. A resolved client/provider/model triple is never
+ * Structural explicit selection stored by Task settings. Explicit mode names
+ * an inline exact run target. A resolved client/provider/model triple is never
  * stored or copied back as the selection.
  */
-export type TaskSettingsExplicitReference =
-  | { kind: 'alias'; name: string }
-  | { kind: 'target'; target: string }
+export type TaskSettingsExplicitReference = { kind: 'target'; target: string }
 
 /** JSON-safe snake_case automatic dispatch fields mirroring TaskDispatchRequirements. */
 export interface TaskSettingsAutomaticDispatch {
@@ -802,7 +799,7 @@ export type TaskSettingsResolvedDispatch = TaskResolvedDispatch & {
 }
 
 export interface TaskSettingsExplicitRow {
-  /** Stored structural selection: a runtime alias or an inline exact run target.
+  /** Stored structural selection: an inline exact run target.
    *  Never a copied resolved client/provider/model triple. */
   reference: TaskSettingsExplicitReference
   /** Canonical exact run target (for example `openai/gpt-5.6-sol:codex`) when
@@ -882,9 +879,6 @@ export interface TaskSettingsSnapshotResult {
   project?: string
   /** Persisted user-global settings layer. */
   user_global: TaskSettingsLayer
-  /** Authoritative runtime aliases `[{name,target}]` for the explicit-mode
-   *  combobox suggestions (mirrors the runtime-alias protocol snapshot). */
-  aliases: Array<{ name: string; target: string }>
   rows: TaskSettingsTaskRow[]
   /** Optional registry task definition load errors (strict schema failures and
    *  duplicate definitions), surfaced separately from executable settings rows.
@@ -1016,16 +1010,6 @@ const taskSettingsSourceLayerSchema = {
   enum: ['system', 'builtin', 'user_global', 'user_task', 'invocation'],
 } as const satisfies JsonSchema
 
-const taskSettingsAliasReferenceSchema = {
-  type: 'object',
-  required: ['kind', 'name'],
-  properties: {
-    kind: { const: 'alias' },
-    name: { type: 'string', minLength: 1 },
-  },
-  additionalProperties: false,
-} as const satisfies JsonSchema
-
 const taskSettingsTargetReferenceSchema = {
   type: 'object',
   required: ['kind', 'target'],
@@ -1036,22 +1020,10 @@ const taskSettingsTargetReferenceSchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
-export const taskSettingsExplicitReferenceSchema = {
-  anyOf: [taskSettingsAliasReferenceSchema, taskSettingsTargetReferenceSchema],
-} as const satisfies JsonSchema
+export const taskSettingsExplicitReferenceSchema = taskSettingsTargetReferenceSchema
 
 const taskSettingsNullableExplicitReferenceSchema = {
   anyOf: [taskSettingsExplicitReferenceSchema, { type: 'null' }],
-} as const satisfies JsonSchema
-
-const taskSettingsAliasEntrySchema = {
-  type: 'object',
-  required: ['name', 'target'],
-  properties: {
-    name: { type: 'string', minLength: 1 },
-    target: { type: 'string', minLength: 1 },
-  },
-  additionalProperties: false,
 } as const satisfies JsonSchema
 
 export const taskSettingsAutomaticDispatchSchema = {
@@ -1513,13 +1485,12 @@ export const taskSettingsSnapshotParamsSchema = {
 
 export const taskSettingsSnapshotResultSchema = {
   type: 'object',
-  required: ['config_path', 'revision', 'user_global', 'aliases', 'rows'],
+  required: ['config_path', 'revision', 'user_global', 'rows'],
   properties: {
     config_path: { type: 'string', minLength: 1 },
     revision: { type: 'string', minLength: 1 },
     project: { type: 'string', minLength: 1 },
     user_global: taskSettingsLayerSchema,
-    aliases: { type: 'array', items: taskSettingsAliasEntrySchema },
     rows: { type: 'array', items: taskSettingsTaskRowSchema },
     load_errors: {
       type: 'array',
@@ -1681,7 +1652,7 @@ export const taskRunCreateParamsSchema = {
     invocation_settings: taskSettingsLayerInputSchema,
     // Runtime selection is expressed ONLY through these two mutually exclusive
     // forms: `invocation_settings.mode`/'automatic' for automatic routing, and
-    // `invocation_settings.explicit_runtime` for an explicit target/alias.
+    // `invocation_settings.explicit_runtime` for an explicit target.
     // Unknown top-level selection keys are rejected instead of silently
     // ignored, so an invented selection field can never look accepted.
     mode: taskSettingsModeSchema,

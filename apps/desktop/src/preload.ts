@@ -22,9 +22,6 @@ import {
   type WrenyardGatewaySettingsSaveResult,
   type TaskSettingsSaveRequest,
   type TaskSettingsSnapshot,
-  type RuntimeAliasPutRequest,
-  type RuntimeAliasRemoveRequest,
-  type RuntimeAliasSnapshot,
   type TaskRoutingTestParams,
   type TaskRoutingTestResult,
   type TaskRoutingTestTasksResult,
@@ -290,15 +287,6 @@ const api: WrenyardShellApi = {
       method,
       params,
     ) as Promise<BotTodoMethodMap[M]['result']>;
-  },
-  runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.runtimeAliasSnapshot) as Promise<RuntimeAliasSnapshot>;
-  },
-  runtimeAliasPut(request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.runtimeAliasPut, request) as Promise<RuntimeAliasSnapshot>;
-  },
-  runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.runtimeAliasRemove, request) as Promise<RuntimeAliasSnapshot>;
   },
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskRoutingTest, params) as Promise<TaskRoutingTestResult>;

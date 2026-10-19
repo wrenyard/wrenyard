@@ -18,7 +18,6 @@ import {
   PetShowTaskgraphsControl,
   PetShowWorkersControl,
 } from './PetSettings.js';
-import { RuntimeAliasesControl } from './ProviderSettings.js';
 import { RoutingWeightsControl } from './RoutingWeightsSettings.js';
 import {
   DaemonControl,
@@ -60,7 +59,6 @@ export const CUSTOM_CONTROLS: Readonly<Record<CustomControlKey, ComponentType>> 
   petShowTaskgraphs: PetShowTaskgraphsControl,
   petShowWorkers: PetShowWorkersControl,
   routingWeights: RoutingWeightsControl,
-  runtimeAliases: RuntimeAliasesControl,
   service: ServiceControl,
   settingsFile: SettingsFileControl,
   statusBarItems: StatusBarSettingsControl,

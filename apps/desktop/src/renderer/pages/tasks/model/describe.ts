@@ -45,11 +45,10 @@ export const TIMEOUT_INHERIT_PREFIX = '继承';
 export const TIMEOUT_NOT_SET = '继承（未设置）';
 export const TIMEOUT_SUFFIX = '秒';
 
-export const RUNTIME_LABEL = '指定运行时';
-export const RUNTIME_PLACEHOLDER = '别名，或 provider/model:client';
+export const RUNTIME_LABEL = '指定运行目标';
+export const RUNTIME_PLACEHOLDER = 'provider/model:client';
 export const RUNTIME_HELP_LABEL = '运行时写法帮助';
-export const RUNTIME_HELP = '填已保存别名，或直接写 provider/model:client（例如 anthropic/claude-sonnet-4:cc）。匹配已保存别名时按别名保存，否则按内联目标保存。';
-export const RUNTIME_NO_ALIASES = '暂无已保存别名';
+export const RUNTIME_HELP = '填写内联目标 provider/model:client（例如 anthropic/claude-sonnet-4:cc）。';
 
 export const SAVE_LABEL = '套用';
 export const RESET_LABEL = '重置';
@@ -71,7 +70,7 @@ export const ERR_SAVE_PREFIX = '保存失败：';
 export const ERR_SAVE_CONFLICT = '保存冲突：配置已刷新，草稿仍保留';
 export const ERR_NO_CHANGES = '没有需要保存的更改';
 export const ERR_TIMEOUT_INVALID = '总执行时限必须是正数';
-export const ERR_RUNTIME_REQUIRED = '请填写已保存别名或 provider/model:client 目标';
+export const ERR_RUNTIME_REQUIRED = '请填写 provider/model:client 目标';
 
 /* Read-only Task definition inheritance chain. Desktop never edits these
  * layers; the daemon row carries the ordered base→effective chain. */

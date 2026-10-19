@@ -60,16 +60,15 @@ function HighlightedText({ text, terms }: { text: string; terms: readonly string
 
 /**
  * Custom controls that need the whole card width: pickers and forms built from
- * several elements (theme cards, workspace, routing weights, the update panel
- * and runtime aliases). Every other custom control is a single widget and keeps
- * the standard label-left / control-right row.
+ * several elements (theme cards, workspace, routing weights and the update
+ * panel). Every other custom control is a single widget and keeps the standard
+ * label-left / control-right row.
  */
 const STACKED_CUSTOM_CONTROLS: ReadonlySet<CustomControlKey> = new Set([
   'themeCards',
   'workspace',
   'gateway',
   'routingWeights',
-  'runtimeAliases',
   'updateStatus',
 ]);
 

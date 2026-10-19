@@ -101,7 +101,6 @@ export function TasksPage() {
 
   const save = useSaveTaskSettingsMutation();
   const tree = useMemo(() => buildTaskTree(list.data), [list.data]);
-  const aliases = detail.data?.aliases ?? list.data?.aliases ?? [];
   const revision = detail.data?.revision ?? list.data?.revision ?? '';
   const busy = save.isPending;
   const requestFailed = list.isError && list.data === undefined;
@@ -193,7 +192,6 @@ export function TasksPage() {
                 {row !== null ? (
                   <TaskDetail
                     row={row}
-                    fallbackAliases={aliases}
                     loading={selectedIdentity !== null && detail.isPending}
                     busy={busy}
                     reseedNonce={reseedNonce}

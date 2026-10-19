@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { shell } from '@/renderer/lib/desktop';
-import { runtimeAliasesQuery, taskSettingsQuery } from '@/renderer/lib/queries';
+import { taskSettingsQuery } from '@/renderer/lib/queries';
 import type { TaskSettingsSaveRequest, TaskSettingsSnapshot } from '@/shell-contract';
 import { mergeSnapshots } from './model/settings.js';
 
@@ -17,12 +17,7 @@ export function useTaskDetailQuery(project: string | undefined, taskId: string |
   return useQuery({ ...taskSettingsQuery(project, taskId ?? undefined), enabled: taskId !== null });
 }
 
-/** Runtime alias projection, fetched only while editing an explicit reference. */
-export function useRuntimeAliasesQuery(enabled: boolean) {
-  return useQuery({ ...runtimeAliasesQuery, enabled });
-}
-
-/** Save one task layer patch, then refresh the shared snapshot and alias store. */
+/** Save one task layer patch, then refresh the shared snapshot. */
 export function useSaveTaskSettingsMutation() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -33,7 +28,6 @@ export function useSaveTaskSettingsMutation() {
         (base: TaskSettingsSnapshot | undefined) => mergeSnapshots(base, saved),
       );
       void queryClient.invalidateQueries({ queryKey: ['taskSettings'] });
-      void queryClient.invalidateQueries({ queryKey: runtimeAliasesQuery.queryKey });
     },
   });
 }

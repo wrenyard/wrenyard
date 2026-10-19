@@ -23,9 +23,6 @@ import {
   type ShellPage,
   type WorkspaceConfigurationSnapshot,
   type UpdateSnapshot,
-  type RuntimeAliasPutRequest,
-  type RuntimeAliasRemoveRequest,
-  type RuntimeAliasSnapshot,
   type TaskSettingsSaveRequest,
   type TaskSettingsSnapshot,
   type TaskRoutingTestParams,
@@ -143,9 +140,6 @@ export interface ShellWindowOptions {
   openTaskGraph(taskGraphId: string): Promise<void>;
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;
-  runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
-  runtimeAliasPut(request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot>;
-  runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
   /** Forward one allowlisted agent/routine method to the daemon; results are unchanged. */

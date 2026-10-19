@@ -27,7 +27,7 @@ import { ActivityStatusProjector, TaskRunLifecycleTracker } from './main/activit
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RemoteConnectionTestInput, type RemoteConnectionTestResult, type RemoteConnectionSnapshot, type RemoteHostListResult, type RemoteHostMutationResult, type RemoteHostView, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type AgentMethod, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome, type OperationComponentAction, type OperationComponentId, type OperationComponentSnapshot, type BotMethod } from './shell-contract.js';
+import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RemoteConnectionTestInput, type RemoteConnectionTestResult, type RemoteConnectionSnapshot, type RemoteHostListResult, type RemoteHostMutationResult, type RemoteHostView, type AgentMethod, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome, type OperationComponentAction, type OperationComponentId, type OperationComponentSnapshot, type BotMethod } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { MiniCardManager } from './mini-cards.js';
 import { Notifier } from './main/notifications/notifier.js';
@@ -111,12 +111,6 @@ const TASK_SETTINGS_SAVE_ERROR_MESSAGES: Record<string, string> = {
   invalid_settings: '任务设置内容无效',
   runtime_unavailable: '所选 Agent 运行时不可用',
   task_not_found: '任务不存在或已被移除',
-};
-const RUNTIME_ALIAS_ERROR_MESSAGES: Record<string, string> = {
-  content_conflict: '运行时别名已被外部修改，保存冲突',
-  invalid_name: '运行时别名格式无效',
-  invalid_target: '运行时目标无效',
-  alias_not_found: '运行时别名不存在',
 };
 /** Smoke drives task enumeration and a routing test over IPC, which can cold-load the workspace and model catalog. */
 const SMOKE_TIMEOUT_MS = 90_000;
@@ -344,10 +338,10 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
         "window.wrenyardShell.getQuota().then((value) => (value?.status === 'available' || value?.status === 'unavailable') && Array.isArray(value?.providers) && Array.isArray(value?.catalog) && value.providers.every((provider) => value.catalog.some((entry) => entry.id === provider.id && entry.configured === true && entry.quota))).catch(() => false)",
       ),
     ]);
-    // Task settings/definitions over real IPC: rows, persisted layers, aliases
+    // Task settings/definitions over real IPC: rows, persisted layers
     // and daemon-owned effective settings must all be present and well typed.
     const tasksOk = await shell.window.webContents.executeJavaScript(
-      "window.wrenyardShell.getTaskSettings().then((value) => value && typeof value.revision === 'string' && typeof value.config_path === 'string' && value.user_global && typeof value.user_global === 'object' && !Array.isArray(value.user_global) && Array.isArray(value.rows) && value.rows.length > 0 && value.rows.every((row) => typeof row.identity === 'string' && typeof row.name === 'string' && typeof row.display_name === 'string' && row.user_task && row.effective && Array.isArray(row.issues)) && Array.isArray(value.aliases)).catch(() => false)",
+      "window.wrenyardShell.getTaskSettings().then((value) => value && typeof value.revision === 'string' && typeof value.config_path === 'string' && value.user_global && typeof value.user_global === 'object' && !Array.isArray(value.user_global) && Array.isArray(value.rows) && value.rows.length > 0 && value.rows.every((row) => typeof row.identity === 'string' && typeof row.name === 'string' && typeof row.display_name === 'string' && row.user_task && row.effective && Array.isArray(row.issues))).catch(() => false)",
     );
     // Read-only routing test surfaces: the import list of task definitions and
     // the daemon-scored routing test result must both be well typed.
@@ -1059,41 +1053,6 @@ async function bootstrap(): Promise<void> {
       // unreadable one stays unknown so the install defers instead of guessing.
       if (daemonSupervisor?.snapshot().pid !== undefined) return null;
       return (await probeWrenyard(ipcPath)).connected ? null : true;
-    }
-  };
-  const mapRuntimeAliasError = (error: unknown): never => {
-    if (error instanceof WrenyardRpcError) {
-      const code = (error.data as { code?: string } | undefined)?.code;
-      if (code !== undefined && code in RUNTIME_ALIAS_ERROR_MESSAGES) {
-        const mapped = new Error(RUNTIME_ALIAS_ERROR_MESSAGES[code]);
-        (mapped as { code?: string }).code = code;
-        throw mapped;
-      }
-    }
-    throw error;
-  };
-  const getRuntimeAliasSnapshot = async (): Promise<RuntimeAliasSnapshot> => {
-    return (await requestForeman('runtime.alias.snapshot', {})) as RuntimeAliasSnapshot;
-  };
-  const putRuntimeAlias = async (request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot> => {
-    try {
-      return (await requestForeman('runtime.alias.put', {
-        expected_revision: request.expected_revision,
-        name: request.name,
-        target: request.target,
-      })) as RuntimeAliasSnapshot;
-    } catch (error) {
-      throw mapRuntimeAliasError(error);
-    }
-  };
-  const removeRuntimeAlias = async (request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot> => {
-    try {
-      return (await requestForeman('runtime.alias.remove', {
-        expected_revision: request.expected_revision,
-        name: request.name,
-      })) as RuntimeAliasSnapshot;
-    } catch (error) {
-      throw mapRuntimeAliasError(error);
     }
   };
   const getTaskSettings = async (project?: string, taskId?: string): Promise<TaskSettingsSnapshot> => {
@@ -2086,9 +2045,6 @@ async function bootstrap(): Promise<void> {
     openTaskGraph: (taskGraphId) => windowOwner.openTaskGraph(taskGraphId),
     getTaskSettings: (project?: string, taskId?: string) => getTaskSettings(project, taskId),
     saveTaskSettings: (request: TaskSettingsSaveRequest) => saveTaskSettings(request),
-    runtimeAliasSnapshot: () => getRuntimeAliasSnapshot(),
-    runtimeAliasPut: (request: RuntimeAliasPutRequest) => putRuntimeAlias(request),
-    runtimeAliasRemove: (request: RuntimeAliasRemoveRequest) => removeRuntimeAlias(request),
     requestTaskRoutingTest: (params: TaskRoutingTestParams) => requestTaskRoutingTest(params),
     requestRoutingTestTasks: () => requestRoutingTestTasks(),
     requestBot: (method: BotMethod, params?: unknown) => requestBot(method, params),

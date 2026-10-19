@@ -29,7 +29,6 @@ import { basename, isAbsolute, relative, resolve } from 'node:path'
 import { discoverProjects } from '../../core/project/loader.mts'
 import type { ForemanConfigStore } from '../../config/manager.mts'
 import { JsonForemanConfigStore } from '../../config/manager.mts'
-import type { RuntimeAliasService } from './runtime-alias-service.mts'
 import {
   TASK_DISPATCH_FIELDS,
   taskDefaultsToSettingsLayer,
@@ -107,19 +106,17 @@ export type {
  * `tasks.settings.byTask[<stable identity>]` (per-task user layer). The legacy
  * `tasks.agentRuntime` map is neither read nor written.
  *
- * Explicit selection is structural only: persisted layers store an alias
- * reference or an inline target, never a copied client/provider/model triple.
- * Every snapshot/save preflight/run resolves aliases freshly through the
- * injected daemon-owned RuntimeAliasService and passes the canonical
- * `provider/model:client` target through `TaskDispatchResolver.resolveExplicit`
- * — the same path inline targets take. Unknown/deleted/unusable aliases and
- * unavailable inline targets fail without automatic fallback.
+ * Explicit selection is structural only: persisted layers store an inline
+ * target, never a copied client/provider/model triple. Every snapshot/save
+ * preflight/run canonicalizes the stored target and passes the canonical
+ * `provider/model:client` target through `TaskDispatchResolver.resolveExplicit`.
+ * Unavailable inline targets fail without automatic fallback.
  *
  * Effective settings resolve through config/task-settings.mts, merging the
  * system defaults, builtin task defaults, user global, user per-task, and (for
  * runs) invocation layers right-wins. Snapshot/preflight never performs a paid
- * model call: automatic mode ignores aliases and validates via
- * `TaskDispatchResolver.resolve`; explicit mode validates via
+ * model call: automatic mode ignores any inherited explicit reference and
+ * validates via `TaskDispatchResolver.resolve`; explicit mode validates via
  * `resolveExplicit`, with daemon admission and live provider
  * credential/availability supplied by injected non-billable callbacks.
  */
@@ -250,10 +247,6 @@ export interface TaskSettingsServiceOptions {
   configPath: string
   /** Shared daemon dispatch resolver; eligibility comes from this instance only. */
   resolver: TaskDispatchResolver
-  /** Daemon-owned runtime alias owner. Alias references are resolved freshly
-   *  through this exact instance at every snapshot/save preflight/run call;
-   *  the service never duplicates or caches alias targets. */
-  aliases: RuntimeAliasService
   store?: ForemanConfigStore
   definitions?: TaskSettingsDefinitionSource
   /** Optional non-billable daemon admission availability (accepting/frozen). */
@@ -677,7 +670,6 @@ export function taskInstructionTemplate(
 export class TaskSettingsService {
   private readonly configPath: string
   private readonly resolver: TaskDispatchResolver
-  private readonly aliases: RuntimeAliasService
   private readonly store: ForemanConfigStore
   private readonly definitions: TaskSettingsDefinitionSource
   private readonly daemonAvailability?: TaskSettingsDaemonAvailabilityCallback
@@ -691,7 +683,6 @@ export class TaskSettingsService {
   constructor(options: TaskSettingsServiceOptions) {
     this.configPath = options.configPath
     this.resolver = options.resolver
-    this.aliases = options.aliases
     this.store = options.store ?? new JsonForemanConfigStore()
     this.definitions = options.definitions ?? createWorkspaceDefinitionSource(options.workspaceRoot)
     this.daemonAvailability = options.daemonAvailability
@@ -776,31 +767,27 @@ export class TaskSettingsService {
     return status
   }
 
-  /** Live alias entries `[{name,target}]` for the snapshot surface. Mirrors the
-   *  runtime-alias protocol snapshot and is re-read at every call; never
-   *  cached. */
-  private async aliasEntries(): Promise<Array<{ name: string; target: string }>> {
-    const snapshot = await this.aliases.snapshot()
-    return snapshot.aliases
-  }
-
-  /** Resolves one stored structural reference freshly to its canonical
-   *  `provider/model:client` run target. Alias references reload the daemon
-   *  alias store at call time (never a stale cached target); inline targets are
-   *  canonicalized through the same alias owner. Unresolvable references throw
-   *  and callers never fall back to another runtime or to automatic mode. */
+  /** Resolves one stored structural reference to its canonical
+   *  `provider/model:client` run target. Unresolvable references throw and
+   *  callers never fall back to another runtime or to automatic mode. */
   private async resolveReference(reference: TaskSettingsExplicitReference): Promise<string> {
-    const resolved = await this.aliases.resolve(reference)
+    const raw = reference.target
+    if (raw.trim() === '' || raw.length > 512) {
+      throw new TaskSettingsInvalidSettingsError(
+        undefined,
+        'explicit runtime target must be a non-empty string of at most 512 characters',
+      )
+    }
     // Historical identity migration: a stored target may still carry a legacy
     // model spelling. Only a verified unique provider-scoped mapping is
     // accepted; the client suffix is preserved exactly, and an unknown or
     // ambiguous model fails with an actionable error instead of being guessed.
-    const parsed = parseRunSyntax(resolved.target)
+    const parsed = parseRunSyntax(raw)
     const registeredModel = resolveHistoricalProviderModelId(parsed.provider, parsed.model)
     if (registeredModel === undefined) {
       throw new TaskSettingsInvalidSettingsError(
         undefined,
-        `explicit runtime '${resolved.target}' names model '${parsed.model}', which is not a uniquely registered offering of provider '${parsed.provider}'`,
+        `explicit runtime '${raw}' names model '${parsed.model}', which is not a uniquely registered offering of provider '${parsed.provider}'`,
       )
     }
     return formatRunSyntax({ ...parsed, model: registeredModel })
@@ -829,10 +816,10 @@ export class TaskSettingsService {
   }
 
   /** Maps a non-persistent public snake_case invocation layer into the canonical
-   *  config layer. An explicit_runtime structural reference (alias or inline
-   *  target) is carried verbatim and is never mapped to a resolved triple or
-   *  runtime id here — alias resolution happens freshly at execution time. The
-   *  invocation layer is never written to config. */
+   *  config layer. An explicit_runtime structural reference (inline target) is
+   *  carried verbatim and is never mapped to a resolved triple or runtime id
+   *  here — canonicalization happens freshly at execution time. The invocation
+   *  layer is never written to config. */
   private invocationLayerToCanonical(
     invocation: TaskSettingsLayerDto,
   ): ConfigTaskSettingsLayer {
@@ -859,15 +846,14 @@ export class TaskSettingsService {
    *  through the config/task-settings.mts resolver — no second merge
    *  algorithm. The invocation layer is non-persistent.
    *
-   *  Automatic mode ignores aliases and any inherited explicit reference; it
-   *  resolves with the effective dispatch only through `resolver.resolve`.
-   *  Explicit mode resolves the effective structural reference (alias or
-   *  inline target) freshly through the injected RuntimeAliasService and calls
-   *  `resolver.resolveExplicit` with only required capabilities; an
-   *  unknown/deleted alias or an unavailable inline target fails the run with
-   *  no automatic fallback. Both modes run the same non-billable live
-   *  daemon/provider readiness checks exactly once against the selected
-   *  canonical target and fail without fallback. */
+   *  Automatic mode ignores any inherited explicit reference; it resolves
+   *  with the effective dispatch only through `resolver.resolve`. Explicit
+   *  mode canonicalizes the effective structural reference (inline target) and
+   *  calls `resolver.resolveExplicit` with only required capabilities; an
+   *  unavailable inline target fails the run with no automatic fallback. Both
+   *  modes run the same non-billable live daemon/provider readiness checks
+   *  exactly once against the selected canonical target and fail without
+   *  fallback. */
   async resolveForRun(params: TaskRunSettingsParams): Promise<TaskRunSettingsResolution> {
     const { record } = this.readConfigRecord()
     const tasks = tasksSectionOf(record)
@@ -905,10 +891,10 @@ export class TaskSettingsService {
     if (effective.mode === 'explicit') {
       const reference = effective.explicitRuntime
       if (reference === undefined) {
-        throw new TaskSettingsInvalidSettingsError('explicit mode requires an explicit runtime reference (alias or target)')
+        throw new TaskSettingsInvalidSettingsError('explicit mode requires an explicit runtime reference (target)')
       }
-      // Fresh alias resolution at call time; never a stale/cached target. An
-      // unknown/deleted alias throws here and never falls back to automatic.
+      // Canonicalization happens at call time; an unresolvable target throws
+      // here and never falls back to automatic.
       const target = await this.resolveReference(reference)
       const capabilities = effective.dispatch.requiredCapabilities
       const explicitResolution = await this.resolver.resolveExplicit({
@@ -951,8 +937,8 @@ export class TaskSettingsService {
       }
     }
 
-    // Automatic mode ignores aliases and any inherited/stale explicit
-    // reference; only the effective dispatch is forwarded to the shared
+    // Automatic mode ignores any inherited/stale explicit reference; only the
+    // effective dispatch is forwarded to the shared
     // automatic-selection path (resolver.eligible + live availability +
     // quota/free/cap policy + immutable ranking). Readiness already ran for
     // every exact choice before ranking, so there is NO second post-selection
@@ -1020,7 +1006,6 @@ export class TaskSettingsService {
       revision,
       ...(params.project !== undefined ? { project: params.project } : {}),
       user_global: this.toLayerDto(userGlobal),
-      aliases: await this.aliasEntries(),
       rows,
       ...(scopedLoadErrors !== undefined && scopedLoadErrors.length > 0
         ? { load_errors: scopedLoadErrors }
@@ -1396,7 +1381,7 @@ export class TaskSettingsService {
     const existingGlobal = readGlobalTaskSettings(tasks)
     const nextGlobal = this.applyPatchToLayer(existingGlobal, params.patch)
     if (nextGlobal?.selectionMode === 'explicit' && nextGlobal.explicitRuntime === undefined) {
-      throw new TaskSettingsInvalidSettingsError('global explicit mode requires an explicit runtime reference (alias or target)')
+      throw new TaskSettingsInvalidSettingsError('global explicit mode requires an explicit runtime reference (target)')
     }
 
     this.writeRecordMutation(current.record, (settings) => {
@@ -1454,11 +1439,10 @@ export class TaskSettingsService {
       if (effective.mode === 'explicit') {
         const reference = effective.explicitRuntime
         if (reference === undefined) {
-          throw new TaskSettingsInvalidSettingsError('explicit mode requires an explicit runtime reference (alias or target)')
+          throw new TaskSettingsInvalidSettingsError('explicit mode requires an explicit runtime reference (target)')
         }
-        // Preflight resolves the stored reference freshly (never a cached
-        // target); an unknown/deleted alias or an unavailable inline target
-        // fails the save with no automatic fallback.
+        // Preflight canonicalizes the stored reference freshly; an unavailable
+        // inline target fails the save with no automatic fallback.
         const target = await this.resolveReference(reference)
         const capabilities = effective.dispatch.requiredCapabilities
         const explicitResolution = await this.resolver.resolveExplicit({
@@ -1562,10 +1546,9 @@ export class TaskSettingsService {
     const automatic = toEffectiveAutomatic(effective.dispatch, effective.sources.dispatch)
 
     // Explicit-mode row: the stored structural reference plus its exact
-    // resolution. Alias references are resolved freshly at snapshot time; an
-    // unknown/deleted alias or an unavailable inline target reports the issue
-    // and keeps the structural reference — it never falls back to another
-    // runtime or to automatic mode.
+    // resolution. An unavailable inline target reports the issue and keeps the
+    // structural reference — it never falls back to another runtime or to
+    // automatic mode.
     let explicitRow: TaskSettingsExplicitRow | undefined
     // Automatic-mode row: selected resolved dispatch + safe reason, exposed
     // through minimal additive optional fields (keeps the Task page layout).
@@ -1575,7 +1558,7 @@ export class TaskSettingsService {
       if (reference === undefined) {
         issues.push({
           code: 'invalid_settings',
-          message: 'explicit mode is selected but no explicit runtime reference (alias or target) is set',
+          message: 'explicit mode is selected but no explicit runtime reference (target) is set',
         })
       } else {
         let resolvedTarget: string | null = null
@@ -2297,8 +2280,8 @@ export class TaskSettingsService {
       if (patch.explicit_runtime === null) {
         delete raw.explicit_runtime
       } else {
-        // Structural reference (alias or inline target) is stored verbatim.
-        // Alias usability is validated by the fresh save preflight, never here.
+        // Structural reference (inline target) is stored verbatim. Target
+        // usability is validated by the fresh save preflight, never here.
         raw.explicit_runtime = patch.explicit_runtime
       }
     }
@@ -2354,8 +2337,8 @@ export class TaskSettingsService {
   }
 
   /** Converts a canonical config layer into the JSON-safe snake_case layer DTO.
-   *  The stored explicit reference (alias or inline target) is structural and
-   *  is carried verbatim; a resolved triple is never copied back. */
+   *  The stored explicit reference (inline target) is structural and is
+   *  carried verbatim; a resolved triple is never copied back. */
   private toLayerDto(layer?: ConfigTaskSettingsLayer): TaskSettingsLayerDto {
     if (!layer) return {}
     return {

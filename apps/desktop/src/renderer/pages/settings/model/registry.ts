@@ -33,7 +33,6 @@ export type CustomControlKey =
   | 'petShowTaskgraphs'
   | 'petShowWorkers'
   | 'routingWeights'
-  | 'runtimeAliases'
   | 'service'
   | 'settingsFile'
   | 'statusBarItems'
@@ -254,15 +253,6 @@ const MODELS_CATEGORY: SettingDefinition[] = [
     description: '调整自动派发时四项因子的相对比重，四项之和须为 100。',
     keywords: ['路由权重', 'routing', 'weights', '价格', '速度', '额度', '智能'],
     control: custom('routingWeights'),
-    source: { kind: 'daemon' },
-  },
-  {
-    id: 'models.runtimeAliases',
-    category: 'models',
-    title: '运行时别名',
-    description: '保存供任务引用的运行时短别名。',
-    keywords: ['别名', 'alias', '运行时', 'runtime'],
-    control: custom('runtimeAliases'),
     source: { kind: 'daemon' },
   },
 ];

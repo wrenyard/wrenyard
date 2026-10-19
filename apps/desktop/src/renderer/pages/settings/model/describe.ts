@@ -6,7 +6,6 @@ import type {
   StorageUsageSnapshot,
   WorkspaceConfigurationSnapshot,
 } from '@/shell-contract';
-import type { AliasValidationReason } from './settings.js';
 import { isWorkspaceReadOnly } from './settings.js';
 
 /* Central product copy and status mappings for the Settings page. */
@@ -85,19 +84,6 @@ export const SUMMARY_SAVED_LABEL = '已保存';
 
 export const PROVIDER_TITLE = '提供方';
 
-export const ALIAS_TITLE = '运行时别名';
-export const ALIAS_DESCRIPTION = '保存供任务引用的运行时短别名。';
-export const ALIAS_NAME_LABEL = '别名';
-export const ALIAS_NAME_PLACEHOLDER = '例如 cc-fast';
-export const ALIAS_TARGET_LABEL = '目标';
-export const ALIAS_TARGET_PLACEHOLDER = 'provider/model:client，例如 anthropic/claude-sonnet-4:cc';
-export const ALIAS_NAME_RULE = '小写字母开头，仅限 a-z 0-9 . _ -，最长 64 位。';
-export const ALIAS_SUBMIT_LABEL = '保存别名';
-export const ALIAS_REFRESH_LABEL = '刷新别名';
-export const ALIAS_EMPTY = '暂无运行时别名；先在上方保存一个。';
-export const ALIAS_UNAVAILABLE = '运行时别名不可用';
-export const ALIAS_DELETE_LABEL = '删除';
-
 export const PET_TITLE = '桌宠';
 export const PET_DESCRIPTION = '由啾啾工坊直接管理生命周期；退出 App 后桌宠同步退出。';
 export const PET_ENABLED_LABEL = '启用桌宠';
@@ -172,12 +158,6 @@ export function petStatusTone(status: PetCompanionSnapshot['status']): StatusTon
 /* ------------------------------------------------------------------ */
 /* Validation copy                                                     */
 /* ------------------------------------------------------------------ */
-
-export const ALIAS_ERRORS: Record<AliasValidationReason, string> = {
-  'invalid-name': '别名需以小写字母开头，仅限 a-z 0-9 . _ -，最长 64 位。',
-  'empty-target': '目标不能为空；写法为 provider/model:client。',
-  'long-target': '目标最长 512 位；写法为 provider/model:client。',
-};
 
 export function workspaceSaveLabel(workspace: WorkspaceConfigurationSnapshot, saving: boolean): string {
   if (saving) return '正在保存…';

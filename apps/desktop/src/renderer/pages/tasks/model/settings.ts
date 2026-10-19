@@ -1,5 +1,4 @@
 import type {
-  RuntimeAliasEntry,
   TaskResolvedDispatch,
   TaskSettingsExplicitReference,
   TaskSettingsLayer,
@@ -133,31 +132,17 @@ export function taskResolutionFailureMessage(row: TaskSettingsTaskRow): string |
   return issue?.resolutionFailure?.message ?? null;
 }
 
-/** Render text for a stored explicit reference: alias name or inline target. */
+/** Render text for a stored explicit reference: the inline target. */
 export function explicitReferenceText(reference: TaskSettingsExplicitReference | null | undefined): string {
   if (!reference) return '';
-  return reference.kind === 'alias' ? reference.name : reference.target;
+  return reference.target;
 }
 
-/** The stored alias whose name exactly matches the trimmed input, if any. */
-export function runtimeAliasEntryForInput(
-  value: string,
-  aliases: readonly RuntimeAliasEntry[],
-): RuntimeAliasEntry | undefined {
-  const trimmed = value.trim();
-  if (trimmed === '') return undefined;
-  return aliases.find((entry) => entry.name === trimmed);
-}
-
-/** Alias name when it matches a stored alias; otherwise an inline canonical target. */
-export function referenceFromRuntimeInput(
-  value: string,
-  aliases: readonly RuntimeAliasEntry[],
-): TaskSettingsExplicitReference {
+/** Inline canonical target from the trimmed input. */
+export function referenceFromRuntimeInput(value: string): TaskSettingsExplicitReference {
   const trimmed = value.trim();
   if (trimmed === '') throw new Error(ERR_RUNTIME_REQUIRED);
-  const alias = runtimeAliasEntryForInput(trimmed, aliases);
-  return alias ? { kind: 'alias', name: alias.name } : { kind: 'target', target: trimmed };
+  return { kind: 'target', target: trimmed };
 }
 
 export function explicitReferencesEqual(
@@ -165,10 +150,8 @@ export function explicitReferencesEqual(
   right: TaskSettingsExplicitReference | null | undefined,
 ): boolean {
   if (left === right) return true;
-  if (!left || !right || left.kind !== right.kind) return false;
-  if (left.kind === 'alias' && right.kind === 'alias') return left.name === right.name;
-  if (left.kind === 'target' && right.kind === 'target') return left.target === right.target;
-  return false;
+  if (!left || !right) return false;
+  return left.target === right.target;
 }
 
 /** ms -> whole-seconds display text ('' when no override at this layer). */
@@ -213,14 +196,13 @@ export function buildLayerPatch(
   mode: TaskSettingsMode,
   runtimeValue: string,
   timeoutValue: string,
-  aliases: readonly RuntimeAliasEntry[],
 ): TaskSettingsPatch {
   const layer = row.user_task;
   const modeChanged = row.effective.mode.value !== mode;
   const patch: TaskSettingsPatch = {};
   if (modeChanged) patch.mode = mode;
   if (mode === 'explicit') {
-    const runtime = referenceFromRuntimeInput(runtimeValue, aliases);
+    const runtime = referenceFromRuntimeInput(runtimeValue);
     if (!explicitReferencesEqual(row.effective.explicit_runtime.value, runtime)) patch.explicit_runtime = runtime;
   } else if (modeChanged && layer.explicit_runtime) {
     // Switching away from explicit clears only this layer's stored reference.

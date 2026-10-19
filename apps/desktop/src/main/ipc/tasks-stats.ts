@@ -1,6 +1,6 @@
 // Task, stats and settings-projection IPC: the stats snapshot, task
-// detail/graph windows, task-settings snapshot/save, runtime aliases, routing
-// tests and the shared activity projection.
+// detail/graph windows, task-settings snapshot/save, routing tests and the
+// shared activity projection.
 // Handler semantics are unchanged from the original inline registrations.
 
 import type { IpcMain } from 'electron';
@@ -9,8 +9,6 @@ import type { ShellIpcDeps } from './deps.js';
 import {
   TASK_SETTINGS_CONTROL_CHARS,
   boundedOptionalProject,
-  validateRuntimeAliasPutRequest,
-  validateRuntimeAliasRemoveRequest,
   validateTaskRoutingTestParams,
   validateTaskSettingsSaveRequest,
 } from './validation.js';
@@ -52,18 +50,6 @@ export function registerTasksStatsIpc(ipcMain: IpcMain, deps: ShellIpcDeps): () 
     assertShellSender(event.sender);
     return options.saveTaskSettings(validateTaskSettingsSaveRequest(request));
   });
-  ipcMain.handle(SHELL_CHANNELS.runtimeAliasSnapshot, async (event) => {
-    assertShellSender(event.sender);
-    return options.runtimeAliasSnapshot();
-  });
-  ipcMain.handle(SHELL_CHANNELS.runtimeAliasPut, async (event, request: unknown) => {
-    assertShellSender(event.sender);
-    return options.runtimeAliasPut(validateRuntimeAliasPutRequest(request));
-  });
-  ipcMain.handle(SHELL_CHANNELS.runtimeAliasRemove, async (event, request: unknown) => {
-    assertShellSender(event.sender);
-    return options.runtimeAliasRemove(validateRuntimeAliasRemoveRequest(request));
-  });
   ipcMain.handle(SHELL_CHANNELS.taskRoutingTest, async (event, params: unknown) => {
     assertShellSender(event.sender);
     return options.requestTaskRoutingTest(validateTaskRoutingTestParams(params));
@@ -84,9 +70,6 @@ export function registerTasksStatsIpc(ipcMain: IpcMain, deps: ShellIpcDeps): () 
       SHELL_CHANNELS.taskGraph,
       SHELL_CHANNELS.taskSettingsSnapshot,
       SHELL_CHANNELS.taskSettingsSave,
-      SHELL_CHANNELS.runtimeAliasSnapshot,
-      SHELL_CHANNELS.runtimeAliasPut,
-      SHELL_CHANNELS.runtimeAliasRemove,
       SHELL_CHANNELS.taskRoutingTest,
       SHELL_CHANNELS.taskRoutingTestTasks,
       SHELL_CHANNELS.activityStatusSnapshot,
