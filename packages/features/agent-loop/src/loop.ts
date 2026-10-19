@@ -4,10 +4,10 @@
  * An auxiliary task is a small tool-calling sub-conversation: a document
  * writer, a version-control operator or a project/worktree manager. Each session
  * runs the same loop here and only differs in its system prompt, its user
- * message and its tool set. The loop reuses the session's existing model call
- * runner ([`ActionRunnerDeps.calls`] via `runView`), the same span-id scheme and
- * the same deferred-draft return shape the action layer already uses, so it
- * never introduces a second call path.
+ * message and its tool set. The loop reuses the host's existing model call
+ * runner ([`LoopDeps.calls`]), the same span-id scheme and the same
+ * deferred-draft return shape the action layer already uses, so it never
+ * introduces a second call path.
  *
  * The loop ends when the model calls the `done` tool; a call failure, two
  * silent rounds in a row or the round limit end it as a failure. Every tool
@@ -15,19 +15,21 @@
  * loop.
  */
 
-import type { Message as ModelMessage, MessageToolCall as ModelToolCall, ToolCall, ToolSpec } from '../transport/index.ts';
 import type {
   ActionExecutionOutcome,
   ActionRunContext,
-  ActionRunnerDeps,
-} from '../reasoning/actions.ts';
-import type { LedgerEventDraft, WorkspaceChangedEvent } from '../ledger/store.ts';
-import { escapeBody, renderEventsBlock } from '../context/render.ts';
-import { messageOf } from '../errors.ts';
-import { diagnoseToolObservation, recordSuccessfulToolCall } from '../auxiliary/tool-contract.ts';
-
-/** Re-exported so auxiliary tasks (e.g. document) reuse the shared error text. */
-export { messageOf };
+  CallRunRequest,
+  CallsPort,
+  LedgerEventDraft,
+  LoopHelpers,
+  Message as ModelMessage,
+  MessageToolCall as ModelToolCall,
+  MethodCatalogPort,
+  MethodInfo,
+  ToolCall,
+  ToolSpec,
+  WorkspaceChange,
+} from './ports.ts';
 
 /** Which auxiliary task is running; used for ledger call attribution. */
 export type LoopRole = 'document' | 'todo' | 'vcs' | 'project';
@@ -66,9 +68,19 @@ export interface LoopTool {
   run(args: Record<string, unknown>, signal: AbortSignal): Promise<string>;
 }
 
+/** The host seams one loop run needs. */
+export interface LoopDeps {
+  /** The protocol-method catalog, already bound to the running definition. */
+  host: MethodCatalogPort;
+  /** The model transport and its span bookkeeping. */
+  calls: CallsPort;
+  /** The host's text and tool-diagnostic helpers. */
+  helpers: LoopHelpers;
+}
+
 /** Everything one auxiliary loop run needs. */
 export interface AuxiliaryLoopOptions {
-  deps: ActionRunnerDeps;
+  deps: LoopDeps;
   ctx: ActionRunContext;
   role: LoopRole;
   /** Stable system prompt of this session. */
@@ -113,6 +125,7 @@ export async function runAuxiliaryLoop(options: AuxiliaryLoopOptions): Promise<A
 
 async function runRounds(options: AuxiliaryLoopOptions, spanId: string): Promise<AuxiliaryLoopResult> {
   const { deps, ctx, role, system, user, tools, maxRounds } = options;
+  const { messageOf } = deps.helpers;
   const toolMap = new Map(tools.map((tool) => [tool.spec.name, tool]));
   const specs: ToolSpec[] = [...tools.map((tool) => tool.spec), DONE_TOOL];
   const layers = { 'wy-system': system.length, 'wy-ctx': user.length };
@@ -138,7 +151,7 @@ async function runRounds(options: AuxiliaryLoopOptions, spanId: string): Promise
         layers,
         signal: ctx.signal,
         tools: specs,
-      }) as { text: string; toolCalls?: readonly ToolCall[] };
+      } satisfies CallRunRequest) as { text: string; toolCalls?: readonly ToolCall[] };
       text = result.text;
       calls = result.toolCalls ?? [];
     } catch (error) {
@@ -167,7 +180,7 @@ async function runRounds(options: AuxiliaryLoopOptions, spanId: string): Promise
     for (const call of calls) {
       if (ctx.signal.aborted) return abortedResult();
       if (call.name === DONE_TOOL.name) {
-        const done = readDoneCall(call);
+        const done = readDoneCall(call, messageOf);
         if (!done.ok) {
           messages.push({ role: 'tool', toolCallId: call.id, content: errorResult('invalid_arguments', done.error) });
           continue;
@@ -186,7 +199,7 @@ async function runRounds(options: AuxiliaryLoopOptions, spanId: string): Promise
         }
         return { status: done.status, summary: done.summary };
       }
-      const content = await runToolCall(toolMap.get(call.name), call, ctx.signal);
+      const content = await runToolCall(toolMap.get(call.name), call, ctx.signal, options.record, messageOf);
       messages.push({ role: 'tool', toolCallId: call.id, content });
     }
   }
@@ -199,22 +212,32 @@ function abortedResult(): AuxiliaryLoopResult {
 }
 
 /** Run one model tool call, converting every failure into a tool result. */
-async function runToolCall(tool: LoopTool | undefined, call: ToolCall, signal: AbortSignal): Promise<string> {
+async function runToolCall(
+  tool: LoopTool | undefined,
+  call: ToolCall,
+  signal: AbortSignal,
+  record: LoopRecord | undefined,
+  messageOf: (error: unknown) => string,
+): Promise<string> {
   if (tool === undefined) return errorResult('unknown_tool', `Unknown tool: ${call.name}`);
-  const args = parseArguments(call.arguments);
+  const args = parseArguments(call.arguments, messageOf);
   if (!args.ok) return errorResult('invalid_arguments', args.error);
+  let content: string;
   try {
-    return await tool.run(args.value, signal);
+    content = await tool.run(args.value, signal);
   } catch (error) {
     return errorResult(errorCodeOf(error), messageOf(error));
   }
+  record?.observeToolResult?.(content);
+  return content;
 }
 
 /** Validate the `done` call's arguments; a malformed call stays a tool error. */
 function readDoneCall(
   call: ToolCall,
+  messageOf: (error: unknown) => string,
 ): { ok: true; status: 'done' | 'failed'; summary: string } | { ok: false; error: string } {
-  const args = parseArguments(call.arguments);
+  const args = parseArguments(call.arguments, messageOf);
   if (!args.ok) return { ok: false, error: args.error };
   const status = args.value.status;
   const summary = args.value.summary;
@@ -228,7 +251,7 @@ function readDoneCall(
 type ParsedArguments = { ok: true; value: Record<string, unknown> } | { ok: false; error: string };
 
 /** Parse one tool call's raw JSON argument text into a plain object. */
-function parseArguments(raw: string): ParsedArguments {
+function parseArguments(raw: string, messageOf: (error: unknown) => string): ParsedArguments {
   let value: unknown;
   try {
     value = JSON.parse(raw.trim() === '' ? '{}' : raw);
@@ -269,8 +292,8 @@ export function errorResult(code: string, message: string): string {
  * under `<wy-ctx><wy-conversation>`, the call's facts (time, device and the
  * registered projects) under `<wy-info>`, and the intent under `<wy-intent>`.
  */
-export function buildAuxiliaryUser(ctx: ActionRunContext, intent: string): string {
-  const conversation = renderEventsBlock(ctx.currentEvents());
+export function buildAuxiliaryUser(ctx: ActionRunContext, intent: string, helpers: LoopHelpers): string {
+  const conversation = helpers.renderEventsBlock(ctx.currentEvents());
   const projects = ctx.projects.length === 0
     ? '(none)'
     : ctx.projects.map((project) => {
@@ -290,10 +313,10 @@ export function buildAuxiliaryUser(ctx: ActionRunContext, intent: string): strin
     '</wy-conversation>',
     '</wy-ctx>',
     '<wy-info>',
-    escapeBody(info),
+    helpers.escapeBody(info),
     '</wy-info>',
     '<wy-intent>',
-    escapeBody(intent),
+    helpers.escapeBody(intent),
     '</wy-intent>',
   ].join('\n');
 }
@@ -315,6 +338,18 @@ export interface LoopRecord {
   observations: string[];
   /** Evidence-backed tool diagnoses worth surfacing in the action result. */
   notes: string[];
+  /**
+   * Host hook for a successful document write: read the written document back
+   * and queue its `document.content` draft. Supplied by the record adapter so
+   * the loop never depends on the session document helpers.
+   */
+  captureDocument?(args: Record<string, unknown>, result: unknown): void | Promise<void>;
+  /**
+   * Host hook for one returned tool result. A host that records authoritative
+   * observations (the workspace todo operator) supplies it; every other host
+   * leaves it absent and records nothing.
+   */
+  observeToolResult?(content: string): void;
 }
 
 export function createLoopRecord(): LoopRecord {
@@ -374,22 +409,39 @@ export function toActionOutcome(
  * change. `when` names a boolean field of the call result that must be `true`
  * for the change to be recorded; an absent `when` records on every success.
  * `after` is an optional per-method hook awaited after the call and its
- * recorded change.
+ * recorded change; it receives the run's record so a host can queue its own
+ * document drafts without the loop importing host code.
  */
 export interface MethodEffect {
   scope: 'workspace' | 'project' | 'document';
-  change: WorkspaceChangedEvent['change'];
+  change: WorkspaceChange;
   when?: string;
-  /** When present, its return value is the recorded target; otherwise the fallback chain is used. */
+  /** When present, the target is taken from this call; otherwise the fallback chain is used. */
   target?(args: Record<string, unknown>, result: unknown): string;
-  after?(args: Record<string, unknown>, result: unknown): void | Promise<void>;
+  after?(args: Record<string, unknown>, result: unknown, record: LoopRecord): void | Promise<void>;
 }
 
 /**
- * Build one {@link LoopTool} per requested protocol method. The host
+ * Bind one catalog to a running definition: every `methods`/`call` context
+ * carries the definition id, which is how a host gates auxiliary calls by the
+ * running definition's allowlist.
+ */
+export function bindCatalog(catalog: MethodCatalogPort, definitionId: string): MethodCatalogPort {
+  return {
+    methods(names, context) {
+      return catalog.methods(names, { ...context, auxiliaryDefinitionId: definitionId });
+    },
+    call(method, args, context) {
+      return catalog.call(method, args, { ...context, auxiliaryDefinitionId: definitionId });
+    },
+  };
+}
+
+/**
+ * Build one {@link LoopTool} per requested protocol method. The catalog
  * describes the methods; every tool declares the method's params JSON Schema
  * with a strict top-level `additionalProperties: false`, forwards its parsed
- * arguments to `deps.host.call` and returns the compact JSON result. A
+ * arguments to `catalog.call` and returns the compact JSON result. A
  * successful call whose method has an effect entry (and whose `when` guard, if
  * any, holds in the result) records exactly one `workspace.changed` through the
  * shared helpers, then awaits the effect's optional `after` hook. A host error
@@ -398,17 +450,18 @@ export interface MethodEffect {
  * result.
  */
 export async function protocolTools(
-  deps: ActionRunnerDeps,
+  catalog: MethodCatalogPort,
+  helpers: LoopHelpers,
   ctx: ActionRunContext,
   record: LoopRecord,
   methods: readonly string[],
   effects: Readonly<Record<string, MethodEffect>>,
 ): Promise<LoopTool[]> {
-  const infos = await deps.host.methods(methods);
+  const infos: MethodInfo[] = await catalog.methods(methods);
   const enumerated = infos.map((info) => info.name);
   for (const name of methods) {
     if (!enumerated.includes(name)) {
-      const diagnosis = diagnoseToolObservation({ kind: 'enumeration', tools: enumerated, wanted: name });
+      const diagnosis = helpers.diagnoseToolObservation({ kind: 'enumeration', tools: enumerated, wanted: name });
       record.notes.push(diagnosis.message);
     }
   }
@@ -424,11 +477,11 @@ export async function protocolTools(
       async run(args: Record<string, unknown>): Promise<string> {
         let result: unknown;
         try {
-          result = await deps.host.call(info.name, args, { sessionId: ctx.sessionId });
+          result = await catalog.call(info.name, args, { sessionId: ctx.sessionId });
         } catch (error) {
-          const message = messageOf(error);
+          const message = helpers.messageOf(error);
           if (TOOL_NOT_FOUND.test(message) || NO_MCP.test(message)) {
-            const diagnosis = diagnoseToolObservation({
+            const diagnosis = helpers.diagnoseToolObservation({
               kind: 'call',
               tool: info.name,
               arguments: args,
@@ -441,7 +494,7 @@ export async function protocolTools(
         }
         const project = readProjectField(args) ?? readProjectField(result);
         if (project !== undefined) {
-          recordSuccessfulToolCall({
+          helpers.recordSuccessfulToolCall({
             target: { project, task: '' },
             tool: info.name,
             arguments: args,
@@ -455,9 +508,9 @@ export async function protocolTools(
         }
         if (effect?.after !== undefined) {
           try {
-            await effect.after(args, result);
+            await effect.after(args, result, record);
           } catch (error) {
-            return errorResult(errorCodeOf(error), messageOf(error));
+            return errorResult(errorCodeOf(error), helpers.messageOf(error));
           }
         }
         return jsonResult(result);

@@ -80,6 +80,9 @@ importers:
       '@langchain/core':
         specifier: 1.2.5
         version: 1.2.5(@opentelemetry/api@1.9.1)(openai@6.26.0(ws@8.21.3)(zod@4.4.3))(ws@8.21.3)
+      '@wrenyard/agent-loop':
+        specifier: workspace:*
+        version: link:../../packages/features/agent-loop
       '@wrenyard/auto-routing':
         specifier: workspace:*
         version: link:../../packages/features/auto-routing
@@ -574,6 +577,25 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  packages/features/agent-loop:
+    dependencies:
+      '@wrenyard/auto-routing':
+        specifier: workspace:*
+        version: link:../auto-routing
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   packages/features/auto-routing:
     dependencies:
       '@wrenyard/models':
@@ -701,6 +723,9 @@ importers:
       '@wrenyard/agent-client':
         specifier: workspace:*
         version: link:../../clients/base
+      '@wrenyard/agent-loop':
+        specifier: workspace:*
+        version: link:../agent-loop
       '@wrenyard/auto-routing':
         specifier: workspace:*
         version: link:../auto-routing

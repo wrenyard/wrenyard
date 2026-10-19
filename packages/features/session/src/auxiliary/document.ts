@@ -1,41 +1,27 @@
 /**
  * The document auxiliary task.
  *
- * It lists, reads, creates and revises Markdown documents under
- * `projects/<project>/docs`, plus the fixed registered-project AGENTS.md target, through the daemon-hosted document protocol
- * methods, exposed as tools by the shared protocol adapter. A document is
- * identified by its project, its kind (spec, report or handoff) and its name;
- * the file location is only the session internal ledger key and is never shown
- * to the model. Each successful write records a `ws.updated` draft; the written
- * document is then read back through the protocol and queued as a `doc.content`
- * draft, exactly as the action layer defers drafts.
+ * The loop, its tool adapter and the definition data (role, methods, effects,
+ * round budget and system prompt) live in `@wrenyard/agent-loop`. This module
+ * is the session-side adapter: it supplies the method catalog, the model
+ * transport, the workspace document rules and a record adapter that writes
+ * exactly the drafts the session wrote before — a `workspace.changed` per
+ * successful write and, through `makeDocumentDraft`, the written document's
+ * `document.content` draft.
+ *
+ * A document is identified by its project, its kind (spec, report or handoff)
+ * and its name; the file location is only the session internal ledger key and
+ * is never shown to the model.
  */
 
+import { runAuxiliary, type AuxiliaryRecordPort, createLoopRecord } from '@wrenyard/agent-loop';
+
+import { escapeBody, renderEventsBlock } from '../context/render.ts';
 import { makeDocumentDraft, type DocContentDraft } from '../documents.ts';
+import { messageOf } from '../errors.ts';
 import type { LedgerEvent, LedgerEventDraft } from '../ledger/store.ts';
 import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';
-import {
-  buildAuxiliaryUser,
-  createLoopRecord,
-  protocolTools,
-  runAuxiliaryLoop,
-  toActionOutcome,
-  type MethodEffect,
-  type LoopRecord,
-} from '../loop/loop.ts';
-
-/** Rounds the document loop may run before it fails. */
-const DOCUMENT_MAX_ROUNDS = 24;
-
-/** The document protocol methods this session exposes. */
-const METHODS = [
-  'workspace.doc.list',
-  'workspace.doc.read',
-  'workspace.doc.create',
-  'workspace.doc.update',
-  'workspace.doc.edit',
-  'workspace.doc.delete',
-];
+import { diagnoseToolObservation, recordSuccessfulToolCall } from './tool-contract.ts';
 
 /** Document kind to its directory under `docs/`. */
 const KIND_DIRECTORIES = {
@@ -60,41 +46,24 @@ export async function runDocumentAction(
   action: ParsedAction,
   ctx: ActionRunContext,
 ): Promise<ActionExecutionOutcome> {
-  const record = createLoopRecord();
-  const after = documentDraftHook(deps, ctx, record);
-  const effects: Readonly<Record<string, MethodEffect>> = {
-    'workspace.doc.create': { scope: 'document', change: 'created', target: documentTarget, after },
-    'workspace.doc.update': { scope: 'document', change: 'updated', target: documentTarget, after },
-    'workspace.doc.edit': { scope: 'document', change: 'updated', target: documentTarget, after },
-    // A delete has no after hook: there is no new content to load back.
-    'workspace.doc.delete': { scope: 'document', change: 'deleted', target: documentTarget },
+  const record: AuxiliaryRecordPort = {
+    ...createLoopRecord(),
+    helpers: {
+      messageOf,
+      escapeBody,
+      renderEventsBlock,
+      diagnoseToolObservation,
+      recordSuccessfulToolCall,
+    },
   };
-  const result = await runAuxiliaryLoop({
-    deps,
-    ctx,
-    role: 'document',
-    system: documentSystemPrompt(deps),
-    user: buildAuxiliaryUser(ctx, action.intent),
-    tools: await protocolTools(deps, ctx, record, METHODS, effects),
-    maxRounds: DOCUMENT_MAX_ROUNDS,
-    spanIdPrefix: 'doc',
+  record.captureDocument = documentDraftHook(deps, ctx, record);
+  return runAuxiliary('document', action.intent, {
+    catalog: deps.host,
+    calls: deps.calls,
     record,
+    context: ctx,
+    documentRules: () => deps.files.readDocumentRules(),
   });
-  return toActionOutcome(result, record, record.documents);
-}
-
-/**
- * The readable `project/kind/name` target of a document method result: the
- * name is the result's revisited name (a create returns the full dated name)
- * else the call's name, and project and kind come from the result else the
- * call. It is never a path.
- */
-function documentTarget(args: Record<string, unknown>, result: unknown): string {
-  const project = readStringField(result, 'project') ?? readStringField(args, 'project') ?? '';
-  if (readStringField(result, 'id') === 'AGENTS.md' || readStringField(args, 'id') === 'AGENTS.md') return `${project}/AGENTS.md`;
-  const kind = readStringField(result, 'kind') ?? readStringField(args, 'kind') ?? '';
-  const name = readStringField(result, 'name') ?? readStringField(args, 'name') ?? '';
-  return `${project}/${kind}/${name}`;
 }
 
 /**
@@ -106,7 +75,7 @@ function documentTarget(args: Record<string, unknown>, result: unknown): string 
 function documentDraftHook(
   deps: ActionRunnerDeps,
   ctx: ActionRunContext,
-  record: LoopRecord,
+  record: AuxiliaryRecordPort,
 ): (args: Record<string, unknown>, result: unknown) => Promise<void> {
   return async (args, result) => {
     const project = readStringField(result, 'project') ?? readStringField(args, 'project');
@@ -155,42 +124,4 @@ function readStringField(source: unknown, key: string): string | undefined {
   if (source === null || typeof source !== 'object') return undefined;
   const value = (source as Record<string, unknown>)[key];
   return typeof value === 'string' ? value : undefined;
-}
-
-/** The system prompt: the writer's role, the verbatim rules and the workflow. */
-function documentSystemPrompt(deps: ActionRunnerDeps): string {
-  const rules = deps.files.readDocumentRules();
-  return [
-    'You are the document writer of a Wrenyard session.',
-    'You write and revise Markdown documents through the tools. You never edit files directly.',
-    '',
-    'Document rules:',
-    rules.trim() === '' ? '(no document rules are configured)' : rules,
-    '',
-    'Tools:',
-    "- workspace_doc_list: list a project's documents to find a name.",
-    '- workspace_doc_read: read a document by project, kind and name, or the existing registered project AGENTS.md with {project, id: "AGENTS.md"}; returns its content and version.',
-    '- workspace_doc_create: create one new document; give a short lowercase slug and the full dated name is returned.',
-    '- workspace_doc_update: replace a document with new full content, or existing AGENTS.md with {project, id: "AGENTS.md", content, base_version}; pass base_version taken from workspace_doc_read.',
-    '- workspace_doc_edit: apply local edits to an existing document, or edit AGENTS.md with {project, id: "AGENTS.md", edits, base_version}; each edit replaces one unique old text and old text must be nonempty.',
-    '',
-    'Rules:',
-    '- A document is identified by its project, its kind (spec, report or handoff) and its name.',
-    '- Workspace documents are shared across sessions and are directly readable regardless of prior session presence; read fresh before a version-based write.',
-    "- List a project's documents with workspace_doc_list to find a name.",
-    '- To create a document give a short lowercase slug; the full dated name is returned.',
-    '- Read a document before revising or deleting it, and pass base_version taken from workspace_doc_read.',
-    '- Prefer workspace_doc_edit for local changes; give exact old text that occurs exactly once.',
-    '- Use workspace_doc_update only for a full rewrite, and pass base_version taken from workspace_doc_read.',
-    '- When a call returns conflict or missing, read the document again before retrying.',
-    '- For project AGENTS.md, read with workspace_doc_read using {project, id: "AGENTS.md"} before revision. It returns version; pass that value as base_version to workspace_doc_edit or workspace_doc_update.',
-    '- Prefer exact local edits and preserve unrelated instructions. Use full update only when the intent explicitly requests a full rewrite.',
-    '- After conflict or missing, read again before retrying. Never create or delete AGENTS.md.',
-    '- Never edit workspace-root or nested checkout instruction files, arbitrary paths, or any other workspace, configuration or source files.',
-    '- Delete a document only when the intent explicitly asks to delete it.',
-    '- Use only facts from the conversation and the documents you read.',
-    "- The document language follows the project's document rules.",
-    '- Never mention physical paths in the done summary; refer to project AGENTS.md or an ordinary document by kind and name.',
-    '- Finish with done and a summary of one to three sentences.',
-  ].join('\n');
 }

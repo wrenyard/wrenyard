@@ -10,16 +10,107 @@
  * A single-request span closes as soon as its request reports. A loop holds its
  * span open across rounds and releases it when the task ends, so whatever was
  * measured before a failure or an interrupt is still written.
+ *
+ * The ledger event shapes are declared here rather than imported, so the
+ * recorder carries no dependency on the session package. They match the
+ * session ledger's `span.*` events field for field, and a host ledger accepts
+ * them unchanged.
  */
-import type { ModelSpanFinishedEvent, ModelSpanStartedEvent, SpanContextEvent, SpanStatus } from '../ledger/events.ts';
-import type { ModelMetrics, Usage } from '../transport/protocol.ts';
+import type {
+  AuxiliaryCallRole,
+  ModelErrorKind,
+  ModelMetrics,
+  ReasoningEffort,
+  Usage,
+} from './ports.ts';
 
-export type ModelSpanDraft =
-  | Omit<ModelSpanStartedEvent, 'seq' | 'at'>
-  | Omit<ModelSpanFinishedEvent, 'seq' | 'at'>;
+export type SpanKind = 'reasoning' | 'auxiliary';
+export type SpanStatus = 'ok' | 'failed' | 'aborted' | 'interrupted';
 
-/** The per-request context snapshot the recorder derives and appends itself. */
-export type SpanContextDraft = Omit<SpanContextEvent, 'seq' | 'at'>;
+/** One ranked auxiliary route and the level it is called at. */
+export interface SpanRoute {
+  model: string;
+  reasoningEffort: ReasoningEffort;
+}
+
+/** Facts of a model request that hold before it is sent. */
+export interface ModelSpanRequest {
+  /** The auxiliary role; absent on a reasoning span. */
+  role?: AuxiliaryCallRole;
+  /** Gateway public id, always exactly `provider/model`. */
+  model: string;
+  effort?: {
+    /** The explicitly requested level, or the auxiliary role's declared expectation. */
+    requested?: string;
+    /** Public reasoning level actually sent. */
+    sent?: ReasoningEffort;
+  };
+  /** Input tokens estimated before sending. */
+  inputEstimate: number;
+  /** Character count per prompt layer, e.g. `{ 'wy-system': 1234 }`. */
+  layers: Record<string, number>;
+  /** Ordered auxiliary routes kept for this invocation and the rank that serves it. */
+  route?: { candidates: readonly SpanRoute[]; rank?: number };
+}
+
+/** Structured failure fact of a span. */
+export interface SpanError {
+  kind: ModelErrorKind | 'task';
+  status?: number;
+  /** The earliest instant the failed call may be retried, when the failure carried one. */
+  retryAt?: string;
+  /** Supplier's original message. */
+  message: string;
+}
+
+/** One `span.started` draft, without the ledger's own `seq` / `at`. */
+export interface ModelSpanStartedDraft {
+  type: 'span.started';
+  id: string;
+  /**
+   * The owner: the step for a reasoning span and for the step's own auxiliary
+   * tasks, the turn for the title, the action for an action's auxiliary task.
+   */
+  parent: string;
+  turn?: number;
+  step?: number;
+  kind: SpanKind;
+  request: ModelSpanRequest;
+}
+
+/** One `span.finished` draft, without the ledger's own `seq` / `at`. */
+export interface ModelSpanFinishedDraft {
+  type: 'span.finished';
+  id: string;
+  turn?: number;
+  step?: number;
+  status: SpanStatus;
+  error?: SpanError;
+  kind: SpanKind;
+  /** Raw visible output of the last completed request; absent when none completed. */
+  output?: string;
+  /** Raw reasoning text of the last completed request. */
+  reasoning?: string;
+  /** Public id of the model the last completed round actually served. */
+  requestModel?: string;
+  /** Measured by the transport, summed over every round. */
+  metrics?: ModelMetrics;
+}
+
+export type ModelSpanDraft = ModelSpanStartedDraft | ModelSpanFinishedDraft;
+
+/** One `span.context` draft, without the ledger's own `seq` / `at`. */
+export interface SpanContextDraft {
+  type: 'span.context';
+  id: string;
+  turn?: number;
+  step?: number;
+  kind: SpanKind;
+  /** Public id (`provider/model`) of the model that actually served the request. */
+  model: string;
+  /** Input tokens of exactly this request, including cached input; absent when unknown. */
+  inputTokens?: number;
+}
 
 interface OpenSpan {
   held: boolean;
@@ -27,7 +118,7 @@ interface OpenSpan {
   /** Latest model public id any `span.started` reported for this span. */
   model?: string;
   /** The latest finish report, with metrics summed over every report so far. */
-  last?: Omit<ModelSpanFinishedEvent, 'seq' | 'at'>;
+  last?: ModelSpanFinishedDraft;
 }
 
 export class SpanRecorder {
@@ -64,7 +155,7 @@ export class SpanRecorder {
    * input tokens. A request that reported no usage keeps the field absent —
    * unknown — never the previous round's number or the accumulated sum.
    */
-  private async snapshot(span: OpenSpan, done: Omit<ModelSpanFinishedEvent, 'seq' | 'at'>): Promise<void> {
+  private async snapshot(span: OpenSpan, done: ModelSpanFinishedDraft): Promise<void> {
     const model = done.requestModel ?? span.model;
     // No serving model means the request facts never arrived: nothing to report.
     if (model === undefined) return;

@@ -196,7 +196,30 @@ export type {
   WorkspaceSnapshot,
 } from './ledger/store.ts';
 export { REPLY_FALLBACK_SOURCES, collectSessionFiles, stepId, turnId } from './ledger/store.ts';
-import { SpanRecorder } from './loop/span.ts';
+import { SpanRecorder } from '@wrenyard/agent-loop';
+
+// The loop, its span recorder and the auxiliary definitions live in
+// `@wrenyard/agent-loop`; re-export the moved types so the session surface
+// keeps resolving for existing consumers.
+export { SpanRecorder } from '@wrenyard/agent-loop';
+export type {
+  AuxiliaryDefinition,
+  AuxiliaryDefinitionId,
+  AuxiliaryLoopOptions,
+  AuxiliaryLoopResult,
+  AuxiliaryRecordPort,
+  AuxiliaryRunnerPorts,
+  DefinitionPorts,
+  LoopRecord,
+  LoopRole,
+  LoopTool,
+  MethodCatalogPort,
+  MethodEffect,
+  MethodInfo,
+  ModelSpanDraft,
+  SpanContextDraft,
+  WorkspaceUpdate,
+} from '@wrenyard/agent-loop';
 
 /** Create the session feature over a host. */
 export function createSession(host: SessionHost): Session {

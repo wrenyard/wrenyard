@@ -2,6 +2,7 @@ import { hostname } from 'node:os'
 import { readFileSync } from 'node:fs'
 import type { WrenyardGatewayConnection } from '@wrenyard/control'
 import type { ProviderDefinition } from '@wrenyard/providers'
+import { getAuxiliaryDefinition } from '@wrenyard/agent-loop'
 import {
   AUXILIARY_ROLE_ORDER,
   type AuxiliaryRoutePreview,
@@ -49,6 +50,20 @@ const SESSION_CALLABLE_METHODS = new Set([
 
 /** Worktree methods whose lock a session carries automatically. */
 const LOCKED_WORKTREE_METHODS = new Set(['project.worktree.create', 'project.worktree.remove', 'project.worktree.merge'])
+
+/**
+ * The method allowlist of the auxiliary definition currently running, or
+ * undefined for an ordinary session call. The loop's catalog adapter sets
+ * `auxiliaryDefinitionId`, whose definition data lives in
+ * `@wrenyard/agent-loop`; the daemon never re-declares those lists.
+ */
+function auxiliaryAllowlist(
+  context: { auxiliaryDefinitionId?: string } | undefined,
+): ReadonlySet<string> | undefined {
+  const id = context?.auxiliaryDefinitionId
+  if (id === undefined) return undefined
+  return new Set(getAuxiliaryDefinition(id)?.methods ?? [])
+}
 
 export interface DaemonSessionHostOptions {
   workspaceRoot: string
@@ -320,12 +335,14 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     async cancelTaskRun(taskRunId) { await taskService.cancel(taskRunId) },
     /**
      * Describe the allowlisted project methods a session may call, in request
-     * order. Any name outside SESSION_CALLABLE_METHODS is rejected.
+     * order. During an auxiliary run the running definition's method list is
+     * the allowlist; otherwise SESSION_CALLABLE_METHODS applies.
      */
-    async methods(names) {
+    async methods(names: readonly string[], context?: { auxiliaryDefinitionId?: string }) {
+      const allowlist = auxiliaryAllowlist(context) ?? SESSION_CALLABLE_METHODS
       const described: { name: string; description: string; params: Record<string, unknown> }[] = []
       for (const name of names) {
-        if (!SESSION_CALLABLE_METHODS.has(name)) {
+        if (!allowlist.has(name)) {
           throw new ProtocolError(METHOD_NOT_FOUND, { method: name })
         }
         const method = describeMethod(name)
@@ -342,12 +359,15 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     },
     /**
      * Invoke one allowlisted project method through the daemon RPC pipeline.
-     * Non-allowlisted names are rejected. A ProtocolError becomes an Error whose
-     * `code` is the error data's string `code` when present, otherwise the
-     * numeric protocol code, and whose message is the protocol message.
+     * Non-allowlisted names are rejected; during an auxiliary run the running
+     * definition's method list is the allowlist. A ProtocolError becomes an
+     * Error whose `code` is the error data's string `code` when present,
+     * otherwise the numeric protocol code, and whose message is the protocol
+     * message.
      */
-    async call(method, params, context) {
-      if (!SESSION_CALLABLE_METHODS.has(method)) {
+    async call(method: string, params: unknown, context?: { sessionId?: string; auxiliaryDefinitionId?: string }) {
+      const allowlist = auxiliaryAllowlist(context) ?? SESSION_CALLABLE_METHODS
+      if (!allowlist.has(method)) {
         throw new ProtocolError(METHOD_NOT_FOUND, { method })
       }
       // A session's worktrees carry its own lock: it is set on create and
