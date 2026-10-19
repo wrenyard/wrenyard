@@ -7,6 +7,7 @@ export { SupplyEvidencePolicy } from './supply-evidence-policy.ts';
 export { CandidateScorer } from './candidate-scorer.ts';
 export { CandidateEvaluator } from './candidate-evaluator.ts';
 export { ConstrainedDispatcher, isDynamicFast } from './constrained-dispatcher.ts';
+export { excludedModelIdsFor } from './exclusions.ts';
 import { AutoRouter } from './auto-router.ts';
 import { QuotaPolicy } from './quota-policy.ts';
 import { CandidateEvaluator } from './candidate-evaluator.ts';

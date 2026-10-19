@@ -1,7 +1,7 @@
 import { type Catalog, type ModelDefinition, explicitFreeAutoEligibility, resolveModelSpeed, routingReferencePriceOf } from '@wrenyard/providers/catalog';
-import { resolveHistoricalOfferedModelId } from '@wrenyard/providers';
 import type { DispatchCandidate, LocalSpeedSample, DispatchPlan } from '@wrenyard/providers/base';
 import type { TaskDispatchRequirements, ConstrainedDispatch, DispatchResolution } from './types.ts';
+import { excludedModelIdsFor } from './exclusions.ts';
 import { INTELLIGENCE_TIERS, isMainstreamModelId, type IntelligenceTier } from '@wrenyard/models';
 const INTELLIGENCE_ORDER = Object.fromEntries(INTELLIGENCE_TIERS.map((tier, rank) => [tier, rank])) as Record<IntelligenceTier, number>;
 export function isDynamicFast(tps: number): boolean {
@@ -31,24 +31,10 @@ export class ConstrainedDispatcher {
     const excludedProviders = new Set(requirements.excludeProviderIds ?? []);
     const requiredCaps = requirements.requiredCapabilities ?? [];
     const eligible: DispatchResolution[] = [];
-    // A bare exclusion id carries no provider, so it is migrated only through the
-    // candidate's own provider: a historical spelling of this exact model is
-    // excluded, while an unknown or ambiguous spelling is never globally
-    // remapped and can therefore never bypass exclusion through another route.
-    const excludedModelsFor = (providerId: string): ReadonlySet<string> => {
-      const provider = this.catalog.provider(providerId);
-      if (!provider) return new Set(excludedModels);
-      const resolved = new Set(excludedModels);
-      for (const excluded of excludedModels) {
-        const registered = resolveHistoricalOfferedModelId(provider, excluded);
-        if (registered !== undefined) resolved.add(registered);
-      }
-      return resolved;
-    };
     let considered = 0;
     for (const candidate of candidates) {
       considered++;
-      const excludedForProvider = excludedModelsFor(candidate.provider);
+      const excludedForProvider = excludedModelIdsFor(this.catalog.provider(candidate.provider), excludedModels);
       if (excludedForProvider.has(candidate.model))
         continue;
       if (excludedProfiles.has(candidate.profileId))

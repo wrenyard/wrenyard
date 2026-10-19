@@ -1,7 +1,7 @@
 import type { Catalog, DispatchCandidate, DispatchPlan, LocalSpeedSample, ModelDefinition, SpeedEvidence } from '@wrenyard/providers/catalog';
 import type { TaskDispatchRequirements } from '@wrenyard/auto-routing';
 import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, resolveModelSpeed, routingReferencePriceOf, explicitFreeAutoEligibility } from '@wrenyard/providers/catalog';
-import { resolveConstrainedDispatch } from '@wrenyard/auto-routing';
+import { excludedModelIdsFor, resolveConstrainedDispatch } from '@wrenyard/auto-routing';
 import { resolveHistoricalOfferedModelId, resolveRuntimeTaskPlans, type ProviderRuntime } from '@wrenyard/providers'
 import { isMainstreamModelId } from '@wrenyard/models'
 import type { TaskResolvedDispatch } from '../../task-run-metadata-types.mts'
@@ -409,17 +409,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     const excludedProfiles = requirements.excludeProfileIds ?? []
     const excludedClients = requirements.excludeClientIds ?? []
     const excludedProviders = requirements.excludeProviderIds ?? []
-    // A bare exclusion id names no provider, so it is migrated only through this
-    // candidate's own provider. A historical spelling of this model excludes it,
-    // while an ambiguous provider-less spelling is never globally remapped.
-    const candidateProvider = catalog.provider(candidate.provider)
-    const excludedForProvider = new Set(excludedModels)
-    if (candidateProvider) {
-      for (const excluded of excludedModels) {
-        const registered = resolveHistoricalOfferedModelId(candidateProvider, excluded)
-        if (registered !== undefined) excludedForProvider.add(registered)
-      }
-    }
+    const excludedForProvider = excludedModelIdsFor(catalog.provider(candidate.provider), excludedModels)
     // First-real-gate order, matching the authoritative pre-poll gate order.
     if (excludedForProvider.has(candidate.model)) {
       return { code: 'no_available_provider', detail: 'model_excluded' }

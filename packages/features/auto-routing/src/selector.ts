@@ -18,6 +18,7 @@ import {
   type RoleReasoningRequirement,
 } from './requirements.ts';
 import { deepSeekAutomaticPricingOf, effectiveRoutingCap, toAutomaticCandidateInput, type ModelRoutingEntry } from './selector-inputs.ts';
+import { excludedModelIdsFor } from './exclusions.ts';
 
 /** Gateway route status extended with the circuit phase auxiliary ordering reads. */
 export type GatewayRouteStatusWithPhase = GatewayRouteStatus & {
@@ -42,11 +43,17 @@ export interface SelectorRoute {
 
 /**
  * Minimal structural view of the settings layer the selector reads: the
- * per-dispatch output-price cap and the routing score weights. The daemon's
- * concrete task-settings layer satisfies it structurally.
+ * per-dispatch output-price cap, the global model and provider exclusions and
+ * the routing score weights. The daemon's concrete task-settings layer
+ * satisfies it structurally.
  */
 export interface SelectorSettingsLayer {
-  dispatch?: { maxOutputUsdPerMillion?: number };
+  dispatch?: {
+    maxOutputUsdPerMillion?: number;
+    /** Bare model ids or unified `provider/model` ids no automatic route may use. */
+    excludeModelIds?: readonly string[];
+    excludeProviderIds?: readonly string[];
+  };
   /** Routing score weights keyed for config, mapped to scorer P/S/Q/I. */
   routingWeights?: { price: number; speed: number; quota: number; intelligence: number };
 }
@@ -163,15 +170,24 @@ function createSelector(
       gatewayByPublicId.set(row.publicId, row);
       gatewayByPublicId.set(`${row.provider}/${row.id}`, row);
     }
-    const models = port.catalog.providers().flatMap(provider => provider.models
-      .filter(model => !model.taskOnly && (model.supportedClients?.length ?? 0) === 0)
-      .flatMap(model => {
-        const gateway = gatewayByPublicId.get(`${provider.id}/${model.id}`);
-        if (gateway === undefined || !supportsSession(gateway)) {
-          reject('no session-supported Gateway protocol'); return [];
-        }
-        return [{ provider, model }];
-      }));
+    // The global exclusions govern every automatic choice, the same lists task
+    // dispatch honors; an explicit user choice never reaches this selector.
+    const excludedProviders = new Set(settings?.dispatch?.excludeProviderIds ?? []);
+    const excludedModels = settings?.dispatch?.excludeModelIds ?? [];
+    const models = port.catalog.providers().flatMap(provider => {
+      if (excludedProviders.has(provider.id)) { reject('provider excluded'); return []; }
+      const excluded = excludedModelIdsFor(provider, excludedModels);
+      return provider.models
+        .filter(model => !model.taskOnly && (model.supportedClients?.length ?? 0) === 0)
+        .flatMap(model => {
+          if (excluded.has(model.id)) { reject('model excluded'); return []; }
+          const gateway = gatewayByPublicId.get(`${provider.id}/${model.id}`);
+          if (gateway === undefined || !supportsSession(gateway)) {
+            reject('no session-supported Gateway protocol'); return [];
+          }
+          return [{ provider, model }];
+        });
+    });
     const entries: { entry: ModelRoutingEntry; levels: typeof requirements.expectedReasoningEffort }[] = [];
     const availability = await Promise.all(models.map(({ provider, model }) => port.runtimeAvailability(
       { provider: provider.id, model: model.id, client: 'gateway', mode: 'gateway' },
