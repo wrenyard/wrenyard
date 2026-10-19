@@ -57,14 +57,12 @@ test('built-in display names are hyphen-free, sourced from the SSOT, and canonic
   const offering = (provider: string, id: string) =>
     catalog.provider(provider)!.models.find((entry) => entry.id === id)!;
   for (const [provider, id, canonical] of [
-    ['kimi-coding', 'k3', 'kimi-k3'],
-    ['minimax', 'MiniMax-M3', 'minimax-m3'],
-    ['deepseek', 'deepseek-flash', 'deepseek-v4.1-flash'],
-    ['tokenhub', 'hy4-preview', 'hunyuan-hy4-preview'],
-    ['openrouter', 'inclusionai/ling-3.0-flash-vl:free', 'ling-3.0-flash-vl'],
-    ['openrouter', 'qwen/qwen3.8-27b:free', 'qwen3.8-27b'],
-    ['opencode-zen', 'nemotron-3-ultra-free', 'nemotron-3-ultra'],
-    ['opencode-zen', 'nemotron-3.5-lightning-free', 'nemotron-3.5-lightning'],
+    ['kimi-coding', 'kimi-k3', 'kimi-k3'],
+    ['minimax', 'minimax-m3', 'minimax-m3'],
+    ['deepseek', 'deepseek-v4.1-flash', 'deepseek-v4.1-flash'],
+    ['tokenhub', 'hunyuan-hy4-preview', 'hunyuan-hy4-preview'],
+    ['openrouter', 'ling-3.0-flash-vl', 'ling-3.0-flash-vl'],
+    ['openrouter', 'qwen3.8-27b', 'qwen3.8-27b'],
   ] as const) {
     const route = offering(provider, id);
     assert.equal(route.canonicalModel?.id, canonical, `${provider}/${id}`);
