@@ -4,6 +4,12 @@ import type { IntelligenceTier, ModelCapability, ReasoningEffort } from '@wrenya
 /** Every role that may issue an auxiliary call. */
 export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch' | 'document' | 'todo' | 'vcs' | 'project' | 'reply' | 'status' | 'suggestion';
 
+/** One tier pool in a bot's step-down ladder. */
+export interface BotLadderStep {
+  readonly intelligence: 'premium' | 'high' | 'mid';
+  readonly requireQuotaSufficient?: boolean;
+}
+
 /** The model evidence one routing requirement asks for. */
 export interface RoleReasoningRequirement {
   intelligenceMin: IntelligenceTier;
@@ -13,6 +19,8 @@ export interface RoleReasoningRequirement {
   requiredCapabilities: readonly ModelCapability[];
   /** Ordered preference: selection keeps the routes supporting the first level any route supports. */
   expectedReasoningEffort: readonly ReasoningEffort[];
+  /** Ordered tier pools tried in sequence; absent keeps the plain ranked order. */
+  ladder?: readonly BotLadderStep[];
 }
 
 const TEXT: readonly ModelCapability[] = ['text'];
@@ -38,13 +46,20 @@ export const ROLE_REQUIREMENTS: Readonly<Record<AuxiliaryCallRole, RoleReasoning
  */
 export const TASK_REQUIREMENT: RoleReasoningRequirement = ROLE_REQUIREMENTS.reply;
 
-/** Bot agents run on a hard-coded high/premium intelligence rule at a high
- *  reasoning level, with the reply profile's remaining gates. */
+/** Bot agents run a tier ladder from premium down to mid, with the reply
+ *  profile's remaining gates. Low stays excluded by the minimum gate. */
 export const BOT_REQUIREMENT: RoleReasoningRequirement = {
   ...ROLE_REQUIREMENTS.reply,
-  intelligenceMin: 'high',
+  intelligenceMin: 'mid',
   intelligenceExpected: 'premium',
   expectedReasoningEffort: ['high'],
+  ladder: [
+    { intelligence: 'premium', requireQuotaSufficient: true },
+    { intelligence: 'high', requireQuotaSufficient: true },
+    { intelligence: 'premium' },
+    { intelligence: 'high' },
+    { intelligence: 'mid' },
+  ],
 };
 
 /** Must equal the session loop budget. */

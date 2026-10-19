@@ -5,39 +5,39 @@ import { FULL_CYCLE_MIN_REMAINING, FULL_CYCLE_RESET_PACE, FULL_CYCLE_HEADROOM_WE
 export class QuotaPolicy {
   private assessBalanceConstraint(nowMs: number, id: string, balance: BalanceEvidence | null | undefined): ConstraintAssessment {
     if (balance === null || balance === undefined || typeof balance !== "object") {
-      return { id, state: "missing", headroom: null, rejectCode: null };
+      return { id, state: "missing", headroom: null, rejectCode: null, aheadOfPace: null };
     }
     if (!isFiniteNumber(nowMs)) {
-      return { id, state: "rejected", headroom: null, rejectCode: "invalid_now" };
+      return { id, state: "rejected", headroom: null, rejectCode: "invalid_now", aheadOfPace: null };
     }
     const observedAtMs = balance.observedAtMs;
     if (!isFiniteNumber(observedAtMs)) {
-      return { id, state: "rejected", headroom: null, rejectCode: "observation_time_not_finite" };
+      return { id, state: "rejected", headroom: null, rejectCode: "observation_time_not_finite", aheadOfPace: null };
     }
     if (observedAtMs > nowMs) {
-      return { id, state: "rejected", headroom: null, rejectCode: "future_observation" };
+      return { id, state: "rejected", headroom: null, rejectCode: "future_observation", aheadOfPace: null };
     }
     const validForMs = balance.validForMs;
     if (!isFiniteNumber(validForMs) || validForMs <= 0) {
-      return { id, state: "rejected", headroom: null, rejectCode: "invalid_freshness_window" };
+      return { id, state: "rejected", headroom: null, rejectCode: "invalid_freshness_window", aheadOfPace: null };
     }
     if (nowMs - observedAtMs > validForMs) {
-      return { id, state: "rejected", headroom: null, rejectCode: "stale_observation" };
+      return { id, state: "rejected", headroom: null, rejectCode: "stale_observation", aheadOfPace: null };
     }
     // Validate decimal syntax and test exact zero without floating-point loss.
     const amount = balance.amount;
     if (typeof amount !== "string" || !/^\d+(?:\.\d+)?$/.test(amount)) {
-      return { id, state: "rejected", headroom: null, rejectCode: "invalid_balance_amount" };
+      return { id, state: "rejected", headroom: null, rejectCode: "invalid_balance_amount", aheadOfPace: null };
     }
     if (!/[1-9]/.test(amount)) {
-      return { id, state: "blocked", headroom: 0, rejectCode: null };
+      return { id, state: "blocked", headroom: 0, rejectCode: null, aheadOfPace: null };
     }
     // amount > 0: available, no trusted headroom, never a subscription-pace boost.
-    return { id, state: "healthy", headroom: null, rejectCode: null };
+    return { id, state: "healthy", headroom: null, rejectCode: null, aheadOfPace: null };
   }
   private assessConstraint(nowMs: number, constraint: RequiredQuotaConstraint): ConstraintAssessment {
     if (constraint === null || typeof constraint !== "object") {
-      return { id: "", state: "missing", headroom: null, rejectCode: null };
+      return { id: "", state: "missing", headroom: null, rejectCode: null, aheadOfPace: null };
     }
     const id = typeof constraint.id === "string" ? constraint.id : "";
     const balance = constraint.balance;
@@ -46,16 +46,17 @@ export class QuotaPolicy {
     }
     const evidence = constraint.evidence;
     if (evidence === null || evidence === undefined || typeof evidence !== "object") {
-      return { id, state: "missing", headroom: null, rejectCode: null };
+      return { id, state: "missing", headroom: null, rejectCode: null, aheadOfPace: null };
     }
     if (!isFiniteNumber(nowMs)) {
-      return { id, state: "rejected", headroom: null, rejectCode: "invalid_now" };
+      return { id, state: "rejected", headroom: null, rejectCode: "invalid_now", aheadOfPace: null };
     }
     const reject = (rejectCode: ConstraintRejectCode): ConstraintAssessment => ({
       id,
       state: "rejected",
       headroom: null,
       rejectCode,
+      aheadOfPace: null,
     });
     const remainingPercent = evidence.remainingPercent;
     if (!isFiniteNumber(remainingPercent)) {
@@ -89,7 +90,7 @@ export class QuotaPolicy {
     const remainingRatio = remainingPercent / 100;
     // Fresh remaining of exactly zero blocks: no headroom at all.
     if (remainingRatio === 0) {
-      return { id, state: "blocked", headroom: 0, rejectCode: null };
+      return { id, state: "blocked", headroom: 0, rejectCode: null, aheadOfPace: null };
     }
     if (replenishmentKind === "full_cycle") {
       const resetAtMs = evidence.resetAtMs;
@@ -112,20 +113,20 @@ export class QuotaPolicy {
       const headroom = FULL_CYCLE_HEADROOM_WEIGHT * remainingRatio +
         FULL_CYCLE_RESET_WEIGHT * paceTerm;
       const state: ConstraintState = remainingRatio >= healthyThreshold ? "healthy" : "strained";
-      return { id, state, headroom, rejectCode: null };
+      return { id, state, headroom, rejectCode: null, aheadOfPace: remainingRatio < expectedRemaining };
     }
     if (replenishmentKind === "rolling_partial") {
       if (remainingRatio >= HEALTHY_ROLLING_REMAINING) {
-        return { id, state: "healthy", headroom: FULL_CYCLE_HEADROOM_WEIGHT * remainingRatio, rejectCode: null };
+        return { id, state: "healthy", headroom: FULL_CYCLE_HEADROOM_WEIGHT * remainingRatio, rejectCode: null, aheadOfPace: null };
       }
       if (remainingRatio > 0 && remainingRatio < STRAINED_ROLLING_REMAINING) {
-        return { id, state: "strained", headroom: FULL_CYCLE_HEADROOM_WEIGHT * remainingRatio, rejectCode: null };
+        return { id, state: "strained", headroom: FULL_CYCLE_HEADROOM_WEIGHT * remainingRatio, rejectCode: null, aheadOfPace: null };
       }
       // Middle band [0.05, 0.80): genuinely unknown headroom contributes zero.
-      return { id, state: "unknown", headroom: null, rejectCode: null };
+      return { id, state: "unknown", headroom: null, rejectCode: null, aheadOfPace: null };
     }
     // Unknown replenishment kind stays unknown.
-    return { id, state: "unknown", headroom: null, rejectCode: null };
+    return { id, state: "unknown", headroom: null, rejectCode: null, aheadOfPace: null };
   }
   assess(nowMs: number, constraints: readonly RequiredQuotaConstraint[]): QuotaAssessment {
     // An empty (or non-array) constraint list is not covered quota evidence.
@@ -206,6 +207,7 @@ export class QuotaPolicy {
       headroomTrusted,
       headroom,
       constraints: assessments,
+      aheadOfPace: assessments.some(assessment => assessment.aheadOfPace === true),
     };
   }
 }

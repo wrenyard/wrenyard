@@ -8,7 +8,7 @@ import { INTELLIGENCE_ORDER, resolveModelSpeed, resolveReasoningEffort, routingR
 import type { IntelligenceTier } from '@wrenyard/providers/catalog';
 import { isMainstreamModelId, type ReasoningEffort } from '@wrenyard/models';
 import type { CandidateInput, RequiredQuotaConstraint } from './types.ts';
-import { AutoRouter } from './auto-router.ts';
+import { AutoRouter, isAbundantSupply } from './auto-router.ts';
 import {
   AUXILIARY_TIMEOUT_MS,
   BOT_REQUIREMENT,
@@ -298,8 +298,34 @@ function createSelector(
     for (const excluded of ranked.excluded) reject(excluded.reason);
     const levelsOf = new Map(entries.map(({ entry, levels }) => [entry.choice.exactAgentRuntime, levels]));
     const speedsOf = new Map(entries.map(({ entry }) => [entry.choice.exactAgentRuntime, entry.choice.speed.effective_tps]));
-    const admitted = ranked.ranked.map(candidate => ({ model: candidate.canonicalId, levels: levelsOf.get(candidate.canonicalId)!, speedTps: speedsOf.get(candidate.canonicalId)! }));
+    const tiersOf = new Map(entries.map(({ entry }) => [entry.choice.exactAgentRuntime, entry.choice.intelligence]));
+    const admitted = ranked.ranked.map(candidate => ({
+      model: candidate.canonicalId,
+      levels: levelsOf.get(candidate.canonicalId)!,
+      speedTps: speedsOf.get(candidate.canonicalId)!,
+      tier: tiersOf.get(candidate.canonicalId)!,
+      quota: candidate.quota,
+      abundant: isAbundantSupply(candidate),
+    }));
     const preferred = requirements.expectedReasoningEffort;
+    const ladder = requirements.ladder;
+    if (ladder !== undefined) {
+      // Ladder mode pools the admitted candidates by tier in ladder order,
+      // preserving the AutoRouter ranking inside each pool. The global effort
+      // layer below is intentionally skipped: it could drop every mid model
+      // that lacks the preferred effort. Candidates matching no step are
+      // dropped defensively.
+      const ladderPool = ladder.flatMap(step => admitted.filter(({ tier, quota, abundant }) =>
+        tier === step.intelligence
+        && (!step.requireQuotaSufficient || abundant || quota.aheadOfPace !== true)));
+      if (!ladderPool.length) throw new Error(`Auxiliary role ${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
+      return ladderPool.map(({ model, levels }) => ({
+        model,
+        // Each route carries its own effort: the expected level when the
+        // candidate supports it, otherwise its first declared level.
+        reasoningEffort: preferred.find(effort => levels.includes(effort)) ?? levels[0]!,
+      }));
+    }
     const selected = preferred.map(effort => admitted.filter(({ levels }) => levels.includes(effort))).find(layer => layer.length > 0) ?? admitted;
     // The suggestion role wants a hint back quickly, so when the selected pool
     // admits routes that can actually disable reasoning it favors those, ordered
