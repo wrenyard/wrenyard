@@ -402,6 +402,30 @@ function routingFormRequirements(automatic: TaskSettingsAutomaticDispatch): Conf
   return resolveEffectiveTaskSettings({ invocation: normalizeTaskSettingsLayer({ dispatch: automatic }) }).dispatch
 }
 
+/**
+ * Unions the global routing exclusions (config root `routing.exclude`, read
+ * through the user-global layer's `dispatch`) into a routing-form requirement
+ * set, deduplicated against any exclusion the submitted form already carries.
+ * Only the model/provider exclusion axes are merged: every other global
+ * dispatch field stays out of the form-only diagnostic.
+ */
+function mergeRoutingExclusions(
+  requirements: ConfigTaskDispatchRequirements,
+  globalDispatch: ConfigTaskDispatchRequirements | undefined,
+): ConfigTaskDispatchRequirements {
+  const models = globalDispatch?.excludeModelIds
+  const providers = globalDispatch?.excludeProviderIds
+  if (models === undefined && providers === undefined) return requirements
+  const merged: ConfigTaskDispatchRequirements = { ...requirements }
+  if (models !== undefined) {
+    merged.excludeModelIds = [...new Set([...(requirements.excludeModelIds ?? []), ...models])]
+  }
+  if (providers !== undefined) {
+    merged.excludeProviderIds = [...new Set([...(requirements.excludeProviderIds ?? []), ...providers])]
+  }
+  return merged
+}
+
 /** One provider+model routing form row being assembled before final ordering. */
 interface RoutingFormPair {
   provider: string
@@ -1123,11 +1147,16 @@ export class TaskSettingsService {
    * Read-only FORM-BASED routing diagnostic. The caller submits the automatic
    * dispatch form fields directly (`params.automatic`) plus an optional
    * timeout; the diagnostic NEVER enumerates task definitions and NEVER reads
-   * global/per-task saved settings, with one weight-only exception: the
-   * current global routing weights are read once per request and passed
-   * identically to the baseline and form passes so scoring always matches the
-   * configured (or default) weights. All other saved global/per-task settings
-   * stay ignored here. Only the submitted form is normalized
+   * global/per-task saved settings, with one weights-and-exclusions exception:
+   * the current global routing weights and the current global routing
+   * exclusions (config root `routing.exclude`, projected onto the global
+   * layer's `dispatch`) are read once per request and passed identically to
+   * the baseline and form passes, so scoring always matches the configured
+   * (or default) weights and globally excluded providers/models are never
+   * ranked as selectable. Global exclusions are unioned and deduplicated with
+   * the form-submitted exclusion ids; no other global dispatch field is
+   * merged. All other saved global/per-task settings stay ignored here. Only
+   * the submitted form is normalized
    * (recommended intelligence expectation defaulting to `mid`, no hard minimum,
    * timeout defaulting to the system default).
    *
@@ -1142,11 +1171,13 @@ export class TaskSettingsService {
    * sampling.
    */
   async routingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult> {
-    // Weight-only exception: read the current global routing weights once per
-    // request; both passes below use this identical weight set.
+    // Weights-and-exclusions exception: read the current global layer once per
+    // request; both passes below use this identical weight set and this
+    // identical global routing exclusion set.
     const currentRecord = this.readConfigRecord().record
-    const routingWeights = readGlobalTaskSettings(tasksSectionOf(currentRecord), currentRecord)?.routingWeights
-    const requirements = routingFormRequirements(params.automatic)
+    const globalSettings = readGlobalTaskSettings(tasksSectionOf(currentRecord), currentRecord)
+    const routingWeights = globalSettings?.routingWeights
+    const requirements = mergeRoutingExclusions(routingFormRequirements(params.automatic), globalSettings?.dispatch)
     const timeoutMs = typeof params.timeout_ms === 'number' && params.timeout_ms >= 1
       ? params.timeout_ms
       : SYSTEM_DEFAULT_TIMEOUT_MS
