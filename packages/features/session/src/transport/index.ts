@@ -49,6 +49,7 @@ export {
   type ModelResult,
   type ModelToolCall,
   type ModelTransport,
+  type ModelPreflightResult,
   type ModelWaitReason,
   type RetryAfterHint,
   type RetryAfterSource,

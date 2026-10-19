@@ -209,8 +209,6 @@ export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel'> & {
   routeUntil?: string;
   /** Circuit phase of the route; absent when the route is healthy. */
   routePhase?: GatewayRoutePhase;
-  /** When a half-open recovery probe may next be admitted for the route. */
-  routeNextProbeAt?: string;
   /** The fault kind behind the route's block, when known. */
   faultKind?: string;
 };

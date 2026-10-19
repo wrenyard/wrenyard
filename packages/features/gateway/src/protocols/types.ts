@@ -152,13 +152,10 @@ export function errorIdentityOf(source: unknown): { type?: string; code?: string
  * One public model as it appears in every entry protocol's `/models` body.
  *
  * A faulted route is never hidden: it is listed with its own `route_state` and
- * `route_until`. A half-open route (cooldown expired, awaiting a bounded
- * recovery probe) is reported with `route_phase: "half_open"` distinct from a
- * healthy route, so an expired cooldown is never read as recovery.
+ * `route_until`.
  */
 export function modelListEntry(model: PublicGatewayModel): Record<string, unknown> {
   const phase = (model as { routePhase?: unknown }).routePhase;
-  const nextProbeAt = (model as { routeNextProbeAt?: unknown }).routeNextProbeAt;
   const faultKind = (model as { faultKind?: unknown }).faultKind;
   return {
     // The model identity in every protocol listing is the bare registered id.
@@ -173,7 +170,6 @@ export function modelListEntry(model: PublicGatewayModel): Record<string, unknow
     route_state: model.routeState,
     route_until: model.routeUntil,
     ...(typeof phase === 'string' ? { route_phase: phase } : {}),
-    ...(typeof nextProbeAt === 'string' ? { route_next_probe: nextProbeAt } : {}),
     ...(typeof faultKind === 'string' ? { fault_kind: faultKind } : {}),
   };
 }

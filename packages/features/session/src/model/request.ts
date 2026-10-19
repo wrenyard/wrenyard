@@ -28,6 +28,7 @@ import {
   type ModelRequest,
   type ModelResult,
   type ModelTransport,
+  type ModelPreflightResult,
   type ModelWaitReason,
   type ToolCall,
   type ToolSpec,
@@ -100,9 +101,8 @@ export const LOCAL_CALL_ERROR = {
 };
 
 /**
- * Route health the runner reads: the Gateway's typed route status, whose circuit
- * detail (`phase`, `nextProbeAt`, `faultKind`) is what decides whether a route
- * may be tried now.
+ * Route health the runner reads: the Gateway's typed route status. A present
+ * open status means the route is blocked until `until`.
  */
 export type RouteHealth = GatewayRouteStatus;
 
@@ -592,36 +592,30 @@ function distinctCandidates(routes: readonly AuxiliaryRoute[]): AuxiliaryRoute[]
   return candidates;
 }
 
-/**
- * True when the route may be called now: healthy, or half-open with its bounded
- * recovery probe due. An open route, or a route whose `nextProbeAt` is still in
- * the future — a half-open route another caller is already probing under a
- * lease, as well as one whose probe is not yet due — is skipped so the attempt
- * is spent on a route that can actually answer.
- */
-function isCallableNow(health: RouteHealth | undefined, nowMs: number): boolean {
-  if (health === undefined) return true;
-  if (health.phase === 'open') return false;
-  if (health.nextProbeAt !== undefined) return Date.parse(health.nextProbeAt) <= nowMs;
-  return true;
+/** True when the route may be called now: no fault scope blocks it. */
+function isCallableNow(health: RouteHealth | undefined): boolean {
+  return health?.phase !== 'open';
 }
 
 /**
- * The absolute instant (epoch ms) the route may next be probed, or `undefined`
- * when it is callable now. The main reasoning call hands this to the transport
- * as its pre-admission check, so a route already known to be cooling down is
- * waited out inside the one retry budget instead of being probed early and
- * rejected by the Gateway.
+ * The instant (epoch ms) the main reasoning route admits requests again, or
+ * `undefined` when it is callable now. The transport waits it out before
+ * sending. An exhausted quota with an upstream-stated reset is not waited for:
+ * `final` ends the turn and asks the user to switch models.
  */
 function routeNotBeforeMs(
+  model: string,
   health: RouteHealth | undefined,
   nowMs: number,
-): { notBeforeMs: number; faultState?: string } | undefined {
-  if (health === undefined) return undefined;
-  const candidate = health.nextProbeAt ?? (health.phase === 'open' ? health.until : undefined);
-  if (candidate === undefined) return undefined;
-  const parsed = Date.parse(candidate);
+): ModelPreflightResult | undefined {
+  if (health === undefined || health.phase !== 'open') return undefined;
+  const parsed = Date.parse(health.until);
   if (!Number.isFinite(parsed) || parsed <= nowMs) return undefined;
+  if (health.state === 'quota_exhausted' && health.resets === true) {
+    const at = new Date(parsed);
+    const hhmm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+    return { notBeforeMs: parsed, faultState: health.state, final: `${model} 的额度已用尽，预计 ${hhmm} 恢复；请换一个模型继续` };
+  }
   return { notBeforeMs: parsed, faultState: health.state };
 }
 
@@ -840,7 +834,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       };
       const retryInstantOf = (candidate: string): string | undefined => {
         const health = options.routeStatus?.(candidate);
-        return health?.nextProbeAt ?? health?.until;
+        return health?.until;
       };
       /**
        * The failure detail of one auxiliary exhaustion: every attempt tried so
@@ -883,7 +877,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         // failure: when every candidate is open the all-open feedback below is
         // what the caller needs, so an unavailable route's budget error never
         // replaces it.
-        const callable = candidates.find((candidate) => isCallableNow(options.routeStatus?.(candidate.model), startedAtMs));
+        const callable = candidates.find((candidate) => isCallableNow(options.routeStatus?.(candidate.model)));
         const primary = callable ?? candidates[0]!;
         const primaryBudget = checkContextBudget(primary.model, messages, options.resolveProvider, maxTokens);
         estimatedInputTokens = primaryBudget.estimatedInputTokens;
@@ -955,12 +949,10 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             break;
           }
           const health = options.routeStatus?.(candidate.model);
-          // A route whose circuit is open, or whose recovery probe is not yet
-          // due — including one another caller is already probing under a lease —
-          // cannot be called: the Gateway would only reject it. Record its retry
-          // time and try the next candidate.
-          if (!isCallableNow(health, Date.now())) {
-            earliestRetry = earliest(earliestRetry, health?.nextProbeAt ?? health?.until);
+          // A blocked route cannot be called: the Gateway would only reject it.
+          // Record its retry time and try the next candidate.
+          if (!isCallableNow(health)) {
+            earliestRetry = earliest(earliestRetry, health?.until);
             continue;
           }
           const budget = checkContextBudget(candidate.model, messages, options.resolveProvider, maxTokens);
@@ -1202,7 +1194,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             // atomic admission authority for races.
             ...(options.routeStatus === undefined
               ? {}
-              : { preflight: () => routeNotBeforeMs(options.routeStatus!(model), Date.now()) }),
+              : { preflight: () => routeNotBeforeMs(model, options.routeStatus!(model), Date.now()) }),
             signal: controller.signal,
             onEvent,
           }), controller.signal);

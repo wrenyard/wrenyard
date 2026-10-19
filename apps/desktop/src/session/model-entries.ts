@@ -65,7 +65,7 @@ export function toModelEntries(
         // became unavailable can still be named and explained.
         ...(gatewayModel.routeState === undefined ? {} : { routeState: gatewayModel.routeState }),
         ...(gatewayModel.routePhase === undefined ? {} : { routePhase: gatewayModel.routePhase }),
-        ...(gatewayModel.routeNextProbeAt === undefined ? {} : { routeNextProbeAt: gatewayModel.routeNextProbeAt }),
+        ...(gatewayModel.routeUntil === undefined ? {} : { routeUntil: gatewayModel.routeUntil }),
         ...(gatewayModel.supportsFast === true ? { supportsFast: true } : {}),
       });
     }

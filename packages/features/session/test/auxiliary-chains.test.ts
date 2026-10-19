@@ -220,7 +220,7 @@ test('reply organization reports a readable failure when every route faults', as
   const until = '2026-01-01T00:05:00.000Z';
   const { runner, calls, events } = makeChain({
     routes: ['test/alpha', 'test/beta'],
-    routeStatus: () => ({ state: 'model_unavailable', until, phase: 'half_open' }),
+    routeStatus: () => ({ state: 'model_unavailable', until, phase: 'closed' }),
     onCall: (request) => { throw transportFault(request); },
   });
   const appended: LedgerEventDraft[] = [];
@@ -327,7 +327,7 @@ test('task dispatch returns a readable failure when every route faults', async (
   const until = '2026-01-01T00:05:00.000Z';
   const { runner, calls, events } = makeChain({
     routes: ['test/alpha', 'test/beta'],
-    routeStatus: () => ({ state: 'model_unavailable', until, phase: 'half_open' }),
+    routeStatus: () => ({ state: 'model_unavailable', until, phase: 'closed' }),
     onCall: (request) => { throw transportFault(request); },
   });
   const { deps } = dispatchDeps(runner);

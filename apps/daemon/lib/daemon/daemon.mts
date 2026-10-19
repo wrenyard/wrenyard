@@ -947,9 +947,7 @@ async function createForemanDaemonResources(
           ...(event.faultKind === undefined ? {} : { faultKind: event.faultKind }),
           phase: event.phase,
           ...(event.until === undefined ? {} : { until: event.until }),
-          ...(event.nextProbeAt === undefined ? {} : { nextProbeAt: event.nextProbeAt }),
           ...(event.nextRetryAt === undefined ? {} : { nextRetryAt: event.nextRetryAt }),
-          ...(event.probe === undefined ? {} : { probe: event.probe }),
           status: event.status,
           reason: event.reason,
         },
@@ -972,8 +970,7 @@ async function createForemanDaemonResources(
         source: 'wrenyard.gateway',
         severity: event.status >= 500 ? 'error' : event.status >= 400 ? 'warning' : 'info',
         refs: {},
-        // The route fault reason, phase, retry (until/next probe) and probe
-        // outcome are safe structured facts; the attempt id is a gateway-only
+        // The route fault reason, phase and retry instant are safe structured facts; the attempt id is a gateway-only
         // correlation marker, never a prompt, body or credential.
         data: {
           protocol: event.protocol,
@@ -985,8 +982,6 @@ async function createForemanDaemonResources(
           ...(event.routeUntil === undefined ? {} : { routeUntil: event.routeUntil }),
           ...(event.faultReason === undefined ? {} : { faultReason: event.faultReason }),
           ...(event.routePhase === undefined ? {} : { routePhase: event.routePhase }),
-          ...(event.nextProbeAt === undefined ? {} : { nextProbeAt: event.nextProbeAt }),
-          ...(event.probeOutcome === undefined ? {} : { probeOutcome: event.probeOutcome }),
           ...(event.attemptId === undefined ? {} : { attemptId: event.attemptId }),
           ...(event.reasoningEffort === undefined ? {} : { reasoningEffort: event.reasoningEffort }),
           ...(event.reasoningParameters === undefined ? {} : { reasoningParameters: event.reasoningParameters }),
@@ -1123,12 +1118,12 @@ async function createForemanDaemonResources(
   // race can never launch while that shared circuit still refuses the route.
   const taskRouteState: TaskRouteStateHooks = {
     admit: (provider, model, mode) => {
-      const shared = blockedSharedTaskRoute(gateway, provider, model, mode)
+      const shared = blockedSharedTaskRoute(gateway, provider, model)
       if (shared !== undefined) return { kind: 'blocked', status: shared }
       return gateway.admitRoute(provider, model)
     },
-    success: (provider, model, guard, lease) => gateway.completeRouteSuccess(provider, model, guard, lease),
-    fault: (provider, model, guard, fault, lease) => {
+    success: (provider, model, guard) => gateway.completeRouteSuccess(provider, model, guard),
+    fault: (provider, model, guard, fault) => {
       // Faults are keyed by provider plus the bare model: the native task route
       // is client-qualified, but a client suffix is never part of route health.
       let bareModel: string
@@ -1138,7 +1133,7 @@ async function createForemanDaemonResources(
         return undefined
       }
       // A structured-output delivery failure is already classified.
-      if ('state' in fault) return gateway.reportNativeRouteFault(provider, bareModel, fault, guard, lease)
+      if ('state' in fault) return gateway.reportNativeRouteFault(provider, bareModel, fault, guard)
       // An upstream error without a status cannot be classified: record nothing.
       if (fault.status === undefined) return undefined
       const providerDefinition = catalog.provider(provider)
@@ -1155,9 +1150,8 @@ async function createForemanDaemonResources(
           }
       const failure = classifyRouteFailure(providerDefinition, bareModel, fault.status, new Headers(), body, Date.now())
       if (failure === undefined) return undefined
-      return gateway.reportNativeRouteFault(provider, bareModel, failure, guard, lease)
+      return gateway.reportNativeRouteFault(provider, bareModel, failure, guard)
     },
-    cancel: (lease) => gateway.releaseNativeProbe(lease),
     faultState: (provider, model) => sharedRouteFaultState(gateway, provider, model),
   }
 
@@ -2291,18 +2285,13 @@ function gatewayOrigin(port: number): string {
  * the key, never by re-splitting the public string.
  *
  * An open shared route blocks admission with its own status before the attempt
- * launches. A half-open shared route blocks a native attempt regardless of due
- * time, because a native task cannot run the Gateway's HTTP recovery probe; a
- * Gateway-mode attempt keeps the due half-open behavior so the actual HTTP
- * pipeline can lease and recover that shared health. This guard only refuses:
- * it never acquires a probe lease, and the shared route-scoped fault is never
+ * launches. This guard only refuses, and the shared route-scoped fault is never
  * cleared by the exact-route settlement the task performs below.
  */
 function blockedSharedTaskRoute(
   gateway: ModelGateway,
   provider: string,
   model: string,
-  mode: 'native' | 'gateway' | undefined,
 ): RouteStatus | undefined {
   let parsed: ReturnType<typeof parseRunSyntax>
   try {
@@ -2311,12 +2300,7 @@ function blockedSharedTaskRoute(
     return undefined
   }
   const shared = gateway.routeStatus(`${provider}/${parsed.model}`)
-  if (shared === undefined || shared.phase === 'closed') return undefined
-  if (shared.phase === 'open') return shared
-  // Half-open: only a Gateway-mode attempt may rely on the bounded HTTP probe.
-  if (mode !== 'gateway') return shared
-  const probeMs = Date.parse(shared.nextProbeAt ?? shared.until)
-  return Number.isFinite(probeMs) && probeMs > Date.now() ? shared : undefined
+  return shared?.phase === 'open' ? shared : undefined
 }
 
 /**

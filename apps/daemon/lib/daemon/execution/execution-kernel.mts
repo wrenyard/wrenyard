@@ -36,7 +36,7 @@ import {
 import { collectStructuredOutput, firstPrompt, type StructuredOutputAgent } from '@wrenyard/task'
 import { requireClient } from '@wrenyard/clients'
 import { parseRunSyntax, recordRouteCooldown } from '@wrenyard/providers/catalog'
-import type { ProbeLease, RouteGuard } from '@wrenyard/gateway'
+import type { RouteGuard } from '@wrenyard/gateway'
 import {
   createTaskArtifactDirectory,
   outputSchemaDeclaresArtifacts,
@@ -538,13 +538,11 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       // Only a launched attempt is accounted, and only once per collected run:
       // the first real launch acquires the shared circuit handle and every
       // in-session correction (plus the time-limit warning resume) reuses that
-      // same guard and probe lease. The handle is settled exactly once for the
-      // whole collector — success on a schema-validated delivery, failure on the
-      // terminal delivery failure, cancelled on any other exit — never after the
-      // post-gates, which can never change route health.
+      // same guard. The handle is settled at most once for the whole collector:
+      // success on a schema-validated delivery, failure on the terminal
+      // delivery failure, never after the post-gates, which can never change route health.
       let routeIdentity: { provider: string; model: string } | undefined
       let routeGuard: RouteGuard | undefined
-      let routeLease: ProbeLease | undefined
       let routeSettled = false
       const runAgent: StructuredOutputAgent = async (profile, prompt, opts) => {
         if (routeIdentity === undefined && options.taskRouteState) {
@@ -557,12 +555,11 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
               throw new Error(
                 `Route ${identity.provider}/${identity.model} is blocked by the shared circuit ` +
                   `(${admission.status.state}, phase ${admission.status.phase}); refusing to launch an attempt. ` +
-                  'Retry after the next circuit probe or select another route.',
+                  `Retry after ${admission.status.until} or select another route.`,
               )
             }
             routeIdentity = identity
             routeGuard = admission.guard
-            routeLease = admission.kind === 'probe' ? admission.lease : undefined
           }
         }
         return primitives.agent(profile, prompt, {
@@ -606,7 +603,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         onRouteSuccess: () => {
           if (!routeSettled && routeIdentity !== undefined && options.taskRouteState) {
             routeSettled = true
-            options.taskRouteState.success(routeIdentity.provider, routeIdentity.model, routeGuard, routeLease)
+            options.taskRouteState.success(routeIdentity.provider, routeIdentity.model, routeGuard)
           }
         },
         onRouteFault: (fault) => {
@@ -618,7 +615,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
             // Cancellation, time budget and functional task failures never
             // reach this hook.
             routeSettled = true
-            options.taskRouteState.fault(routeIdentity.provider, routeIdentity.model, routeGuard, fault, routeLease)
+            options.taskRouteState.fault(routeIdentity.provider, routeIdentity.model, routeGuard, fault)
           }
         },
         beforeAttempt: () => assertTaskStillActive(taskId),
@@ -637,16 +634,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
           return validation.output
         }
       }
-      // The held probe lease is settled exactly once, in a finally around the
-      // collector and before any post-gate: an exit that reported neither
-      // success nor a terminal delivery failure (throw, cancellation) releases
-      // it as cancelled so a held lease never silently expires.
-      let output = await collectStructuredOutput(structuredOptions).finally(() => {
-        if (!routeSettled && routeLease !== undefined) {
-          routeSettled = true
-          options.taskRouteState?.cancel(routeLease)
-        }
-      })
+      let output = await collectStructuredOutput(structuredOptions)
       assertTaskStillActive(taskId)
 
       if (!artifactSchema) {

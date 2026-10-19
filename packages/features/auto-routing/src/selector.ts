@@ -22,9 +22,8 @@ import { excludedModelIdsFor } from './exclusions.ts';
 
 /** Gateway route status extended with the circuit phase auxiliary ordering reads. */
 export type GatewayRouteStatusWithPhase = GatewayRouteStatus & {
-  phase?: 'closed' | 'open' | 'half_open';
+  phase?: 'closed' | 'open';
   faultKind?: string;
-  nextProbeAt?: string;
 };
 
 /** The Gateway model fields auxiliary selection needs: identity and per-model protocols. */
@@ -197,26 +196,10 @@ function createSelector(
       { codeBuddySnapshot: bound.codeBuddySnapshot, nativeProviderReadiness: null },
     )));
     models.forEach(({ provider, model }, index) => {
-      // An unhealthy Gateway route is retained rather than discarded: the runner
-      // orders eligible candidates by the existing preference and may try the
-      // (possibly preferred) half-open route so it can recover. The route is
-      // never reported as healthy, and a faulted route is not excluded forever.
-      // Its state is surfaced as readable diagnostic/cooldown feedback.
+      // Automatic selection never picks a route the shared state blocks: an
+      // exhausted quota or a backoff that has not yet passed.
       const routeStatus = port.routeStatus?.(`${provider.id}/${model.id}`);
-      if (routeStatus) reject(`route ${routeStatus.phase === 'half_open' ? 'half_open (probe eligible)' : routeStatus.faultKind ?? routeStatus.state}`);
-      // An explicitly free offering is excluded while the shared Gateway circuit
-      // blocks its route: an open route cannot serve, and a half-open route is
-      // excluded until its probe is actually due. A due half-open route stays
-      // admitted so the Gateway's own bounded probe lease can recover it. Paid
-      // routes keep their existing retain-for-recovery behavior.
-      if (model.free === true && routeStatus !== undefined) {
-        if (routeStatus.phase === 'open') return reject('free route open');
-        if (routeStatus.phase === 'half_open'
-          && routeStatus.nextProbeAt !== undefined
-          && new Date(routeStatus.nextProbeAt).getTime() > nowMs) {
-          return reject('free route half-open until next probe');
-        }
-      }
+      if (routeStatus) return reject(`route ${routeStatus.faultKind ?? routeStatus.state}`);
       if (!availability[index]!.available || availability[index]!.providerCredential !== 'available') return reject('provider not configured/available');
       // Universal application admission: auxiliary selection is an application
       // surface, so every candidate must be a mainstream registered identity.

@@ -184,7 +184,7 @@ test('all routes cooling down returns promptly with the earliest retry and calls
   assert.deepEqual(calls, []);
 });
 
-test('a half-open preferred route is tried so it can recover', async () => {
+test('a preferred route whose block has passed is tried so it can recover', async () => {
   const calls: string[] = [];
   const transport: ModelTransport = {
     async complete(request: ModelRequest) {
@@ -196,35 +196,12 @@ test('a half-open preferred route is tried so it can recover', async () => {
     transport,
     routes: ['test/alpha', 'test/beta'],
     routeStatus: (model) => (model === 'test/alpha'
-      ? { state: 'model_unavailable', until: '2026-01-01T00:00:00.000Z', phase: 'half_open' }
+      ? { state: 'model_unavailable', until: '2026-01-01T00:00:00.000Z', phase: 'closed' }
       : undefined),
   });
   const output = await runner.run(callInput('reply', new AbortController().signal));
   assert.equal(output.model, 'test/alpha');
   assert.deepEqual(calls, ['test/alpha']);
-});
-
-test('a route whose probe another caller holds is skipped until nextProbeAt', async () => {
-  const calls: string[] = [];
-  const nextProbeAt = '2999-01-01T00:00:00.000Z';
-  const transport: ModelTransport = {
-    async complete(request: ModelRequest) {
-      calls.push(request.model);
-      return succeeded(request.model);
-    },
-  };
-  const { runner } = makeRunner({
-    transport,
-    routes: ['test/alpha', 'test/beta'],
-    // A probe-eligible route another caller is already probing: the circuit is
-    // half-open but the next admission is in the future.
-    routeStatus: (model) => (model === 'test/alpha'
-      ? { state: 'model_unavailable', until: nextProbeAt, phase: 'half_open', nextProbeAt }
-      : undefined),
-  });
-  const output = await runner.run(callInput('reply', new AbortController().signal));
-  assert.equal(output.model, 'test/beta');
-  assert.deepEqual(calls, ['test/beta']);
 });
 
 test('all routes faulting retains per-attempt metrics and retryAt with the last failure kind', async () => {
@@ -235,7 +212,7 @@ test('all routes faulting retains per-attempt metrics and retryAt with the last 
   const { runner } = makeRunner({
     transport,
     routes: ['test/alpha', 'test/beta'],
-    routeStatus: () => ({ state: 'model_unavailable', until, phase: 'half_open' }),
+    routeStatus: () => ({ state: 'model_unavailable', until, phase: 'closed' }),
   });
   await assert.rejects(runner.run(callInput('reply', new AbortController().signal)), (error: unknown) => {
     assert.ok(error instanceof ModelCallError);

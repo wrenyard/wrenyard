@@ -145,8 +145,12 @@ export type ModelFailureSource = 'upstream' | 'admission';
  */
 export type ModelWaitReason = 'admission' | 'recovery' | 'quota_exhausted';
 
-/** Local route-health read before an attempt: when blocked, when probing may resume. */
-export type ModelPreflightResult = { notBeforeMs: number; faultState?: string };
+/**
+ * Local route-health read before an attempt: when the route admits requests
+ * again. `final` is set when the call must not be sent or waited for at all (an
+ * exhausted quota with a stated reset) and is the reason the turn ends with.
+ */
+export type ModelPreflightResult = { notBeforeMs: number; faultState?: string; final?: string };
 
 /** Request attribution metadata; never sent to the supplier. */
 export interface ModelAttribution {

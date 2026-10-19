@@ -233,33 +233,6 @@ test('a provider-scoped fault blocks a sibling model without upstream traffic', 
   await gateway.close();
 });
 
-test('only one concurrent caller is admitted as the half-open probe', async () => {
-  const clock = fakeClock();
-  const counter = { calls: 0 };
-  const delayedSuccess = ((_url: unknown, _init: RequestInit) => {
-    counter.calls += 1;
-    return delay(60).then(() => sseResponse(OK_SSE));
-  }) as unknown as typeof globalThis.fetch;
-  const gateway = makeGateway({ fetch: delayedSuccess, now: clock.now });
-  await withServer(gateway, async (port) => {
-    gateway.beginRouteAttempt('test/alpha', 'seed');
-    gateway.reportRouteFault('test/alpha', 'seed', 'timeout');
-    clock.advance(61_000);
-    assert.equal(gateway.routeStatus('test/alpha')?.phase, 'half_open');
-
-    const probe = post(port, { model: 'alpha', stream: true });
-    await delay(15);
-    const second = await post(port, { model: 'alpha', stream: true });
-    assert.equal(second.status, 503);
-    const probed = await probe;
-    assert.equal(probed.status, 200);
-    // Exactly one upstream probe was issued, and its success restored health.
-    assert.equal(counter.calls, 1);
-    assert.equal(gateway.routeStatus('test/alpha'), undefined);
-  });
-  await gateway.close();
-});
-
 test('a completed-request client disconnect aborts upstream but records no route fault', async () => {
   const clock = fakeClock();
   const counter = { calls: 0 };
@@ -288,84 +261,6 @@ test('the trusted deadline bounds a stalled stream, not only the response header
     await post(port, { model: 'alpha', stream: true }, { 'x-wrenyard-deadline': String(deadline), 'x-wrenyard-gateway-attempt': 's1' }).catch(() => undefined);
     assert.equal(gateway.routeStatus('test/alpha')?.faultKind, 'timeout');
     assert.equal(completed.find((event) => event.publicModel === 'test/alpha')?.status, 504);
-  });
-  await gateway.close();
-});
-
-test('a probe is settled at its deadline even when fetch never resolves', async () => {
-  const clock = fakeClock();
-  const counter = { calls: 0 };
-  const gateway = makeGateway({ fetch: uncooperativeFetch(counter), now: clock.now });
-  await withServer(gateway, async (port) => {
-    gateway.beginRouteAttempt('test/alpha', 'seed');
-    gateway.reportRouteFault('test/alpha', 'seed', 'timeout');
-    clock.advance(61_000);
-    assert.equal(gateway.routeStatus('test/alpha')?.phase, 'half_open');
-
-    gateway.beginRouteAttempt('test/alpha', 'probe-1');
-    const deadline = clock.now() + 40;
-    const probed = await post(port, { model: 'alpha', stream: true }, { 'x-wrenyard-deadline': String(deadline), 'x-wrenyard-gateway-attempt': 'probe-1' });
-    // The pipeline settles and releases the probe without the upstream fetch
-    // ever cooperating; the failed probe backs the route off.
-    assert.equal(probed.status, 504);
-    assert.equal(counter.calls, 1);
-    assert.equal(gateway.routeStatus('test/alpha')?.phase, 'open');
-
-    // No replacement probe overlaps: the next caller is blocked, no new traffic.
-    const blocked = await post(port, { model: 'alpha', stream: true });
-    assert.equal(blocked.status, 503);
-    assert.equal(counter.calls, 1);
-  });
-  await gateway.close();
-});
-
-test('a benign in-stream frame during a probe releases it neutrally, without backoff', async () => {
-  const clock = fakeClock();
-  const gateway = makeGateway({
-    fetch: (() => Promise.resolve(sseResponse(['data: {"error":{"message":"filtered","type":"content_filter","code":"content_filter"}}\n\n']))) as unknown as typeof globalThis.fetch,
-    now: clock.now,
-  });
-  await withServer(gateway, async (port) => {
-    gateway.beginRouteAttempt('test/alpha', 'seed');
-    gateway.reportRouteFault('test/alpha', 'seed', 'timeout');
-    clock.advance(61_000);
-    const before = gateway.routeStatus('test/alpha');
-    assert.equal(before?.phase, 'half_open');
-
-    const response = await post(port, { model: 'alpha', stream: true });
-    assert.equal(response.status, 200);
-    const after = gateway.routeStatus('test/alpha');
-    // A caller-benign frame neither poisons the probe nor backs it off.
-    assert.equal(after?.phase, 'half_open');
-    assert.equal(after?.until, before?.until);
-  });
-  await gateway.close();
-});
-
-test('a client timeout and the server timeout of the same probe record one backoff', async () => {
-  const clock = fakeClock();
-  const counter = { calls: 0 };
-  const gateway = makeGateway({ fetch: hangingFetch(counter), now: clock.now });
-  await withServer(gateway, async (port) => {
-    gateway.beginRouteAttempt('test/alpha', 'seed');
-    gateway.reportRouteFault('test/alpha', 'seed', 'timeout');
-    clock.advance(61_000);
-    assert.equal(gateway.routeStatus('test/alpha')?.phase, 'half_open');
-
-    gateway.beginRouteAttempt('test/alpha', 'p1');
-    const deadline = clock.now() + 200;
-    const pending = post(port, { model: 'alpha', stream: true }, { 'x-wrenyard-deadline': String(deadline), 'x-wrenyard-gateway-attempt': 'p1' });
-    await delay(30);
-    // The client reports its own timeout of this probe before the server deadline.
-    gateway.reportRouteFault('test/alpha', 'p1', 'timeout');
-    const first = gateway.routeStatus('test/alpha');
-    assert.equal(first?.phase, 'open');
-    assert.equal(Date.parse(first!.until) - clock.now(), 60_000);
-
-    const hung = await pending;
-    assert.equal(hung.status, 504);
-    // The server-side settlement of the same probe is fenced out: one backoff only.
-    assert.equal(Date.parse(gateway.routeStatus('test/alpha')!.until) - clock.now(), 60_000);
   });
   await gateway.close();
 });

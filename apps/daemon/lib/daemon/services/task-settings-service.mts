@@ -1970,7 +1970,7 @@ export class TaskSettingsService {
   /** Gateway route circuit admission for one public shared `provider/model`.
    *  Only Gateway-backed candidates consult this; native routes never do. */
   private gatewayRouteAdmitted(provider: string, model: string, nowMs: number): boolean {
-    return this.taskRouteAdmitted(this.routeStatus?.(`${provider}/${model}`), nowMs)
+    return this.taskRouteAdmitted(this.routeStatus?.(`${provider}/${model}`))
   }
 
   /** Shared-route admission for a native candidate, mirroring the launch guard:
@@ -1980,19 +1980,9 @@ export class TaskSettingsService {
     return status === undefined || status.phase === 'closed'
   }
 
-  /** Circuit admission for one route status: an open route is rejected, and a
-   *  half-open route is admitted only once its next recovery probe is due; the
-   *  Gateway itself owns the bounded probe lease and any recovery, so no state,
-   *  timer, or second circuit store is created here. A route with no status, or
-   *  a healthy/closed one, is admitted unchanged. */
-  private taskRouteAdmitted(status: GatewayRouteStatus | undefined, nowMs: number): boolean {
-    if (status === undefined) return true
-    if (status.phase === 'open') return false
-    if (status.phase !== 'half_open') return true
-    const nextProbeAt = status.nextProbeAt
-    if (nextProbeAt === undefined) return true
-    const due = Date.parse(nextProbeAt)
-    return !Number.isFinite(due) || due <= nowMs
+  /** Route admission for one route status: a route an open fault blocks is rejected. */
+  private taskRouteAdmitted(status: GatewayRouteStatus | undefined): boolean {
+    return status?.phase !== 'open'
   }
 
   /** Non-billable live provider credential/route readiness for one canonical
@@ -2152,7 +2142,7 @@ export class TaskSettingsService {
       // Additional exact task-client gate: the canonical target's own
       // client-qualified route key, which is the circuit a launched task
       // attempt faults, so a target that keeps failing is not auto-selected.
-      if (!this.taskRouteAdmitted(this.routeStatus?.(choice.exactAgentRuntime), nowMs)) {
+      if (!this.taskRouteAdmitted(this.routeStatus?.(choice.exactAgentRuntime))) {
         probePlan.push({ choice, eliminated: 'circuit' })
         continue
       }

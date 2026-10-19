@@ -56,7 +56,7 @@ export interface SessionHost {
   resolveInferenceProvider(providerId: string): ProviderDefinition | undefined;
   /**
    * In-memory Gateway state of a `provider/model` route; never queries a
-   * provider. The typed circuit detail (`phase`, `nextProbeAt`, `faultKind`) lets
+   * provider. The typed detail (`phase`, `resets`, `faultKind`) lets
    * a caller skip an open route instead of only a legacy block.
    */
   routeStatus?(model: string): import('@wrenyard/providers/base').GatewayRouteStatus | undefined;

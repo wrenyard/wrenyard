@@ -2,7 +2,6 @@ import type { ZodTypeAny } from 'zod'
 import type { TaskSettingsLayer } from './protocol/methods/task.mts'
 import type {
   Admission as GatewayRouteAdmission,
-  ProbeLease as GatewayProbeLease,
   RouteGuard as GatewayRouteGuard,
 } from '@wrenyard/gateway'
 
@@ -22,21 +21,16 @@ export type TaskRouteFaultState = 'quota_exhausted' | 'rate_limited' | 'other'
  * built, so a native fault never keys by client.
  */
 export interface TaskRouteStateHooks {
-  /** Admit/check one exact route before launching a model attempt. The
-   *  dispatch mode distinguishes a gateway client, which can rely on the shared
-   *  HTTP recovery probe, from a native one that cannot. */
+  /** Admit/check one exact route before launching a model attempt. */
   admit: (provider: string, model: string, mode?: 'native' | 'gateway') => GatewayRouteAdmission
-  /** Report a schema-validated delivery; settles a due half-open probe as success. */
-  success: (provider: string, model: string, guard?: GatewayRouteGuard, lease?: GatewayProbeLease) => void
+  /** Report a schema-validated delivery; it clears the faults observed at admission. */
+  success: (provider: string, model: string, guard?: GatewayRouteGuard) => void
   /** Report a route-local fault for a launched attempt that failed terminally,
-   *  settling a held probe lease with the classified fault. The payload is
+   *  with the classified fault. The payload is
    *  either the structured-output delivery failure or the upstream error the
    *  failed execution reported; an upstream error without a status records no
    *  fault. */
-  fault: (provider: string, model: string, guard: GatewayRouteGuard | undefined, fault: TaskRouteFault, lease: GatewayProbeLease | undefined) => void
-  /** Release a held probe lease as cancelled, so a throw or cancel never lets
-   *  the lease silently expire. */
-  cancel: (lease: GatewayProbeLease) => void
+  fault: (provider: string, model: string, guard: GatewayRouteGuard | undefined, fault: TaskRouteFault) => void
   /** Read-only reduction of the shared circuit's currently open fault for one
    *  exact route/pool: the two retryable pool states, or `other` for every
    *  other open state, and undefined when the route is healthy. Never admits,

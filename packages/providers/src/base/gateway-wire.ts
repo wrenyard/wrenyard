@@ -69,7 +69,7 @@ export function parseAdmissionRefusal(value: string | null): GatewayAdmissionRef
   const record = parsed as Record<string, unknown>;
   if (record.kind !== GATEWAY_ADMISSION_REFUSED) return undefined;
   if (typeof record.retryAt !== 'string' || record.retryAt === '') return undefined;
-  if (record.phase !== 'closed' && record.phase !== 'open' && record.phase !== 'half_open') return undefined;
+  if (record.phase !== 'closed' && record.phase !== 'open') return undefined;
   return {
     kind: GATEWAY_ADMISSION_REFUSED,
     retryAt: record.retryAt,
@@ -78,15 +78,14 @@ export function parseAdmissionRefusal(value: string | null): GatewayAdmissionRef
   };
 }
 
-/** Circuit phase of one route: `closed` is healthy, `open` faulted, `half_open` probing. */
-export type GatewayRoutePhase = 'closed' | 'open' | 'half_open';
+/** Phase of one route: `open` while a fault blocks it, `closed` otherwise. */
+export type GatewayRoutePhase = 'closed' | 'open';
 
 /**
  * The health of one public route as an in-process caller reads it. `state` and
  * `until` are the legacy block; the circuit detail is optional so a producer
- * that only reports open blocks stays valid. `phase` distinguishes an open
- * circuit from a half-open route that may run one bounded recovery probe;
- * `nextProbeAt` is when such a probe may next be admitted. `faultKind` names the
+ * that only reports open blocks stays valid. `resets` marks an `until` the
+ * upstream stated, after which the block is cleared. `faultKind` names the
  * fault behind the block (a timeout, transport, server, rate-limit or auth
  * reason), never a prompt or raw upstream text.
  */
@@ -94,7 +93,7 @@ export interface GatewayRouteStatus {
   state: GatewayRouteState;
   until: string;
   phase?: GatewayRoutePhase;
-  nextProbeAt?: string;
+  resets?: boolean;
   faultKind?: string;
 }
 

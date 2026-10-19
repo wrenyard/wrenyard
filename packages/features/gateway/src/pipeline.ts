@@ -14,7 +14,7 @@ import {
 } from '@wrenyard/providers/catalog';
 import { upstreamAuthHeaders, type ProviderCredential, type ProviderRuntime } from '@wrenyard/providers';
 import { classifyRouteOutcome, classifyStreamFailure, clientTimeoutFailure, isPoisoning, transportFailure, type RouteFaultKind } from './route-failure.ts';
-import type { CircuitPhase, MarkableFailure, ProbeOutcome, RouteStateStore, RouteStatus } from './route-state.ts';
+import type { CircuitPhase, MarkableFailure, RouteStateStore, RouteStatus } from './route-state.ts';
 import { ResponseSampler, type ResponseTpsContract } from './response-tps.ts';
 import { repairUpstreamResponse, relayResponse } from './relay.ts';
 import { gatewayErrorBody, mapUpstreamErrorBody, streamErrorFact, upstreamErrorFact, type UpstreamErrorFact } from './errors.ts';
@@ -32,10 +32,6 @@ export interface GatewayRequestCompletedEvent {
   faultReason?: RouteFaultKind;
   /** The circuit phase of the faulted scope at the moment of the outcome. */
   routePhase?: CircuitPhase;
-  /** When a half-open trial may next run, when the scope is half-open. */
-  nextProbeAt?: string;
-  /** The outcome of a bounded half-open probe this request ran, when it ran one. */
-  probeOutcome?: ProbeOutcome;
   /**
    * The internal gateway-only correlation marker carried by this attempt. It is
    * never forwarded upstream: it exists so a client-side timeout or fetch
@@ -372,8 +368,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       await options.providers.beforeRequest?.(resolved.provider, hookContext());
 
       // The internal correlation marker and the trusted client deadline are read
-      // before admission so the admitted probe lease can be attached to this very
-      // attempt, and the attempt's own lifetime can be bounded by it.
+      // before admission, so the attempt's own lifetime can be bounded by it.
       const attemptId = localHeader(request, CORRELATION_HEADER);
       const deadlineHeader = localHeader(request, DEADLINE_HEADER);
       const clientDeadlineMs = deadlineHeader === undefined ? undefined : Number(deadlineHeader);
@@ -381,11 +376,12 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
 
       // Admission is enforced here, not only in the selector: before any
       // upstream call the route must be admitted. A faulted scope answers with a
-      // structured, safe cooldown/retry payload and issues no upstream traffic;
-      // a half-open scope admits exactly one concurrent bounded probe.
-      const admission = options.routeStates.admit(resolved.provider.id, resolved.model.id, attemptId);
+      // structured, safe cooldown/retry payload and issues no upstream traffic.
+      // The Gateway never retries: it records each outcome, and the caller
+      // decides whether and when to retry.
+      const admission = options.routeStates.admit(resolved.provider.id, resolved.model.id);
       if (admission.kind === 'blocked') {
-        const retryAt = admission.status.nextProbeAt ?? admission.status.until;
+        const retryAt = admission.status.until!;
         const message = `Route ${registeredModel} is unavailable (fault ${admission.status.faultKind ?? admission.status.state}, circuit ${admission.status.phase}); retry after ${retryAt}`;
         const retrySeconds = Math.max(0, Math.ceil((Date.parse(retryAt) - options.now()) / 1000));
         // The admission refusal carries a structured, Gateway-local marker so a
@@ -407,23 +403,11 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         await finish({
           ...target, status: 503, routeState: admission.status.state, routeUntil: retryAt,
           faultReason: admission.status.faultKind ?? admission.status.state, routePhase: admission.status.phase,
-          ...(admission.status.nextProbeAt === undefined ? {} : { nextProbeAt: admission.status.nextProbeAt }),
           ...(attemptId === undefined ? {} : { attemptId }),
         });
         return true;
       }
       const guard = admission.guard;
-      const lease = admission.kind === 'probe' ? admission.lease : undefined;
-      // The lease must be released exactly once, on success, failure,
-      // cancellation, shutdown or bounded expiry; the store's own timer covers
-      // expiry, and the finally block covers shutdown and any early exit. The
-      // classified fault a probe observed travels with its settlement.
-      let leaseReleased = false;
-      const releaseLease = (outcome?: ProbeOutcome, failure?: MarkableFailure, status?: number): void => {
-        if (lease === undefined || leaseReleased) return;
-        leaseReleased = true;
-        options.routeStates.releaseProbe(lease, outcome, failure, status);
-      };
 
       const forwarded: Partial<GatewayRequestCompletedEvent> = {
         ...target,
@@ -451,9 +435,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       let fetchTimer: ReturnType<typeof setTimeout> | undefined;
       const abort = () => controller.abort();
       // The whole response is bounded, streaming included: by the trusted client
-      // deadline when one is present, and always by the probe lease so a
-      // recovery probe's real request lifetime cannot outlive its own lease. At
-      // that instant the upstream work is aborted as a route timeout even if
+      // deadline when one is present. At that instant the upstream work is aborted as a route timeout even if
       // headers were already sent, so a stalled or vanished downstream can never
       // leave the upstream promise running unbounded.
       let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -468,7 +450,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
             );
         deadlineTimer?.unref?.();
       };
-      armDeadline([clientDeadline, lease?.expiresAt]);
+      armDeadline([clientDeadline]);
       // A completed-request client disconnect also aborts upstream work.
       const onResponseClose = (): void => { if (!response.writableEnded) abort(); };
       request.once('aborted', abort);
@@ -539,21 +521,8 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
             resolved.provider, resolved.model.id, upstream.status, upstream.headers, errorBody, options.now(),
           );
           const failure = outcome !== undefined && isPoisoning(outcome) ? outcome : undefined;
-          // A probe treats any HTTP response as evidence: a poisonable fault is
-          // a failed probe (back off), a caller-caused fault is a release that
-          // leaves the scope half-open, never a poison. A normal request records
-          // only a poisonable fault.
-          let state: RouteStatus | undefined;
-          let probeOutcome: ProbeOutcome | undefined;
-          if (lease !== undefined) {
-            // A poisonable fault fails the probe with its own classification (a
-            // 429's pool scope and `Retry-After`, an auth provider scope); a
-            // caller-caused fault releases it neutrally, never a poison.
-            probeOutcome = failure === undefined ? 'cancelled' : 'failure';
-            releaseLease(probeOutcome, failure, upstream.status);
-          } else if (failure !== undefined) {
-            state = recordFault(failure, upstream.status);
-          }
+          // Only a poisonable fault is recorded; a caller-caused fault never is.
+          const state = failure === undefined ? undefined : recordFault(failure, upstream.status);
           let finalStatus = upstream.status;
           let finalBody = errorBody;
           let finalBytes: Uint8Array<ArrayBufferLike> = errorBytes;
@@ -588,7 +557,6 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           await finish({
             ...forwarded, status: mapped.status, upstream: fact,
             ...(state ? { routeState: state.state, routeUntil: state.until, faultReason: state.faultKind, routePhase: state.phase } : {}),
-            ...(probeOutcome === undefined ? {} : { probeOutcome }),
           });
           return true;
         }
@@ -596,13 +564,6 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         // missing Content-Type), so the original upstream status and headers
         // are captured before it runs; in-stream error facts must record what
         // the supplier actually sent.
-        // A probe whose upstream answered successfully is no longer bounded by
-        // its lease: the lease stays held until this response settles it, and
-        // only the client deadline still bounds the stream.
-        if (lease !== undefined) {
-          options.routeStates.holdProbe(lease);
-          armDeadline([clientDeadline]);
-        }
         const originalStatus = upstream.status;
         const originalHeaders = new Headers(upstream.headers);
         const repaired = await repairUpstreamResponse(upstream, {
@@ -621,18 +582,13 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           modelId: resolved.model.id, upstreamModel, publicModel: registeredModel, observer, sampler, translator,
         }), controller.signal);
         // Only a validated completed response restores health. An observed
-        // in-stream error is classified first: a genuine fault fails a probe (with
-        // its own classification) and is recorded on a plain call, while a
-        // caller-benign frame (`content_filter`, an invalid request) releases a
-        // probe neutrally and never poisons a route or backs it off.
+        // in-stream error is classified first: a genuine fault is recorded, while
+        // a caller-benign frame (`content_filter`, an invalid request) never
+        // poisons a route or backs it off.
         const validated = observer.succeeded();
         const streamFailure = relayed.observedError === undefined ? undefined : classifyStreamFailure(relayed.observedError);
         let streamState: RouteStatus | undefined;
-        let probeOutcome: ProbeOutcome | undefined;
-        if (lease !== undefined) {
-          probeOutcome = validated ? 'success' : streamFailure === undefined ? 'cancelled' : 'failure';
-          releaseLease(probeOutcome, streamFailure, originalStatus);
-        } else if (validated) {
+        if (validated) {
           options.routeStates.success(resolved.provider.id, resolved.model.id, guard);
         } else if (streamFailure !== undefined) {
           streamState = recordFault(streamFailure, originalStatus);
@@ -641,7 +597,6 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         usage = observer.result();
         await finish({
           ...forwarded, status: repaired.status,
-          ...(probeOutcome === undefined ? {} : { probeOutcome }),
           ...(streamState === undefined ? {} : { routeState: streamState.state, routeUntil: streamState.until, faultReason: streamState.faultKind, routePhase: streamState.phase }),
           // An official in-stream error after HTTP 200 is recorded with the
           // original `type`/`code` the protocol module observed, together with
@@ -662,11 +617,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         const routeTimedOut = timedOut || clientTimedOut;
         const status = aborted ? (routeTimedOut ? 504 : 499) : 502;
         let faultFact: Partial<GatewayRequestCompletedEvent> = {};
-        if (lease !== undefined) {
-          const outcome: ProbeOutcome = aborted && !routeTimedOut ? 'cancelled' : 'failure';
-          releaseLease(outcome, outcome === 'failure' ? (routeTimedOut ? clientTimeoutFailure() : transportFailure()) : undefined, status);
-          faultFact = { probeOutcome: outcome };
-        } else if (!aborted || routeTimedOut) {
+        if (!aborted || routeTimedOut) {
           const failure = routeTimedOut ? clientTimeoutFailure() : transportFailure();
           const state = recordFault(failure, status);
           faultFact = state === undefined ? {} : { routeState: state.state, routeUntil: state.until, faultReason: state.faultKind, routePhase: state.phase };
@@ -681,8 +632,6 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       } finally {
         if (fetchTimer !== undefined) clearTimeout(fetchTimer);
         if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-        // Shutdown or any early exit still releases the probe lease.
-        releaseLease();
         request.off('aborted', abort);
         response.off('close', onResponseClose);
         options.active.delete(controller);

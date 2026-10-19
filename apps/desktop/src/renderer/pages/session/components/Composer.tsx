@@ -53,21 +53,19 @@ const RETRY_MARKER = '（可重试，待确认恢复）';
 
 /**
  * The session request runner's `isCallableNow` rule for one picker row: unknown,
- * healthy and non-gated routes are callable; an open route is not; a half-open
- * route only once its bounded recovery probe is due — a not-yet-due probe, or an
- * active probe lease, keeps it blocked. This predicate is independent of the
+ * healthy and non-gated routes are callable; an open route is not until its
+ * `routeUntil` passes. This predicate is independent of the
  * model-list/mainstream filter and composes with it by simple conjunction. It
  * takes one argument and reads the clock itself, so it is never handed an array
  * index as a timestamp by an accidental direct `filter`/`find` reference.
  */
 function isRouteCallable(entry: ModelEntry): boolean {
   if (!ROUTE_GATED_PROVIDERS.has(entry.provider) || entry.routeState === undefined) return true;
-  if (entry.routePhase === 'open') return false;
-  if (entry.routeNextProbeAt === undefined) return true;
-  return Date.parse(entry.routeNextProbeAt) <= Date.now();
+  if (entry.routePhase !== 'open' || entry.routeUntil === undefined) return true;
+  return Date.parse(entry.routeUntil) <= Date.now();
 }
 
-/** A gated route with a known fault whose probe is due: offered only as an explicit retry. */
+/** A gated route with a known fault whose block has passed: offered only as an explicit retry. */
 function isProbeEligible(entry: ModelEntry): boolean {
   return ROUTE_GATED_PROVIDERS.has(entry.provider)
     && entry.routeState !== undefined

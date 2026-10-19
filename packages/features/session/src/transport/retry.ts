@@ -223,14 +223,11 @@ async function waitForRecovery(wait: RecoveryWait, context: RetryContext, now: (
     await waitChunk(Math.min(remaining, RECOVERY_RECHECK_MS), context.signal);
     // A local read only: nothing is sent upstream before the due instant.
     if (context.preflight === undefined) continue;
+    // The wait only ever extends: a later block moves it, nothing else wakes it early.
     const observed = context.preflight()?.notBeforeMs;
-    const effective = Math.max(wait.floorMs ?? 0, observed ?? 0);
-    if (effective === untilMs) continue;
-    untilMs = effective;
-    // A shortened cooldown may already be due; the loop then returns so the
-    // caller's next attempt starts right away. Otherwise publish the new time.
-    if (effective <= now()) return;
-    publish(effective, false);
+    if (observed === undefined || observed <= untilMs) continue;
+    untilMs = observed;
+    publish(observed, false);
   }
 }
 
@@ -259,6 +256,9 @@ export async function runWithRetry<T>(run: () => Promise<T>, context: RetryConte
     // cooldown is waited out in the same loop instead of probed early and
     // rejected by the Gateway. One wait owner; no nested retry loop.
     const preflight = context.preflight?.();
+    if (preflight?.final !== undefined) {
+      throw new ModelError(preflight.final, { kind: 'quota_exhausted', source: 'admission', retryAt: new Date(preflight.notBeforeMs).toISOString() });
+    }
     const blockedUntil = preflight?.notBeforeMs;
     if (blockedUntil !== undefined && blockedUntil > now()) {
       // No advertised floor here: this instant is live route state, so the wait

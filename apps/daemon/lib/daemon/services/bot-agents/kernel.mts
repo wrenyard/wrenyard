@@ -141,7 +141,12 @@ interface BotState {
   queue: Wake[]
   lastWakeAt?: string
   lastError?: string
+  /** The model of the bot's last request and when it was sent; see {@link MODEL_HOLD_MS}. */
+  heldModel?: { provider: string; model: string; at: string }
 }
+
+/** A bot keeps its last model this long after its last request, so the prefix cache stays warm. */
+const MODEL_HOLD_MS = 60 * 60_000
 
 /** One transcript entry as persisted; `sourceKey` is the reply dedup key. */
 export interface GroupTranscriptEntry extends GroupMessage {
@@ -1586,6 +1591,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       await persistChain
       if (stopped) return
       subscribeGroupReplies(botId, sessionId)
+      holdModel(botId, route)
       const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route })
       removePendingWake(botId, wake.id)
       recordRoundTurn(wake, sessionId, turn)
@@ -1608,6 +1614,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     fallback?: AgentModelRoute,
   ): Promise<void> {
     subscribeGroupReplies(botId, sessionId)
+    holdModel(botId, route)
     const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route })
     removePendingWake(botId, wake.id)
     recordRoundTurn(wake, sessionId, turn)
@@ -1623,6 +1630,23 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     })
   }
 
+  /** Record the model of the bot's newest request. */
+  function holdModel(botId: string, route: AgentModelRoute): void {
+    ensureBotState(botId).heldModel = { provider: route.provider, model: route.model, at: new Date().toISOString() }
+  }
+
+  /**
+   * Put the held model first while its hold lasts and automatic routing still
+   * offers it. Routing never offers an exhausted or blocked route, so such a
+   * model is replaced at once by the routing order.
+   */
+  function heldFirst(bot: BotState, routes: readonly AgentModelRoute[]): readonly AgentModelRoute[] {
+    const held = bot.heldModel
+    if (held === undefined || Date.now() - Date.parse(held.at) >= MODEL_HOLD_MS) return routes
+    const index = routes.findIndex(route => route.provider === held.provider && route.model === held.model)
+    return index <= 0 ? routes : [routes[index]!, ...routes.slice(0, index), ...routes.slice(index + 1)]
+  }
+
   /** Prepare context and admit one wake without awaiting its turn to finish. */
   async function runWake(botId: string, wake: Wake): Promise<void> {
     try {
@@ -1631,7 +1655,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       const bot = ensureBotState(botId)
       const sessionId = await ensureContext(botId)
       if (stopped) return
-      const routes = await options.selectModels()
+      const routes = heldFirst(bot, await options.selectModels())
       if (stopped) return
       if (routes.length === 0) throw new Error('no bot model available from automatic routing')
       const primary = routes[0]

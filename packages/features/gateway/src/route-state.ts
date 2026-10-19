@@ -4,11 +4,8 @@ import { clientTimeoutFailure, resetInstant, transportFailure, type RouteFaultKi
 
 type Scope = 'provider' | 'pool' | 'route';
 
-/** Circuit phase of one fault scope. `closed` is healthy. */
-export type CircuitPhase = 'closed' | 'open' | 'half_open';
-
-/** Outcome of one bounded half-open recovery probe. */
-export type ProbeOutcome = 'success' | 'failure' | 'cancelled';
+/** Phase of one fault scope: `open` while it blocks requests, `closed` otherwise. */
+export type CircuitPhase = 'closed' | 'open';
 
 export interface RouteStateChangedEvent {
   publicModel: string;
@@ -20,22 +17,16 @@ export interface RouteStateChangedEvent {
   faultKind?: RouteFaultKind;
   phase: CircuitPhase;
   until?: string;
-  /** When a half-open trial may next be attempted, when the scope is half-open. */
-  nextProbeAt?: string;
-  /** The earliest instant this scope may be retried (until, or the probe time). */
+  /** The earliest instant this scope admits requests again. */
   nextRetryAt?: string;
-  /** The outcome of the most recent half-open probe, when one ran. */
-  probe?: ProbeOutcome;
   status: number;
-  reason: 'upstream_error' | 'cooldown' | 'success' | 'credential_changed' | 'half_open';
+  reason: 'upstream_error' | 'cooldown' | 'success' | 'credential_changed';
 }
 
 /** The route health a caller reads: the legacy status plus the circuit detail. */
 export interface RouteStatus extends GatewayRouteStatus {
   faultKind?: RouteFaultKind;
   phase: CircuitPhase;
-  nextProbeAt?: string;
-  lastProbe?: ProbeOutcome;
 }
 
 /**
@@ -47,34 +38,9 @@ export interface RouteGuard {
   readonly generations: ReadonlyMap<string, number>;
 }
 
-/** One fault scope a probe lease covers, fenced by generation and lease token. */
-export interface ProbeLeaseEntry {
-  readonly key: string;
-  readonly generation: number;
-  readonly token: number;
-  readonly scope: Scope;
-}
-
-/**
- * An exclusive, time-bounded lease to run one real-request recovery probe. A
- * route may be blocked by several scopes at once (provider, pool, route), so a
- * single lease atomically covers every applicable scope: while it is held no
- * other caller may admit or probe any of them.
- */
-export interface ProbeLease {
-  readonly provider: string;
-  readonly model: string;
-  /** The client attempt this probe is attached to, when the request carried one. */
-  readonly attemptId?: string;
-  /** When this bounded lease expires (epoch ms); the probe's own lifetime is bounded by it. */
-  readonly expiresAt: number;
-  readonly entries: readonly ProbeLeaseEntry[];
-}
-
 /** The admission decision for one route, taken before any upstream call. */
 export type Admission =
   | { kind: 'admit'; guard: RouteGuard }
-  | { kind: 'probe'; guard: RouteGuard; lease: ProbeLease }
   | { kind: 'blocked'; status: RouteStatus };
 
 interface Block extends GatewayRouteStatus {
@@ -89,19 +55,11 @@ interface Block extends GatewayRouteStatus {
   generation: number;
   /** Consecutive failures of this scope; drives the exponential cooldown. */
   failures: number;
-  /** When the next half-open trial may be attempted. */
-  nextProbeAt?: string;
-  lastProbe?: ProbeOutcome;
-  /** Upstream not-before / `Retry-After` floor preserved across failed probes. */
-  boundUntil?: number;
+  /** The upstream stated when the scope recovers: it is cleared then, not kept for backoff. */
+  resets: boolean;
   /** Fingerprint of the credential an auth failure was observed with. */
   credential?: string;
-  /** Unique lease token while a half-open probe holds this scope. */
-  leaseToken?: number;
-  /** When the held probe lease expires, so reads can project a future retry. */
-  leaseUntil?: number;
   timer: ReturnType<typeof setTimeout>;
-  leaseTimer?: ReturnType<typeof setTimeout>;
 }
 
 /** A failure the store may record: the legacy shape plus an optional fault kind. */
@@ -115,8 +73,6 @@ interface Attempt {
   readonly generations: Map<string, number>;
   settled: boolean;
   expiresAt: number;
-  /** The probe lease this attempt was admitted with, when it was admitted as one. */
-  lease?: ProbeLease;
 }
 
 /** Base cooldown of a fresh fault; the delay doubles per consecutive failure. */
@@ -125,14 +81,6 @@ const ROUTE_COOLDOWN_BASE_MS = 60_000;
 const MAX_ROUTE_COOLDOWN_MS = 60 * 60_000;
 /** Jitter added to a computed cooldown, as a fraction of the delay. */
 const ROUTE_COOLDOWN_JITTER = 0.25;
-/** A probe lease is always bounded: a stalled probe never blocks others forever. */
-const PROBE_LEASE_MS = 60_000;
-/**
- * Backstop after the logical lease expiry. The probe holder bounds and aborts its
- * own request at {@link PROBE_LEASE_MS}, so freeing the token only a grace later
- * guarantees a replacement probe never starts before the old one was aborted.
- */
-const PROBE_LEASE_GRACE_MS = 5_000;
 /** Idle attempts are expired so attempt bookkeeping stays bounded over a long run. */
 const ATTEMPT_TTL_MS = 10 * 60_000;
 const MAX_ATTEMPTS = 4_096;
@@ -162,10 +110,15 @@ function nativeFailureStatus(failure: MarkableFailure): number {
 
 /**
  * In-memory route health of one Gateway process, and the single authority for
- * auxiliary routing. Reads never trigger provider work: credentials are observed
- * only where the Gateway already reads them. A fault scope stays faulted until a
- * validated completed response restores it; cooldown expiry only makes it
- * eligible for one bounded half-open trial.
+ * automatic routing. Reads never trigger provider work: credentials are observed
+ * only where the Gateway already reads them.
+ *
+ * A fault scope blocks requests until its `until`: an upstream-stated reset, or
+ * an exponential backoff. After that the next real request is the probe. A
+ * success clears the scope; a failure blocks it again for twice as long. A
+ * scope with an upstream reset is cleared when the reset passes. There is no
+ * half-open phase and no probe lease: requests admitted together that fail
+ * together count once, through the generation fence.
  */
 export class RouteStateStore {
   private readonly blocks = new Map<string, Block>();
@@ -183,7 +136,6 @@ export class RouteStateStore {
   private retiredFloor = 0;
   /** In-flight attempts by `provider/model#attemptId`, bounded by count and TTL. */
   private readonly attempts = new Map<string, Attempt>();
-  private leaseSeq = 0;
 
   constructor(
     private readonly now: () => number,
@@ -210,24 +162,11 @@ export class RouteStateStore {
     return { generations };
   }
 
-  /**
-   * Admit one call before any upstream traffic. Every applicable scope must be
-   * healthy or half-open-and-free: an open or already-leased scope blocks the
-   * call. Exactly one caller may hold the atomic multi-scope probe lease. When an
-   * `attemptId` is given the probe lease is attached to that same attempt, so the
-   * client report and the pipeline settlement settle it exactly once.
-   */
-  admit(provider: string, model: string, attemptId?: string): Admission {
+  /** Admit one call before any upstream traffic, unless a scope still blocks the route. */
+  admit(provider: string, model: string): Admission {
     const applying = this.applying(provider, model);
     const guard = this.capture(provider, model);
-    if (applying.length === 0) return { kind: 'admit', guard };
-    const open = applying.filter(([, block]) => block.phase === 'open');
-    if (open.length > 0) return { kind: 'blocked', status: this.project(applying) };
-    const leased = applying.filter(([, block]) => block.leaseToken !== undefined);
-    if (leased.length > 0) return { kind: 'blocked', status: this.project(applying) };
-    const lease = this.acquireProbe(provider, model, attemptId);
-    if (lease !== undefined) return { kind: 'probe', guard, lease };
-    return { kind: 'blocked', status: this.project(applying) };
+    return applying.length === 0 ? { kind: 'admit', guard } : { kind: 'blocked', status: this.project(applying) };
   }
 
   /**
@@ -242,12 +181,6 @@ export class RouteStateStore {
     const attempt = this.attempts.get(this.attemptKey(provider, model, attemptId));
     if (attempt?.settled === true) return undefined;
     const failure: MarkableFailure = { ...clientFailure(kind), ...(until === undefined ? {} : { until }) };
-    // A client report of an attempt that was admitted as a probe settles that
-    // very probe (one backoff), so the pipeline's own settlement is fenced out.
-    if (attempt?.lease !== undefined) {
-      this.releaseProbe(attempt.lease, 'failure', failure, status);
-      return this.status(provider, model);
-    }
     const guard: RouteGuard | undefined = attempt === undefined ? undefined : { generations: attempt.generations };
     const result = this.mark(provider, model, failure, status, '', guard);
     if (attempt !== undefined) attempt.settled = true;
@@ -257,28 +190,11 @@ export class RouteStateStore {
   /**
    * Record a route-local fault a native task attempt already classified for its
    * own route. The failure carries its own fault kind, scope and any
-   * upstream-stated reset instant, so its scope and cooldown are the same as a
-   * gateway-observed fault. A held half-open probe lease is settled with the
-   * classified fault so the probe backoff is preserved; without one the fault
-   * goes through the generation-fenced `mark`, so a stale in-flight report can
-   * never rebuild a cleared fault.
+   * upstream-stated reset instant, so it is the same as a gateway-observed
+   * fault, fenced by the guard captured when the attempt started.
    */
-  reportNativeRouteFault(provider: string, model: string, failure: MarkableFailure, guard?: RouteGuard, lease?: ProbeLease): RouteStatus | undefined {
-    const status = nativeFailureStatus(failure);
-    if (lease !== undefined) {
-      this.releaseProbe(lease, 'failure', failure, status);
-      return this.status(provider, model);
-    }
-    return this.mark(provider, model, failure, status, '', guard);
-  }
-
-  /**
-   * Release a held native-task probe lease without an outcome, leaving every
-   * covered scope half-open for a later bounded trial. A throw or a cancelled
-   * task settles its probe here so a held lease never silently expires.
-   */
-  releaseNativeProbe(lease: ProbeLease): void {
-    this.releaseProbe(lease, 'cancelled');
+  reportNativeRouteFault(provider: string, model: string, failure: MarkableFailure, guard?: RouteGuard): RouteStatus | undefined {
+    return this.mark(provider, model, failure, nativeFailureStatus(failure), '', guard);
   }
 
   /** Begin one attempt, capturing the fault generations it observes. */
@@ -297,7 +213,7 @@ export class RouteStateStore {
   completeAttempt(provider: string, model: string, attemptId: string, settled = true): void {
     this.pruneAttempts();
     const attempt = this.attempts.get(this.attemptKey(provider, model, attemptId));
-    if (attempt !== undefined) { attempt.settled = settled; attempt.lease = undefined; }
+    if (attempt !== undefined) attempt.settled = settled;
   }
 
   /**
@@ -312,12 +228,6 @@ export class RouteStateStore {
     const result = this.mark(provider, model, failure, status, credential, guard);
     this.completeAttempt(provider, model, attemptId);
     return result;
-  }
-
-  /** Settle one attempt without recording anything; a late duplicate is then dropped. */
-  private settleAttempt(provider: string, model: string, attemptId: string): void {
-    const attempt = this.attempts.get(this.attemptKey(provider, model, attemptId));
-    if (attempt !== undefined) { attempt.settled = true; attempt.lease = undefined; }
   }
 
   private attemptKey(provider: string, model: string, attemptId: string): string {
@@ -366,138 +276,8 @@ export class RouteStateStore {
   }
 
   /**
-   * Acquire the single bounded lease that may run a real-request half-open probe
-   * across every applicable scope. It is taken atomically: if any applicable
-   * scope is open or already leased, none is leased and `undefined` is returned.
-   * The lease is attached to `attemptId` when one is given.
-   */
-  acquireProbe(provider: string, model: string, attemptId?: string): ProbeLease | undefined {
-    const now = this.now();
-    const applying = this.applying(provider, model);
-    if (applying.length === 0) return undefined;
-    for (const [, block] of applying) {
-      if (block.phase !== 'half_open' || block.leaseToken !== undefined) return undefined;
-      if (block.nextProbeAt !== undefined && Date.parse(block.nextProbeAt) > now) return undefined;
-    }
-    const expiresAt = now + PROBE_LEASE_MS;
-    const entries: ProbeLeaseEntry[] = [];
-    for (const [key, block] of applying) {
-      const token = (this.leaseSeq += 1);
-      block.leaseToken = token;
-      block.leaseUntil = expiresAt;
-      if (block.leaseTimer !== undefined) clearTimeout(block.leaseTimer);
-      // The holder bounds and aborts its own request at `expiresAt`; this timer
-      // is only the backstop that frees the token a grace later.
-      block.leaseTimer = setTimeout(() => { this.expireLease(key, token); }, PROBE_LEASE_MS + PROBE_LEASE_GRACE_MS);
-      block.leaseTimer.unref?.();
-      entries.push({ key, generation: block.generation, token, scope: block.scope });
-    }
-    const lease: ProbeLease = { provider, model, expiresAt, entries, ...(attemptId === undefined ? {} : { attemptId }) };
-    if (attemptId !== undefined) {
-      const attempt = this.attempts.get(this.attemptKey(provider, model, attemptId));
-      if (attempt !== undefined && !attempt.settled) attempt.lease = lease;
-    }
-    return lease;
-  }
-
-  /**
-   * Release a probe lease with its outcome. Every scope it covers is fenced by
-   * both the fault generation and the lease token, so an expired and reacquired
-   * lease can never be cleared by a stale completion. `success` restores health;
-   * `failure` adopts the classified fault the probe observed and backs the
-   * cooldown off exponentially (capped at one hour); `cancelled` or an omitted
-   * outcome (expiry, shutdown) leaves the scope half-open for a later trial. When
-   * the lease is attached to an attempt, that attempt settles in the same step.
-   */
-  releaseProbe(lease: ProbeLease, outcome?: ProbeOutcome, failure?: MarkableFailure, status?: number): void {
-    let settled = false;
-    for (const entry of lease.entries) {
-      const block = this.blocks.get(entry.key);
-      if (!block || block.generation !== entry.generation || block.leaseToken !== entry.token) continue;
-      if (block.leaseTimer !== undefined) { clearTimeout(block.leaseTimer); block.leaseTimer = undefined; }
-      block.leaseToken = undefined;
-      block.leaseUntil = undefined;
-      if (outcome === undefined) continue;
-      settled = true;
-      this.settleProbe(entry.key, block, outcome, failure, status);
-    }
-    // A failed probe can discover a scope the lease did not cover (an auth
-    // provider scope, a rate-limit pool); that genuinely new scope takes effect too.
-    if (settled && outcome === 'failure' && failure !== undefined) this.discoverScope(lease, failure, status);
-    if (outcome !== undefined && lease.attemptId !== undefined) this.settleAttempt(lease.provider, lease.model, lease.attemptId);
-  }
-
-  /**
-   * Keep a probe lease held past its expiry once the probe's upstream answered
-   * with a successful response. The lease bounds only the wait for that answer;
-   * a long generation (extended thinking can stream nothing for minutes) is
-   * then settled by its own end, bounded by the caller deadline and the
-   * transport's idle limit, instead of being cut at the lease expiry.
-   */
-  holdProbe(lease: ProbeLease): void {
-    for (const entry of lease.entries) {
-      const block = this.blocks.get(entry.key);
-      if (!block || block.generation !== entry.generation || block.leaseToken !== entry.token) continue;
-      if (block.leaseTimer !== undefined) { clearTimeout(block.leaseTimer); block.leaseTimer = undefined; }
-    }
-  }
-
-  /** Release only the lease token that is still current; a newer lease is untouched. */
-  private expireLease(key: string, token: number): void {
-    const block = this.blocks.get(key);
-    if (block !== undefined && block.leaseToken === token) block.leaseToken = undefined;
-  }
-
-  /**
-   * Settle one covered scope with the probe's outcome. A failure is a fresh open
-   * circuit carrying the fault the probe observed and a longer cooldown, never
-   * shorter than the original not-before / `Retry-After` bound.
-   */
-  private settleProbe(key: string, block: Block, outcome: ProbeOutcome, failure?: MarkableFailure, status?: number): void {
-    block.lastProbe = outcome;
-    if (outcome === 'success') {
-      this.remove(key, 'success', 200, { probe: 'success', phase: 'closed' });
-      return;
-    }
-    if (outcome === 'cancelled') {
-      this.emitEvent(block, { state: block.state, reason: 'half_open', probe: 'cancelled' });
-      return;
-    }
-    block.failures += 1;
-    block.phase = 'open';
-    block.nextProbeAt = undefined;
-    if (failure !== undefined) {
-      block.faultKind = failure.faultKind ?? failure.state;
-      block.state = failure.state;
-      if (status !== undefined) block.status = status;
-    }
-    const boundMs = failure?.until === undefined ? undefined : resetInstant(failure.until);
-    if (boundMs !== undefined) block.boundUntil = Math.max(block.boundUntil ?? 0, boundMs);
-    // A reset instant stated by the upstream replaces the computed cooldown;
-    // without one the same exponential cooldown as a passive fault applies, so
-    // the scope is re-probed afterwards.
-    const floor = boundMs ?? Math.max(this.now() + this.backoffMs(block.failures), block.boundUntil ?? 0);
-    block.until = new Date(Math.max(this.now() + 1, floor)).toISOString();
-    clearTimeout(block.timer);
-    block.timer = this.schedule(key, block.until);
-    this.emitEvent(block, { state: block.state, reason: 'upstream_error', probe: 'failure' });
-  }
-
-  /**
-   * Bring a failed probe's own fault scope into effect when the lease did not
-   * already cover it, so a probe that discovers a shared pool or provider fault
-   * faults that scope exactly as a passive call would.
-   */
-  private discoverScope(lease: ProbeLease, failure: MarkableFailure, status?: number): void {
-    const key = this.scopeFor(lease.provider, lease.model, failure).key;
-    if (lease.entries.some((entry) => entry.key === key)) return;
-    this.mark(lease.provider, lease.model, failure, status ?? 502, '');
-  }
-
-  /**
    * The cooldown after `failures` consecutive failures of one scope: a 60s base
-   * doubling per failure, clamped to one hour, plus up to 25% jitter. A probe
-   * retry uses the same counter, so it backs off on the same schedule.
+   * doubling per failure, clamped to one hour, plus up to 25% jitter.
    */
   private backoffMs(failures: number): number {
     const delay = Math.min(ROUTE_COOLDOWN_BASE_MS * 2 ** Math.max(0, failures - 1), MAX_ROUTE_COOLDOWN_MS);
@@ -507,9 +287,8 @@ export class RouteStateStore {
   /**
    * Record one upstream fault. A stale in-flight failure (its captured
    * generation is older than the scope's current one) never overwrites a newer
-   * fault. The cooldown grows with the scope's consecutive failure count, always
-   * honoring a later upstream not-before bound or `Retry-After`, which is
-   * preserved as a floor across later failed probes.
+   * fault. The cooldown grows with the scope's consecutive failure count; an
+   * upstream-stated reset replaces it and clears the scope when it passes.
    */
   mark(provider: string, model: string, failure: MarkableFailure, status: number, credential: string, guard?: RouteGuard): RouteStatus | undefined {
     const now = this.now();
@@ -525,21 +304,18 @@ export class RouteStateStore {
       return previous === undefined ? undefined : this.statusOf(previous);
     }
     if (previous) clearTimeout(previous.timer);
-    if (previous?.leaseTimer !== undefined) clearTimeout(previous.leaseTimer);
     const boundMs = failure.until === undefined ? undefined : resetInstant(failure.until);
     // Every failure of this scope counts, including passive marks, so repeated
     // faults back off on one schedule until a success clears the scope.
     const failures = (previous?.failures ?? 0) + 1;
     const computed = now + this.backoffMs(failures);
-    // A caller-supplied reset instant overrides the computed cooldown: the block
-    // cools exactly until the upstream says the scope recovers. Without one the
-    // exponential cooldown applies and the scope is re-probed afterwards.
+    // An upstream-stated reset overrides the computed cooldown: the scope is
+    // blocked exactly until the upstream says it recovers.
     const until = new Date(boundMs === undefined ? computed : Math.max(now + 1, boundMs)).toISOString();
     const generation = this.advanceGeneration(key);
     const block: Block = {
       publicModel: `${provider}/${model}`, provider, scope, ...(pool ? { quotaPoolId: pool } : {}),
-      state: failure.state, faultKind, phase: 'open', generation, failures, until, status,
-      ...(boundMs !== undefined && boundMs > computed ? { boundUntil: boundMs } : {}),
+      state: failure.state, faultKind, phase: 'open', generation, failures, until, status, resets: boundMs !== undefined,
       ...(failure.state === 'auth_failed' ? { credential: fingerprint(credential) } : {}),
       timer: this.schedule(key, until),
     };
@@ -556,7 +332,7 @@ export class RouteStateStore {
    * never clears a fault a newer call recorded.
    */
   success(provider: string, model: string, guard?: RouteGuard): void {
-    for (const [key] of this.applying(provider, model)) {
+    for (const [key] of this.applying(provider, model, true)) {
       if (guard !== undefined && guard.generations.get(key) !== this.generations.get(key)) continue;
       this.remove(key, 'success', 200);
     }
@@ -571,25 +347,27 @@ export class RouteStateStore {
   }
 
   close(): void {
-    for (const block of this.blocks.values()) {
-      clearTimeout(block.timer);
-      if (block.leaseTimer !== undefined) clearTimeout(block.leaseTimer);
-    }
+    for (const block of this.blocks.values()) clearTimeout(block.timer);
     this.blocks.clear();
     this.generations.clear();
     this.attempts.clear();
   }
 
-  /** Provider states, the route's own state, and states of the pools it draws from. */
-  private applying(provider: string, model: string): [string, Block][] {
+  /**
+   * Provider states, the route's own state, and states of the pools it draws
+   * from. Only blocking scopes are returned unless `withExpired` asks for the
+   * expired ones too (their failure count still drives the next backoff).
+   */
+  private applying(provider: string, model: string, withExpired = false): [string, Block][] {
     const pools = this.pools(provider, model);
     const publicModel = `${provider}/${model}`;
     const result: [string, Block][] = [];
-    for (const [key, block] of this.blocks) {
+    for (const [key, block] of [...this.blocks]) {
       if (block.provider !== provider) continue;
-      // Cooldown expiry is recognized on read as well as by the timer, so a
-      // delayed or never-fired timer can never leave a route stuck open.
-      this.refreshHalfOpen(key, block);
+      // Expiry is recognized on read as well as by the timer, so a delayed or
+      // never-fired timer can never leave a route blocked.
+      this.expireIfDue(key, block);
+      if (!this.blocks.has(key) || (!withExpired && block.phase !== 'open')) continue;
       if (block.scope === 'provider'
         || (block.scope === 'route' && block.publicModel === publicModel)
         || (block.scope === 'pool' && pools.includes(block.quotaPoolId!))) result.push([key, block]);
@@ -597,9 +375,19 @@ export class RouteStateStore {
     return result;
   }
 
-  /** Transition an expired open circuit to half-open (idempotent). */
-  private refreshHalfOpen(key: string, block: Block): void {
-    if (block.phase === 'open' && Date.parse(block.until) <= this.now()) this.enterHalfOpen(key);
+  /**
+   * End a block whose `until` passed: a scope with an upstream reset is cleared;
+   * a backed-off scope stops blocking but keeps its failure count for the next
+   * backoff, until a success clears it.
+   */
+  private expireIfDue(key: string, block: Block): void {
+    if (block.phase !== 'open' || Date.parse(block.until) > this.now()) return;
+    if (block.resets) {
+      this.remove(key, 'cooldown');
+      return;
+    }
+    block.phase = 'closed';
+    this.emit({ ...this.describe(block), state: 'available', phase: 'closed', status: block.status, reason: 'cooldown' });
   }
 
   /**
@@ -638,52 +426,29 @@ export class RouteStateStore {
   }
 
   /**
-   * The availability a caller actually sees across every applicable scope: an
-   * open scope blocks first, a still-leased probe is not probeable, and the
-   * earliest safe retry satisfies every scope at once. A held lease is projected
-   * as a future `nextProbeAt` so its retry is never reported as zero.
+   * The availability a caller sees across every blocking scope: the newest
+   * fault, blocked until the latest `until` of them all, so a caller woken at
+   * that instant is admitted by every scope at once.
    */
   private project(applying: readonly [string, Block][]): RouteStatus {
     const blocks = applying.map(([, block]) => block);
-    const open = blocks.filter((block) => block.phase === 'open');
-    const leased = blocks.filter((block) => block.leaseToken !== undefined);
-    const representative = this.newest(open.length > 0 ? open : leased.length > 0 ? leased : blocks);
     const until = new Date(Math.max(...blocks.map((block) => Date.parse(block.until)))).toISOString();
-    if (open.length > 0) return this.statusOf(representative, until);
-    const nextProbeAt = leased.length > 0
-      ? new Date(Math.max(this.now() + 1, ...leased.map((block) => block.leaseUntil ?? this.now() + PROBE_LEASE_MS))).toISOString()
-      : new Date(Math.max(...blocks.map((block) => block.nextProbeAt === undefined ? 0 : Date.parse(block.nextProbeAt)))).toISOString();
-    return this.statusOf(representative, until, nextProbeAt);
+    return this.statusOf(this.newest(blocks), until);
   }
 
-  private statusOf(block: Block, until = block.until, nextProbeAt = block.nextProbeAt): RouteStatus {
-    const retry = nextProbeAt ?? until;
-    return {
-      state: block.state, until, faultKind: block.faultKind, phase: block.phase,
-      ...(retry === undefined ? {} : { nextProbeAt: retry }),
-      ...(block.lastProbe === undefined ? {} : { lastProbe: block.lastProbe }),
-    };
+  private statusOf(block: Block, until = block.until): RouteStatus {
+    return { state: block.state, until, faultKind: block.faultKind, phase: block.phase, ...(block.resets ? { resets: true } : {}) };
   }
 
   private schedule(key: string, until: string): ReturnType<typeof setTimeout> {
     const timer = setTimeout(() => {
       const block = this.blocks.get(key);
       if (!block) return;
-      if (Date.parse(block.until) <= this.now()) this.enterHalfOpen(key);
+      if (Date.parse(block.until) <= this.now()) this.expireIfDue(key, block);
       else block.timer = this.schedule(key, block.until);
     }, Math.min(MAX_TIMER_MS, Math.max(1, Date.parse(until) - this.now())));
     timer.unref?.();
     return timer;
-  }
-
-  /** Cooldown expiry is eligibility for a half-open trial, never health. */
-  private enterHalfOpen(key: string): void {
-    const block = this.blocks.get(key);
-    if (!block || block.phase === 'half_open') return;
-    block.phase = 'half_open';
-    block.nextProbeAt = new Date(this.now()).toISOString();
-    block.until = block.nextProbeAt;
-    this.emitEvent(block, { state: block.state, reason: 'half_open' });
   }
 
   private remove(key: string, reason: RouteStateChangedEvent['reason'], status?: number, extra?: Partial<RouteStateChangedEvent>): void {
@@ -696,7 +461,6 @@ export class RouteStateStore {
       return;
     }
     clearTimeout(block.timer);
-    if (block.leaseTimer !== undefined) clearTimeout(block.leaseTimer);
     this.blocks.delete(key);
     this.pruneGenerations();
     this.emit({ ...this.describe(block), state: 'available', phase: 'closed', status: status ?? block.status, reason, ...(extra ?? {}) });
@@ -708,14 +472,8 @@ export class RouteStateStore {
       faultKind: block.faultKind, phase: block.phase };
   }
 
-  /** Emit one state-change event with its retry/probe facts resolved. */
-  private emitEvent(block: Block, overrides: Pick<RouteStateChangedEvent, 'state' | 'reason'> & { probe?: ProbeOutcome }): void {
-    const nextProbeAt = block.nextProbeAt;
-    this.emit({
-      ...this.describe(block), ...overrides,
-      until: block.until,
-      ...(nextProbeAt === undefined ? {} : { nextProbeAt, nextRetryAt: nextProbeAt }),
-      ...(nextProbeAt === undefined ? { nextRetryAt: block.until } : {}),
-    });
+  /** Emit one state-change event with its retry instant. */
+  private emitEvent(block: Block, overrides: Pick<RouteStateChangedEvent, 'state' | 'reason'>): void {
+    this.emit({ ...this.describe(block), ...overrides, until: block.until, nextRetryAt: block.until });
   }
 }
