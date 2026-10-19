@@ -63,6 +63,8 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
         </Tooltip>
       </div>
 
+      <span className="pl-6 text-xs text-muted-foreground">套餐：{provider.plan || '未知'}</span>
+
       {failed ? (
         <div className="flex flex-wrap items-center gap-2 pl-6 text-xs text-destructive">
           <span>{provider.message ?? NO_DATA_NOTE}</span>

@@ -95,6 +95,7 @@ export const providerQuotaResultSchema = {
     providers: { type: 'array', maxItems: 64, items: {
       type: 'object', required: ['provider', 'status', 'stale'], properties: {
         provider: { type: 'string', minLength: 1, maxLength: 120 },
+        plan: { type: 'string', maxLength: 500 },
         status: { type: 'string', enum: ['ok', 'error', 'unavailable'] },
         stale: { type: 'boolean' },
         code: { type: 'string', maxLength: 200 },

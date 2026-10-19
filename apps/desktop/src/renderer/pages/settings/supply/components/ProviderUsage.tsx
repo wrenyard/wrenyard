@@ -77,6 +77,7 @@ function ProviderUsageCard({ entry }: { entry: ProviderCatalogSnapshot }) {
         <span className="truncate font-medium">{entry.label || entry.id}</span>
         <span className="truncate text-xs text-muted-foreground">{providerStatus(entry)}</span>
       </div>
+      <span className="text-xs text-muted-foreground">套餐：{quota?.plan || '未知'}</span>
       {hasDetail && (
         <div className="flex flex-col gap-3">
           {quota.windows.map((window) => (

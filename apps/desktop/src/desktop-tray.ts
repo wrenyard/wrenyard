@@ -65,13 +65,15 @@ export function createDesktopTray(
       : quota.providers.length > 0
         ? quota.providers.map((provider) => {
             const icon = createQuotaMenuProviderIcon(provider);
+            const planLabel = `套餐：${provider.plan || '未知'}`;
             if (icon.isEmpty()) {
-              return { label: provider.displayLine ?? `${provider.id} · ${provider.message ?? provider.status}`, enabled: false };
+              const detail = provider.displayLine ?? `${provider.id} · ${provider.message ?? provider.status}`;
+              return { label: `${planLabel} · ${detail}`, enabled: false };
             }
-            // The native text carries only the distinct non-ASCII pool names
-            // (e.g. 官方/外部) that the ASCII-only bitmap atlas cannot draw; the
-            // provider name and ordinary cycle captions are already drawn in the
-            // bitmap.
+            // The native text carries the plan label and the distinct non-ASCII
+            // pool names (e.g. 官方/外部) that the ASCII-only bitmap atlas cannot
+            // draw; the provider name and ordinary cycle captions are already
+            // drawn in the bitmap.
             const poolLabels: string[] = [];
             for (const window of provider.windows) {
               const poolLabel = window.poolLabel;
@@ -79,7 +81,7 @@ export function createDesktopTray(
               if (!/[^\x00-\x7F]/.test(poolLabel)) continue;
               if (!poolLabels.includes(poolLabel)) poolLabels.push(poolLabel);
             }
-            const label = poolLabels.length > 0 ? poolLabels.join(' / ') : '\u200B';
+            const label = poolLabels.length > 0 ? `${planLabel} / ${poolLabels.join(' / ')}` : planLabel;
             return { label, icon, toolTip: provider.displayLine, enabled: false };
           })
         : [{ label: quota.status === 'available' ? '暂无可展示额度' : '额度暂不可用', enabled: false }];

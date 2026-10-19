@@ -87,6 +87,7 @@ export function buildQuotaTips(
     }
 
     const entry: QuotaTipLine = { text: displayText };
+    if (provider.plan !== undefined) entry.plan = provider.plan;
     if (bar) entry.bars = [bar];
     if (errorRow) entry.errorRow = errorRow;
     if (provider.balances && provider.balances.length > 0) {

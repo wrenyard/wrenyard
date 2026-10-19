@@ -85,6 +85,8 @@ export interface ProviderQuotaParams {
 /** One provider quota observation; structurally mirrors the provider-owned shape. */
 export interface ProviderQuotaSnapshot {
   provider: string
+  /** Explicit provider-reported account plan name; absent means unknown. */
+  plan?: string
   status: 'ok' | 'error' | 'unavailable'
   stale: boolean
   code?: string

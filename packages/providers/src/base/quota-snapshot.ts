@@ -1,6 +1,11 @@
 /** Provider-owned observation, serialized using the existing daemon quota DTO. */
 export interface QuotaSnapshot {
   readonly provider: string;
+  /**
+   * Explicit provider-reported account plan name. Absent means the plan is
+   * unknown; never inferred from quota amounts or other quota data.
+   */
+  readonly plan?: string;
   readonly status: 'ok' | 'error' | 'unavailable';
   readonly stale: boolean;
   readonly code?: string;

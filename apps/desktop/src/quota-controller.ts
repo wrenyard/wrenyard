@@ -224,9 +224,11 @@ function projectProvider(id: string, provider: QuotaProviderState): QuotaProvide
   const displayLine = !unavailable && provider.displayLine
     ? sanitizeQuotaText(provider.displayLine)
     : undefined;
+  const plan = typeof provider.plan === 'string' ? sanitizeQuotaText(provider.plan) : undefined;
   return {
     id,
     label: sanitizeQuotaText(provider.label || id),
+    ...(plan ? { plan } : {}),
     status: provider.status,
     stale: provider.stale,
     windows,

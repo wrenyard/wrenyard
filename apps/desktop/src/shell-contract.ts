@@ -816,6 +816,8 @@ export interface QuotaBalanceSnapshot {
 export interface QuotaProviderSnapshot {
   id: string;
   label: string;
+  /** Explicit provider-reported account plan name; absent means unknown. */
+  plan?: string;
   status: 'ok' | 'pending' | 'error' | 'unavailable';
   stale: boolean;
   windows: QuotaWindowSnapshot[];

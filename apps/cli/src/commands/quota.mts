@@ -37,7 +37,7 @@ export async function handleQuota(args: string[]): Promise<number> {
       }).join(', ')
         || row.balances?.map(balance => `${balance.amount} ${balance.currency}`).join(', ')
         || row.message || row.error || 'No observable quota'
-      console.log(`${row.provider} [${row.status}] ${detail}`)
+      console.log(`${row.provider} [${row.status}] plan: ${row.plan || 'unknown'} ${detail}`)
     }
     return requested && rows.some(row => row.status !== 'ok') ? 1 : 0
   } catch (error) {

@@ -17,6 +17,8 @@ interface RawQuotaWindow {
 interface RawQuotaEntry {
   provider?: string;
   label?: string;
+  /** Explicit provider-reported account plan name; absent when unknown. */
+  plan?: string;
   status?: string;
   error?: string;
   code?: string;
@@ -302,6 +304,10 @@ export function parseQuotaJson(raw: string, now = Date.now()): QuotaProviderStat
           : null;
     const stale = e.stale === true;
 
+    // The plan is an explicit provider fact only. A blank/non-string value is
+    // absent rather than a plan label inferred from message or quota amounts.
+    const plan = typeof e.plan === 'string' && e.plan.trim().length > 0 ? e.plan.trim() : undefined;
+
     // Passive provider code metadata (e.g. `authentication_pending`). Preserved
     // generically; status/message/error stay independent and code never
     // triggers provider-specific behavior.
@@ -324,6 +330,7 @@ export function parseQuotaJson(raw: string, now = Date.now()): QuotaProviderStat
     results.push({
       id,
       label,
+      ...(plan !== undefined ? { plan } : {}),
       displayLine,
       error,
       status,

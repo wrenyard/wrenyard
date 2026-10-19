@@ -243,6 +243,7 @@ export class ProviderService {
 export function toQuotaSnapshot(row: ProviderQuotaSnapshot): ProviderQuotaSnapshot {
   return {
     provider: row.provider,
+    ...(row.plan === undefined || row.plan === '' ? {} : { plan: row.plan }),
     status: row.status,
     stale: row.stale,
     ...(row.code === undefined ? {} : { code: row.code }),

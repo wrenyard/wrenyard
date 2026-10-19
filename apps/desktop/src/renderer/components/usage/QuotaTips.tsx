@@ -71,6 +71,7 @@ function ProviderTips({ provider, now, inverse }: {
       <span className={cn('truncate font-medium', failed && muted)}>
         {name}{provider.stale ? '（数据过期）' : ''}
       </span>
+      <span className={muted}>套餐：{provider.plan || '未知'}</span>
       {failed || empty ? (
         <span className={muted}>{PROVIDER_UNKNOWN_LABEL}</span>
       ) : (

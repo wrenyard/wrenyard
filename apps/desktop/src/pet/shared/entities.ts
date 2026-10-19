@@ -71,6 +71,8 @@ export interface QuotaBarRow {
 export interface QuotaProviderState {
   id: string;
   label: string;
+  /** Explicit provider-reported account plan name; absent means unknown. */
+  plan?: string;
   displayLine: string | null;
   error: string | null;
   status: QuotaProviderStatus;
@@ -96,6 +98,8 @@ export interface QuotaBalanceRow {
 
 export interface QuotaTipLine {
   text: string;
+  /** Explicit provider-reported account plan name; absent means unknown. */
+  plan?: string;
   /** Structured bar data for graphical rendering in hover tips */
   bars?: QuotaBarRow[];
   /** Structured monetary balance rows, distinct from bars. */

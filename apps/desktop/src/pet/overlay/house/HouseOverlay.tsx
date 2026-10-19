@@ -363,6 +363,7 @@ export function adaptQuotaTips(tips: readonly QuotaTipLine[] | undefined): Quota
       providers.push({
         id: tip.errorRow.label,
         label: tip.errorRow.label,
+        ...(tip.plan ? { plan: tip.plan } : {}),
         status: 'error',
         stale: false,
         windows: [],
@@ -376,6 +377,7 @@ export function adaptQuotaTips(tips: readonly QuotaTipLine[] | undefined): Quota
       providers.push({
         id,
         label: id,
+        ...(tip.plan ? { plan: tip.plan } : {}),
         status: 'ok',
         stale: false,
         windows: [],
@@ -392,6 +394,7 @@ export function adaptQuotaTips(tips: readonly QuotaTipLine[] | undefined): Quota
         providers.push({
           id: bar.label,
           label: bar.label,
+          ...(tip.plan ? { plan: tip.plan } : {}),
           status: bar.status,
           stale: bar.stale,
           windows: bar.provider.windows.map((window) => ({
@@ -411,6 +414,7 @@ export function adaptQuotaTips(tips: readonly QuotaTipLine[] | undefined): Quota
     providers.push({
       id: tip.text,
       label: tip.text,
+      ...(tip.plan ? { plan: tip.plan } : {}),
       status: 'unavailable',
       stale: false,
       windows: [],

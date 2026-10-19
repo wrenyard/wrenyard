@@ -51,13 +51,13 @@ function normalizeChatGPTQuota(raw: unknown, now = new Date()): QuotaSnapshot {
     });
   }
   if (windows.length === 0) throw new Error('chatgpt: no rate limit windows available');
-  const plan = typeof entry.planType === 'string' ? entry.planType : '';
+  const plan = typeof entry.planType === 'string' ? entry.planType.trim() : '';
   const weeklyOnly = plan.toLowerCase() === 'pro' && !unknownWindow
     && windows.some(window => window.name === '7d') && !windows.some(window => window.name === '5h');
   return {
     provider: 'chatgpt', status: 'ok', stale: false,
     source: 'codex-app-server', fetched_at: now.toISOString(), windows,
     not_applicable_windows: weeklyOnly ? ['5h'] : [],
-    ...(plan ? { message: 'plan: ' + plan } : {}),
+    ...(plan ? { plan } : {}),
   };
 }
