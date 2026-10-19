@@ -13,10 +13,6 @@ import type {
   NotificationLevel,
 } from './main/notifications/notifier';
 import type {
-  NotificationEntry,
-  NotificationSnapshot,
-} from './main/notifications/center';
-import type {
   ContextInspection,
   ContextItem,
   ContextItemKind,
@@ -70,8 +66,6 @@ export type {
   NotificationAction,
   NotificationCommandAction,
   NotificationLevel,
-  NotificationEntry,
-  NotificationSnapshot,
 };
 
 /** Upper bound for a renderer-supplied notification id crossing the shell bridge. */
@@ -239,11 +233,6 @@ export const SHELL_CHANNELS = {
   activityChanged: 'wrenyard-shell:activity-changed',
   viewChanged: 'wrenyard-shell:view-changed',
   notificationShow: 'wrenyard-shell:notification-show',
-  notificationsChanged: 'wrenyard-shell:notifications-changed',
-  notificationSnapshot: 'wrenyard-shell:notification-snapshot',
-  notificationDismissEntry: 'wrenyard-shell:notification-dismiss-entry',
-  notificationClear: 'wrenyard-shell:notification-clear',
-  notificationMarkRead: 'wrenyard-shell:notification-mark-read',
   commandAction: 'wrenyard-shell:command-action',
   taskSettingsSnapshot: 'wrenyard-shell:task-settings-snapshot',
   taskSettingsSave: 'wrenyard-shell:task-settings-save',
@@ -445,11 +434,6 @@ export interface SessionPreferences {
   statusFilter?: SessionStatusFilter;
 }
 
-export interface StatusBarPreferences {
-  /** Ids of status items the user chose to hide. */
-  hidden: string[];
-}
-
 export interface UpdatePreferences {
   /** Whether Desktop checks for updates automatically; manual check always works. */
   autoCheck: boolean;
@@ -465,12 +449,11 @@ export interface DesktopPreferences {
   appearance: AppearanceSettings;
   session: SessionPreferences;
   notifications: NotificationPreferences;
-  statusBar: StatusBarPreferences;
   update: UpdatePreferences;
 }
 
 /** The Desktop preference partitions a preference path can address. */
-export type PreferenceSection = 'general' | 'appearance' | 'session' | 'notifications' | 'statusBar' | 'update';
+export type PreferenceSection = 'general' | 'appearance' | 'session' | 'notifications' | 'update';
 
 /** Path from a preference id to the value it addresses inside a preference document. */
 export type PreferencePath = readonly [PreferenceSection, string];
@@ -491,7 +474,6 @@ export interface PreferenceDocument {
   appearance: object;
   session: object;
   notifications: object;
-  statusBar: object;
   update: object;
 }
 
@@ -533,12 +515,6 @@ export const PREFERENCES = {
     validate: (value) => value === 'active' || value === 'archived' || value === 'all',
   },
   'notifications.enabled': { path: ['notifications', 'enabled'], validate: (value) => typeof value === 'boolean' },
-  'statusBar.hidden': {
-    path: ['statusBar', 'hidden'],
-    validate: (value) => Array.isArray(value)
-      && value.length <= PREFERENCE_STRING_ARRAY_MAX
-      && value.every((item) => typeof item === 'string' && item.length > 0 && item.length <= PREFERENCE_STRING_MAX),
-  },
   'update.autoCheck': { path: ['update', 'autoCheck'], validate: (value) => typeof value === 'boolean' },
 } as const satisfies Record<string, PreferenceDescriptor>;
 
@@ -2007,7 +1983,7 @@ export interface WrenyardShellApi {
   /** Open a frameless mini card for a session id; '' opens a new draft chat. */
   openMiniCard(sessionId: string): Promise<void>;
   /** Close the sender card and bring the shell back, opened to `sessionId`. */
-  restoreMain(sessionId: string): Promise<void>;
+  restoreMain(sessionId: string, command?: NotificationCommandAction): Promise<void>;
   /** Toggle always-on-top for the sender mini card (the 置顶 switch). */
   setAlwaysOnTop(enabled: boolean): Promise<void>;
   /** Close the sender mini card through the native close flow. */
@@ -2116,16 +2092,6 @@ export interface WrenyardShellApi {
   execCancel(id: string): Promise<ExecCancelResult>;
   /** Subscribe to a main-process notification show. */
   onNotificationShow(listener: (notification: AppNotification) => void): () => void;
-  /** The in-app history changed; invalidates the bell panel query. No payload. */
-  onNotificationsChanged(listener: () => void): () => void;
-  /** The in-app notification history snapshot, fetched by the bell panel. */
-  getNotificationSnapshot(): Promise<NotificationSnapshot>;
-  /** Remove one history entry by id. */
-  dismissNotification(id: string): Promise<void>;
-  /** Remove every history entry. */
-  clearNotifications(): Promise<void>;
-  /** Mark the whole in-app history read. */
-  markNotificationsRead(): Promise<void>;
   /** Main-process command delivery (e.g. a native-notification click). */
   onCommandAction(listener: (action: NotificationCommandAction) => void): () => void;
   /** Current version 3 Desktop preference partitions, main-process owned. */

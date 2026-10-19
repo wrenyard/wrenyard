@@ -44,7 +44,6 @@ export function preferencesFromDocument(
       statusFilter: settings.session.statusFilter ?? SESSION_STATUS_FILTER_DEFAULT,
     },
     notifications: { ...settings.notifications },
-    statusBar: { hidden: [...settings.statusBar.hidden] },
     update: { ...settings.update },
   };
 }

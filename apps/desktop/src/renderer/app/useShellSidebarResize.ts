@@ -217,7 +217,7 @@ export function useShellSidebarResize(enabled: boolean): ShellSidebarResize {
       // The shell sidebar is pinned to the left edge, so its width is the boundary.
       left: `calc(var(--sidebar-width) - ${HANDLE_HALF_WIDTH}px)`,
       top: 'var(--titlebar-height)',
-      height: 'calc(100svh - var(--titlebar-height) - var(--statusbar-height))',
+      height: 'calc(100svh - var(--titlebar-height))',
     } as CSSProperties,
     onPointerDown,
     onKeyDown,

@@ -27,7 +27,6 @@ import {
   type PreferenceId,
   type SessionPreferences,
   type ShellPage,
-  type StatusBarPreferences,
   type UpdatePreferences,
 } from '../../shell-contract.js';
 
@@ -110,8 +109,6 @@ export interface DesktopSettings {
   general: GeneralPreferences;
   /** Session defaults and last-sent model memory. */
   session: SessionPreferences;
-  /** Status-bar item visibility. */
-  statusBar: StatusBarPreferences;
   /** Update behaviour. */
   update: UpdatePreferences;
 }
@@ -182,7 +179,6 @@ export function defaultDesktopSettings(): DesktopSettings {
     notifications: defaultNotificationPreferences(),
     general: defaultGeneralPreferences(),
     session: defaultSessionPreferences(),
-    statusBar: { hidden: [] },
     update: { autoCheck: true },
   };
 }
@@ -340,7 +336,6 @@ export function normalizeDesktopSettings(parsed: unknown): DesktopSettings {
     notifications: normalizeNotificationPreferences(obj.notifications, defaults.notifications),
     general: normalizeGeneralPreferences(obj.general, defaults.general),
     session: normalizeSessionPreferences(obj.session, defaults.session),
-    statusBar: normalizeStatusBarPreferences(obj.statusBar, defaults.statusBar),
     update: normalizeUpdatePreferences(obj.update, defaults.update),
   };
 }
@@ -393,14 +388,6 @@ function normalizeSessionPreferences(value: unknown, fallback: SessionPreference
       ? statusFilter
       : fallback.statusFilter,
   };
-}
-
-function normalizeStatusBarPreferences(value: unknown, fallback: StatusBarPreferences): StatusBarPreferences {
-  const obj = isRecord(value) ? value : {};
-  const raw = Array.isArray(obj.hidden) ? obj.hidden : undefined;
-  if (!raw) return { hidden: [...fallback.hidden] };
-  const hidden = raw.filter((item): item is string => typeof item === 'string' && item.length > 0 && item.length <= 512);
-  return { hidden: [...new Set(hidden)] };
 }
 
 function normalizeWindowSettings(value: unknown): WindowSettings {
@@ -529,7 +516,6 @@ function cloneSettings(settings: DesktopSettings): DesktopSettings {
     notifications: { ...settings.notifications },
     general: { ...settings.general },
     session: { ...settings.session },
-    statusBar: { hidden: [...settings.statusBar.hidden] },
     update: { ...settings.update },
   };
 }

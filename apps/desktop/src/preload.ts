@@ -42,7 +42,6 @@ import {
   type ExecCancelResult,
   type AppNotification,
   type NotificationCommandAction,
-  type NotificationSnapshot,
   type DesktopPreferences,
   type PreferenceId,
   type ActivityStatusSnapshot,
@@ -133,8 +132,8 @@ const api: WrenyardShellApi = {
   openMiniCard(sessionId: string): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.openMiniCard, sessionId) as Promise<void>;
   },
-  restoreMain(sessionId: string): Promise<void> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.restoreMain, sessionId) as Promise<void>;
+  restoreMain(sessionId: string, command?: NotificationCommandAction): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.restoreMain, sessionId, command) as Promise<void>;
   },
   setAlwaysOnTop(enabled: boolean): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.alwaysOnTop, enabled) as Promise<void>;
@@ -324,24 +323,6 @@ const api: WrenyardShellApi = {
     };
     ipcRenderer.on(SHELL_CHANNELS.notificationShow, handler);
     return () => ipcRenderer.removeListener(SHELL_CHANNELS.notificationShow, handler);
-  },
-  onNotificationsChanged(listener: () => void): () => void {
-    const handler = (): void => listener();
-    ipcRenderer.on(SHELL_CHANNELS.notificationsChanged, handler);
-    return () => ipcRenderer.removeListener(SHELL_CHANNELS.notificationsChanged, handler);
-  },
-  getNotificationSnapshot(): Promise<NotificationSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.notificationSnapshot) as Promise<NotificationSnapshot>;
-  },
-  dismissNotification(id: string): Promise<void> {
-    if (!isBoundedNotificationId(id)) return Promise.reject(new Error('通知 id 无效'));
-    return ipcRenderer.invoke(SHELL_CHANNELS.notificationDismissEntry, id) as Promise<void>;
-  },
-  clearNotifications(): Promise<void> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.notificationClear) as Promise<void>;
-  },
-  markNotificationsRead(): Promise<void> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.notificationMarkRead) as Promise<void>;
   },
   onCommandAction(listener: (action: NotificationCommandAction) => void): () => void {
     const handler = (_event: Electron.IpcRendererEvent, action: unknown): void => {

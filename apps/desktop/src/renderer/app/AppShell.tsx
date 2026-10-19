@@ -13,7 +13,6 @@ import { closeActivityPanel, useActivityPanelState } from '@/renderer/lib/activi
 import { useActivityPanelResize } from '@/renderer/app/useActivityPanelResize';
 import { useShellSidebarResize } from '@/renderer/app/useShellSidebarResize';
 import { TitleBar } from '@/renderer/app/TitleBar';
-import { StatusBar } from '@/renderer/app/statusbar/StatusBar';
 import { TitleBarPageProvider } from '@/renderer/lib/titlebar';
 import { useShellSidebarFallback } from '@/renderer/lib/navigation';
 import { UpdateDialog } from '@/renderer/app/dialogs/UpdateDialog';
@@ -250,7 +249,6 @@ export function AppShell() {
           )
         )}
       </div>
-      {!mini && <StatusBar />}
     </div>
   );
 }

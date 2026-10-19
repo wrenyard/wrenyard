@@ -17,7 +17,7 @@ export function App() {
         <AppShell />
         <ConfirmHost />
         <LightboxHost />
-        <Toaster position="bottom-right" visibleToasts={3} offset={{ bottom: 'calc(var(--statusbar-height, 0px) + 8px)' }} />
+        <Toaster position="bottom-right" visibleToasts={3} />
       </TooltipProvider>
     </QueryClientProvider>
   );

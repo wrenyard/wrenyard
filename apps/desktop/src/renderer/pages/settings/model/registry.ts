@@ -36,7 +36,6 @@ export type CustomControlKey =
   | 'routingWeights'
   | 'service'
   | 'settingsFile'
-  | 'statusBarItems'
   | 'themeCards'
   | 'updateStatus'
   | 'workspace';
@@ -205,15 +204,6 @@ const APPEARANCE_CATEGORY: SettingDefinition[] = [
     },
     default: 'system',
     source: { kind: 'preference', preference: 'appearance.motion' },
-  },
-  {
-    id: 'appearance.statusBar',
-    category: 'appearance',
-    title: '状态栏',
-    description: '选择状态栏中显示的状态项。',
-    keywords: ['状态栏', 'statusbar', '显示', '隐藏'],
-    control: custom('statusBarItems'),
-    source: { kind: 'preference', preference: 'statusBar.hidden' },
   },
 ];
 

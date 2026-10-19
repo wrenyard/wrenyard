@@ -1,10 +1,13 @@
 import type { ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Maximize2, Menu, PanelLeftClose, PanelLeftOpen, PictureInPicture2, Pin, PinOff, Plus, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Menu, Network, PanelLeftClose, PanelLeftOpen, PanelRight, PictureInPicture2, Pin, PinOff, Plus, X } from 'lucide-react';
 import type { ShellPage } from '@/shell-contract';
 import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import { shell, useShellPage } from '@/renderer/lib/desktop';
+import { shell, useActivityStatus, useShellPage } from '@/renderer/lib/desktop';
+import { toggleActivityPanel } from '@/renderer/lib/activity-panel';
+import { TaskGraphsPopover } from '@/renderer/app/TitleBarPanels';
+import { useSessionActivity } from '@/renderer/app/use-activity';
 import { closeCard, getCurrentSession, openMiniCard, restoreMain, setMiniPinned, useMiniMode, useMiniPinned } from '@/renderer/lib/mini';
 import { back, forward, toggleSecondarySidebar, useNavigation, useSecondarySidebarToggle } from '@/renderer/lib/navigation';
 import { registerTitleBarSlot } from '@/renderer/lib/titlebar';
@@ -60,6 +63,11 @@ export function TitleBar() {
   const forwardShortcut = isMac ? '⌘]' : 'Alt+→';
   const mini = useMiniMode();
   const pinned = useMiniPinned();
+  const activitySnapshot = useActivityStatus();
+  const sessions = useSessionActivity();
+  const activityTasks = activitySnapshot.tasks.filter((task) => task.status === 'running' || task.status === 'queued');
+  const activityTurns = (sessions.data ?? []).flatMap((session) => session.turns);
+  const activityBadgeCount = activityTurns.length + activityTasks.length;
 
   // Mini card: a compact 36px drag strip. 置顶 sits at the far left; the middle
   // is a plain, non-interactive session title inside the drag region; the right
@@ -199,6 +207,23 @@ export function TitleBar() {
       </div>
 
       <div className={cn('flex shrink-0 items-center gap-2 px-2', DRAG, SLOT_NO_DRAG)}>
+        <TitleBarButton label="活动面板" tooltip="活动面板" onClick={() => toggleActivityPanel()}>
+          <span className="relative inline-flex">
+            <PanelRight />
+            {activityBadgeCount > 0 ? (
+              <span className="absolute -top-1 -right-1 flex min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[10px] font-medium leading-none text-primary-foreground">
+                {activityBadgeCount > 9 ? '9+' : activityBadgeCount}
+              </span>
+            ) : null}
+          </span>
+        </TitleBarButton>
+        <TaskGraphsPopover
+          trigger={(
+            <TitleBarButton label="任务图" tooltip="运行中的任务图" onClick={() => undefined}>
+              <Network />
+            </TitleBarButton>
+          )}
+        />
         {TITLE_BAR_PAGES.map((id) => (
           <div
             key={id}

@@ -36,7 +36,6 @@ import {
   type ExecEventsResult,
   type ExecCancelResult,
   type NotificationCommandAction,
-  type NotificationSnapshot,
   type ActivityStatusSnapshot,
   type OperationComponentId,
   type OperationComponentAction,
@@ -45,7 +44,6 @@ import {
 import type { ShellIpcDeps } from './main/ipc/deps.js';
 import { registerAppearancePreferencesIpc } from './main/ipc/appearance-preferences.js';
 import { registerNavigationChromeIpc } from './main/ipc/navigation-chrome.js';
-import { registerNotificationsIpc } from './main/ipc/notifications.js';
 import { registerQuotaProvidersIpc } from './main/ipc/quota-providers.js';
 import { registerSessionExecIpc } from './main/ipc/session-exec.js';
 import { registerStorageUsageIpc } from './main/ipc/storage-usage.js';
@@ -151,14 +149,6 @@ export interface ShellWindowOptions {
   execGet(id: string): Promise<ExecSnapshotDto>;
   execEvents(request: ExecEventsRequest): Promise<ExecEventsResult>;
   execCancel(id: string): Promise<ExecCancelResult>;
-  /** The in-app notification history snapshot, fetched by the renderer. */
-  getNotificationSnapshot(): NotificationSnapshot;
-  /** Remove one history entry by id. */
-  dismissNotification(id: string): void;
-  /** Remove every history entry. */
-  clearNotifications(): void;
-  /** Mark the whole in-app history read. */
-  markNotificationsRead(): void;
   getPreferences(): Promise<DesktopPreferences>;
   setPreference(id: PreferenceId, value: unknown): Promise<DesktopPreferences>;
   /** Latest shared activity projection for the status bar (chrome spec 4.4). */
@@ -377,7 +367,6 @@ export class ShellWindowController {
     this.ipcCleanups = [
       registerAppearancePreferencesIpc(ipcMain, deps),
       registerNavigationChromeIpc(ipcMain, deps),
-      registerNotificationsIpc(ipcMain, deps),
       registerQuotaProvidersIpc(ipcMain, deps),
       registerSessionExecIpc(ipcMain, deps),
       registerTasksStatsIpc(ipcMain, deps),

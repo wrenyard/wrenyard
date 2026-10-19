@@ -209,7 +209,7 @@ export function useActivityPanelResize(enabled: boolean): ActivityPanelResize {
       // the boundary.
       right: `calc(var(--activity-panel-width, 380px) - ${HANDLE_HALF_WIDTH}px)`,
       top: 'var(--titlebar-height)',
-      height: 'calc(100svh - var(--titlebar-height) - var(--statusbar-height))',
+      height: 'calc(100svh - var(--titlebar-height))',
     } as CSSProperties,
     onPointerDown,
     onKeyDown,

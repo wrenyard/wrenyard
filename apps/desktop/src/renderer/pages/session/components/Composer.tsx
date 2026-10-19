@@ -18,6 +18,7 @@ import { useContextBudget } from '../state/use-context-budget.js';
 import { InterruptControl } from './InterruptControl.js';
 import { IdleCacheNotice } from './IdleCacheNotice.js';
 import { MediaAttachments, fromDraftAttachment } from './MediaAttachments.js';
+import { QuotaRingButton } from './QuotaRingButton.js';
 
 /** Input text is token-counted 300ms after typing stops (usage spec 3.3). */
 const INPUT_TOKEN_DEBOUNCE_MS = 300;
@@ -577,6 +578,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         onDismissSuggestion={dismissSuggestion}
         toolbar={
           <>
+            <QuotaRingButton />
             {/* Always mounted: the compact pill sits next to the text, and the
                 expanded layout puts it on the toolbar's left. Its compact
                 trigger collapses to an icon below the composer container width

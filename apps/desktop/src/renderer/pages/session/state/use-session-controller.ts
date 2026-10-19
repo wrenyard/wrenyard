@@ -18,6 +18,7 @@ import { clearDraft, clearDraftAttachments } from './drafts.js';
 import { mini, miniSession } from '@/renderer/lib/mini';
 import { preferencesQuery } from '@/renderer/lib/queries';
 import { SESSION_STATUS_FILTER_DEFAULT, type SessionStatusFilter } from '@/shell-contract';
+import { setVisibleSession } from '@/renderer/lib/visible-session';
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 let localSeq = 0;
@@ -368,6 +369,10 @@ export function useSessionController(api: SessionApi) {
   const clearError = useCallback((): void => {
     dispatch({ type: 'clear-error' });
   }, []);
+
+  useEffect(() => {
+    setVisibleSession(state.selectedId);
+  }, [state.selectedId]);
 
   useEffect(() => {
     alive.current = true;

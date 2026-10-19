@@ -123,10 +123,6 @@ export function onNotificationShow(listener: (notification: AppNotification) => 
   return shell.onNotificationShow(listener);
 }
 
-export function onNotificationsChanged(listener: () => void): () => void {
-  return shell.onNotificationsChanged(listener);
-}
-
 export function onCommandAction(listener: (action: NotificationCommandAction) => void): () => void {
   return shell.onCommandAction(listener);
 }

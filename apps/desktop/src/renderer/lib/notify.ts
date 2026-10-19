@@ -12,6 +12,7 @@ import { toast as sonnerToast } from 'sonner';
 import type { AppNotification, NotificationLevel } from '@/shell-contract';
 import { onNotificationShow } from '@/renderer/lib/desktop';
 import { executeCommand } from '@/renderer/lib/commands';
+import { getVisibleSessionId } from '@/renderer/lib/visible-session';
 
 const TRANSIENT_ERROR_MS = 6_000;
 const TRANSIENT_OTHER_MS = 4_000;
@@ -25,7 +26,16 @@ export function toast(message: string, options?: { level?: NotificationLevel; du
   });
 }
 
+function sessionIdFromNotification(notification: AppNotification): string | undefined {
+  const prefix = 'session:';
+  if (!notification.id.startsWith(prefix)) return undefined;
+  return notification.id.slice(prefix.length);
+}
+
 function renderNotification(notification: AppNotification): void {
+  const visibleSession = sessionIdFromNotification(notification);
+  if (visibleSession !== undefined && visibleSession === getVisibleSessionId()) return;
+
   const description = notification.body !== undefined ? { description: notification.body } : {};
   const action = notification.action;
   const actionOption = action !== undefined

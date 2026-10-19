@@ -25,7 +25,6 @@ import { Composer } from './components/Composer.js';
 import { EmptySession } from './components/EmptySession.js';
 import { SessionSearch } from './components/SessionSearch.js';
 import { SessionTitle } from './components/SessionTitle.js';
-import { SessionStatusItems } from './components/status/SessionStatusItems.js';
 import { TranscriptView } from './components/transcript/TranscriptView.js';
 import { buildMessageTimeline } from './components/conversation/MessageTimeline.js';
 import { fold } from './model/fold.js';
@@ -337,7 +336,6 @@ export function SessionPage() {
         ledgerReady={draft || state.ledgerLoaded}
       >
         <RunningDispatchTasks api={api} turns={model.turns} setTasks={setTasks} />
-        <SessionStatusItems />
         <div className="relative flex min-h-0 flex-1 flex-col">
           {empty ? (
             <EmptySession>

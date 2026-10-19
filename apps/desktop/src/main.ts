@@ -322,13 +322,13 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
   const check = async (): Promise<void> => {
     const [shellOk, snapshotOk, quotaOk] = await Promise.all([
       shell.window.webContents.executeJavaScript(
-        `['[data-titlebar]', '[data-statusbar]'].every((selector) => {
-          const root = document.querySelector(selector);
+        `(() => {
+          const root = document.querySelector('[data-titlebar]');
           if (!(root instanceof HTMLElement)) return false;
           const box = root.getBoundingClientRect();
           const style = getComputedStyle(root);
           return box.width > 0 && box.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-        })`,
+        })()`,
       ),
       shell.window.webContents.executeJavaScript(
         "window.wrenyardShell.getSettings().then((value) => value?.service?.status === 'connected' && value?.pet?.settings?.entities && Array.isArray(value?.pet?.settings?.quota?.providers) && typeof value?.update?.currentVersion === 'string' && typeof value?.update?.installSupported === 'boolean').catch(() => false)",
@@ -1043,7 +1043,7 @@ async function bootstrap(): Promise<void> {
   });
   // One Notifier for the whole process, gated by `notifications.enabled`.
   // Each producer states its channels explicitly; the notifier holds no state
-  // of its own and the in-app channel owns the history.
+  // of its own; the in-app channel only pushes toasts.
   const inAppChannel = createInAppChannel({ getShellWindow: () => shellWindow });
   const notifier = new Notifier({
     isEnabled: () => desktopSettingsStore?.load().notifications.enabled ?? true,
@@ -1404,6 +1404,9 @@ async function bootstrap(): Promise<void> {
       shellWindow?.deliverCommandAction(
         sessionId ? { id: 'session.open', args: sessionId } : { id: 'session.newDraft' },
       );
+    },
+    deliverShellCommand: (action) => {
+      shellWindow?.deliverCommandAction(action);
     },
     // Cards reuse the shell's single zoom source of truth (`appearance.zoom`)
     // through the appearance controller, exactly like applyShellZoom does.
@@ -1924,10 +1927,14 @@ async function bootstrap(): Promise<void> {
     if (!isTrustedShellSender(event.sender)) return;
     miniCards?.openCard(sessionId, event.sender);
   });
-  ipcMain.handle(SHELL_CHANNELS.restoreMain, (event, sessionId: unknown) => {
+  ipcMain.handle(SHELL_CHANNELS.restoreMain, (event, sessionId: unknown, command: unknown) => {
     if (typeof sessionId !== 'string') throw new Error('Invalid session id');
     if (!miniCards?.isCardSender(event.sender)) return;
-    miniCards.restoreMain(event.sender, sessionId);
+    const followUp = command !== null && typeof command === 'object' && !Array.isArray(command)
+      && typeof (command as { id?: unknown }).id === 'string'
+      ? (command as { id: string; args?: unknown })
+      : undefined;
+    miniCards.restoreMain(event.sender, sessionId, followUp);
   });
   // 置顶 and 关闭 are card-scoped: they act on the sender card only.
   ipcMain.handle(SHELL_CHANNELS.alwaysOnTop, (event, enabled: unknown) => {
@@ -2068,10 +2075,6 @@ async function bootstrap(): Promise<void> {
     execGet: (id: string) => execGet(id),
     execEvents: (request: ExecEventsRequest) => execEvents(request),
     execCancel: (id: string) => execCancel(id),
-    getNotificationSnapshot: () => inAppChannel.snapshot(),
-    dismissNotification: (id: string) => inAppChannel.remove(id),
-    clearNotifications: () => inAppChannel.clear(),
-    markNotificationsRead: () => inAppChannel.markAllRead(),
     getPreferences: async () => preferencesController!.get(),
     setPreference: async (id: PreferenceId, value: unknown) => preferencesController!.set(id, value),
     getActivityStatus: () => activityProjector.get(),

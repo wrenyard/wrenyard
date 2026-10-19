@@ -7,7 +7,7 @@
 
 import { BrowserWindow, screen, type WebContents } from 'electron';
 import type { PageLoader } from './pages.js';
-import { SHELL_CHANNELS, type ResolvedAppearance } from './shell-contract.js';
+import { SHELL_CHANNELS, type NotificationCommandAction, type ResolvedAppearance } from './shell-contract.js';
 import { shellWebPreferences } from './shell-window.js';
 
 /** Card geometry: a small desktop conversation card. */
@@ -35,6 +35,8 @@ export interface MiniCardManagerOptions {
   showShell(): void;
   /** Ask the shell renderer to open a session ('' selects a new draft). */
   selectShellSession(sessionId: string): void;
+  /** Run a renderer command after restoring the shell (optional mini follow-up). */
+  deliverShellCommand?(action: NotificationCommandAction): void;
   /** The shell's current interface zoom factor (100% → 1). */
   getZoomFactor(): number;
   logger?: Pick<Console, 'info' | 'warn'>;
@@ -181,11 +183,12 @@ export class MiniCardManager {
   }
 
   /** Close this card and bring the shell back, opened to `sessionId`. */
-  restoreMain(sender: WebContents, sessionId: string): void {
+  restoreMain(sender: WebContents, sessionId: string, command?: NotificationCommandAction): void {
     const card = this.cards.get(sender.id);
     if (card && !card.window.isDestroyed()) card.window.close();
     this.options.showShell();
     this.options.selectShellSession(sessionId);
+    if (command !== undefined) this.options.deliverShellCommand?.(command);
   }
 
   private reassertOnTop(): void {

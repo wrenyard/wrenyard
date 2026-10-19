@@ -742,7 +742,6 @@ html[data-theme-switching] *::after {
   /* Window chrome (chrome spec 1): the title bar matches the old header height
      and the status bar spans the window at 24px. */
   --titlebar-height: var(--header-height);
-  --statusbar-height: calc(var(--spacing) * 6);
   /* Left reserve for window controls; macOS keeps room for the traffic lights
      and releases it while fullscreen, Windows only needs the small gap before
      the menu button. The right reserve is the Windows Window Controls Overlay. */
@@ -909,12 +908,9 @@ html[data-platform="win32"] {
 }
 /* Keep the stable three-row chrome outside the changing page snapshot. */
 [data-titlebar] { view-transition-name: app-titlebar; }
-[data-statusbar] { view-transition-name: app-statusbar; }
 [data-slot="sidebar"][data-collapsible="icon"] { view-transition-name: app-sidebar; }
 ::view-transition-old(app-titlebar),
 ::view-transition-new(app-titlebar),
-::view-transition-old(app-statusbar),
-::view-transition-new(app-statusbar),
 ::view-transition-old(app-sidebar),
 ::view-transition-new(app-sidebar) {
   animation: none;

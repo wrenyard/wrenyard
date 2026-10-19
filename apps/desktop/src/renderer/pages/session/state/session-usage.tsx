@@ -26,7 +26,7 @@ import { contextInspectSessionId, contextQuery, routesPreviewQuery } from '../qu
 import { promptCancel, promptSuggest } from '../api.js';
 import { readModelEfforts, type ReasoningEffort } from './reasoning-effort.js';
 import { defaultModelEffort, resolveModelEffort } from './reasoning-effort-memory.js';
-import { setQuotaFocus } from '@/renderer/lib/statusbar';
+import { setQuotaFocus } from '@/renderer/lib/quota-focus';
 import {
   clearDraft,
   clearDraftAttachments,

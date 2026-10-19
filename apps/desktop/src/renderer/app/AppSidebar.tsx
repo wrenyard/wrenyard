@@ -220,7 +220,7 @@ export function AppSidebar({ page, onOpenUpdate }: AppSidebarProps) {
   return (
     <Sidebar
       collapsible="offcanvas"
-      className="top-(--titlebar-height) h-[calc(100svh_-_var(--titlebar-height)_-_var(--statusbar-height))]!"
+      className="top-(--titlebar-height) h-[calc(100svh_-_var(--titlebar-height))]!"
     >
       <SessionSidebar
         sessions={list}

@@ -5,6 +5,7 @@ import type { AppNotification, Notifier } from './notifier.js';
 
 const REPLY_TEXT_MAX = 120;
 const ERROR_TEXT_MAX = 80;
+const SESSION_TITLE_FALLBACK = '新对话';
 
 function collapse(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
@@ -25,9 +26,16 @@ export interface SessionNotifierDeps {
 export function createSessionNotifier(deps: SessionNotifierDeps): SessionNotifier {
   /** Last committed reply text per `sessionId:turn`, for the live turn only. */
   const lastReply = new Map<string, string>();
+  /** Latest display title from live `session.titled` events. */
+  const lastTitle = new Map<string, string>();
 
   return {
     observe(sessionId: string, event: LedgerEvent): void {
+      if (event.type === 'session.titled') {
+        const title = collapse(event.text);
+        if (title.length > 0) lastTitle.set(sessionId, title);
+        return;
+      }
       if (event.type === 'reply.sent') {
         if (event.turn === undefined) return;
         lastReply.set(`${sessionId}:${event.turn}`, event.text);
@@ -36,28 +44,36 @@ export function createSessionNotifier(deps: SessionNotifierDeps): SessionNotifie
       if (event.type !== 'turn.finished') return;
       if (event.status === 'interrupted') return;
       const key = event.turn === undefined ? null : `${sessionId}:${event.turn}`;
+      const sessionTitle = lastTitle.get(sessionId) ?? SESSION_TITLE_FALLBACK;
       let notification: AppNotification;
       if (event.status === 'completed') {
         const reply = key === null ? undefined : lastReply.get(key);
         if (key !== null) lastReply.delete(key);
-        const text = reply !== undefined && collapse(reply).length > 0
-          ? truncate(collapse(reply), REPLY_TEXT_MAX)
-          : '本轮对话已结束';
+        const collapsed = reply !== undefined ? collapse(reply) : '';
         notification = {
           id: `session:${sessionId}`,
           level: 'success',
-          title: text,
+          title: sessionTitle,
+          ...(collapsed.length > 0 ? { body: truncate(collapsed, REPLY_TEXT_MAX) } : {}),
+          action: {
+            label: '打开',
+            command: { id: 'session.open', args: { sessionId } },
+          },
         };
       } else {
         const error = typeof event.error === 'string' ? collapse(event.error) : '';
         notification = {
           id: `session:${sessionId}`,
           level: 'error',
-          title: '对话因请求异常中断',
-          ...(error.length > 0 ? { body: truncate(error, ERROR_TEXT_MAX) } : {}),
+          title: sessionTitle,
+          body: error.length > 0 ? truncate(error, ERROR_TEXT_MAX) : '对话因请求异常中断',
+          action: {
+            label: '打开',
+            command: { id: 'session.open', args: { sessionId } },
+          },
         };
       }
-      deps.notifier.notify(notification, ['pet']);
+      deps.notifier.notify(notification, ['pet', 'inApp', 'system']);
     },
   };
 }

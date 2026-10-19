@@ -1,34 +1,9 @@
-import { useState } from 'react';
-import { Activity, Network } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { Network } from 'lucide-react';
 import { Item } from '@/renderer/components/ui/item';
 import { Popover, PopoverContent, PopoverTrigger } from '@/renderer/components/ui/popover';
-import { StatusBarButton } from '@/renderer/components/status-bar-button';
 import { shell, useActivityStatus } from '@/renderer/lib/desktop';
-import { toggleActivityPanel } from '@/renderer/lib/activity-panel';
 import type { ActivityStatusTaskGraph } from '@/shell-contract';
-import { useSessionActivity } from '../use-activity';
-
-export function ActivityItem() {
-  const snapshot = useActivityStatus();
-  const sessions = useSessionActivity();
-  const tasks = snapshot.tasks.filter((task) => task.status === 'running' || task.status === 'queued');
-  const groups = sessions.data ?? [];
-  const turns = groups.flatMap((session) => session.turns);
-  const stale = snapshot.stale || sessions.isError;
-  const counts = [turns.length ? turns.length + ' 轮' : '', tasks.length ? tasks.length + ' 任务' : ''].filter(Boolean).join(' · ');
-  const label = counts || (sessions.isPending ? '加载中' : stale ? '暂不可用' : '空闲');
-
-  return (
-    <StatusBarButton
-      icon={Activity}
-      label={label}
-      tone={stale ? 'warning' : 'default'}
-      tooltip={stale ? '活动数据暂未更新' : '查看会话与任务活动'}
-      ariaLabel="活动"
-      onClick={() => toggleActivityPanel()}
-    />
-  );
-}
 
 const NODE_LABELS: ReadonlyArray<[string, string]> = [
   ['done', '完成'],
@@ -39,7 +14,6 @@ const NODE_LABELS: ReadonlyArray<[string, string]> = [
   ['cancelled', '已取消'],
 ];
 
-/** `完成 2 · 运行 1 · 等待 1` from the graph's node counts, dropping zeroes. */
 function formatNodeCounts(counts: Record<string, number>): string {
   const parts: string[] = [];
   const seen = new Set<string>();
@@ -61,15 +35,17 @@ function isActiveGraph(graph: ActivityStatusTaskGraph): boolean {
   return graph.state !== 'done' && graph.state !== 'cancelled';
 }
 
-export function TaskGraphItem() {
+interface TaskGraphsPopoverProps {
+  trigger: ReactNode;
+}
+
+/** Running task graphs list extracted from the retired status-bar item. */
+export function TaskGraphsPopover({ trigger }: TaskGraphsPopoverProps) {
   const snapshot = useActivityStatus();
   const [open, setOpen] = useState(false);
   const activeGraphs = snapshot.taskgraphs.filter(isActiveGraph);
-  if (activeGraphs.length === 0) return null;
 
   const openGraph = (graph: ActivityStatusTaskGraph): void => {
-    // The native Graph Slip window is the graph surface; a graph row never
-    // falls back to a task run transcript.
     void shell.openTaskGraph(graph.taskgraphId);
     setOpen(false);
   };
@@ -77,19 +53,16 @@ export function TaskGraphItem() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger nativeButton={false} render={<span className="inline-flex" />}>
-        <StatusBarButton
-          icon={Network}
-          label={`${activeGraphs.length} 图运行中`}
-          tooltip="查看运行中的任务图"
-          ariaLabel="任务图活动"
-        />
+        {trigger}
       </PopoverTrigger>
-      <PopoverContent side="top" align="start" className="w-[360px] p-0">
+      <PopoverContent side="bottom" align="end" className="w-[360px] p-0">
         <div className="px-4 pt-3 pb-2">
           <span className="text-sm font-medium">运行中的任务图</span>
         </div>
         <div className="max-h-80 overflow-auto px-2 pb-2">
-          {activeGraphs.map((graph) => (
+          {activeGraphs.length === 0 ? (
+            <p className="px-2 py-3 text-sm text-muted-foreground">暂无运行中的任务图</p>
+          ) : activeGraphs.map((graph) => (
             <Item
               key={graph.taskgraphId}
               render={<button type="button" onClick={() => openGraph(graph)} />}

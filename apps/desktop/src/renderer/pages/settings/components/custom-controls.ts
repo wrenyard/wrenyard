@@ -28,7 +28,6 @@ import {
   SettingsFileControl,
   WorkspaceControl,
 } from './RuntimeSettings.js';
-import { StatusBarSettingsControl } from './StatusBarSettings.js';
 import { ThemeCardsControl } from './ThemeCards.js';
 import { UpdateStatusControl } from './UpdateSettings.js';
 import type { CustomControlKey } from '../model/registry.js';
@@ -61,7 +60,6 @@ export const CUSTOM_CONTROLS: Readonly<Record<CustomControlKey, ComponentType>> 
   routingWeights: RoutingWeightsControl,
   service: ServiceControl,
   settingsFile: SettingsFileControl,
-  statusBarItems: StatusBarSettingsControl,
   themeCards: ThemeCardsControl,
   updateStatus: UpdateStatusControl,
   workspace: WorkspaceControl,

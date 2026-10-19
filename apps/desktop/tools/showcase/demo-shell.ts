@@ -965,7 +965,6 @@ let preferences: DesktopPreferences = {
   appearance: { theme: 'paper', colorMode: 'light', motion: 'system', zoom: 100 },
   session: { sendKey: 'enter', promptCompletion: true },
   notifications: { enabled: true },
-  statusBar: { hidden: [] },
   update: { autoCheck: true },
 };
 
@@ -1462,20 +1461,6 @@ export function createDemoShell(control?: DemoControl): DemoShell {
     },
 
     onNotificationShow: (listener) => notificationShow.subscribe(listener),
-    onNotificationsChanged: (listener) => notificationsChanged.subscribe(listener),
-    getNotificationSnapshot: async () => snapshotNotifications(),
-    dismissNotification: async (id) => {
-      notificationEntries = notificationEntries.filter((entry) => entry.id !== id);
-      notificationsChanged.emit();
-    },
-    clearNotifications: async () => {
-      notificationEntries = [];
-      notificationsChanged.emit();
-    },
-    markNotificationsRead: async () => {
-      notificationEntries = notificationEntries.map((entry) => (entry.read ? entry : { ...entry, read: true }));
-      notificationsChanged.emit();
-    },
     onCommandAction: () => () => undefined,
 
     getPreferences: async () => preferences,

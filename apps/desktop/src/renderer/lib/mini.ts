@@ -5,6 +5,7 @@
  * per-window 置顶 flag and forwards the card commands.
  */
 import { useSyncExternalStore } from 'react';
+import type { NotificationCommandAction } from '@/shell-contract';
 import { shell } from '@/renderer/lib/desktop';
 import { flushDraft, flushDraftAttachments } from '@/renderer/pages/session/state/drafts';
 
@@ -76,9 +77,9 @@ export function openMiniCard(sessionId: string): void {
 }
 
 /** Close this card and bring the shell back, opened to `sessionId`. */
-export function restoreMain(sessionId: string): void {
+export function restoreMain(sessionId: string, command?: NotificationCommandAction): void {
   flushSessionDrafts(sessionId);
-  void shell.restoreMain(sessionId).catch(() => undefined);
+  void shell.restoreMain(sessionId, command).catch(() => undefined);
 }
 
 /** Close this card only; the shell returns when the last card closes. */

@@ -1,7 +1,6 @@
 import { QueryClient } from '@tanstack/react-query';
 import {
   onDaemonChanged,
-  onNotificationsChanged,
   onPreferencesChanged,
   onQuotaChanged,
   onRemoteChanged,
@@ -66,10 +65,6 @@ onDaemonChanged(() => {
 
 onPreferencesChanged(() => {
   void queryClient.invalidateQueries({ queryKey: ['preferences'] });
-});
-
-onNotificationsChanged(() => {
-  void queryClient.invalidateQueries({ queryKey: ['notifications'] });
 });
 
 /**
