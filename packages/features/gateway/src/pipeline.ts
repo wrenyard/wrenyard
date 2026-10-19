@@ -13,6 +13,7 @@ import {
   type ReasoningEffort,
 } from '@wrenyard/providers/catalog';
 import { upstreamAuthHeaders, type ProviderCredential, type ProviderRuntime } from '@wrenyard/providers';
+import { completedWithoutOutput } from './response-usage.ts';
 import { classifyRouteOutcome, classifyStreamFailure, clientTimeoutFailure, isPoisoning, transportFailure, type RouteFaultKind } from './route-failure.ts';
 import type { CircuitPhase, MarkableFailure, RouteStateStore, RouteStatus } from './route-state.ts';
 import { ResponseSampler, type ResponseTpsContract } from './response-tps.ts';
@@ -586,7 +587,14 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         // a caller-benign frame (`content_filter`, an invalid request) never
         // poisons a route or backs it off.
         const validated = observer.succeeded();
-        const streamFailure = relayed.observedError === undefined ? undefined : classifyStreamFailure(relayed.observedError);
+        // An observed in-stream error is classified first. A streamed response
+        // that completed without producing any output of any kind is the
+        // fail-closed case of the same path: it is classified as `empty_stream`
+        // so the route records a fault and the request never finalizes as a
+        // successful completion.
+        const streamFailure = relayed.observedError !== undefined
+          ? classifyStreamFailure(relayed.observedError)
+          : completedWithoutOutput(observer) ? classifyStreamFailure({ type: 'empty_stream' }) : undefined;
         let streamState: RouteStatus | undefined;
         if (validated) {
           options.routeStates.success(resolved.provider.id, resolved.model.id, guard);

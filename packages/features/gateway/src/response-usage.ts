@@ -1,4 +1,5 @@
 import { SseDataReader } from './sse.ts';
+import type { ResponseObserver } from './protocols/types.ts';
 
 export interface GatewayUsage { input?: number; output?: number; cachedInput?: number; reasoning?: number; }
 
@@ -33,6 +34,14 @@ export interface UsageAdapter {
    * bytes are never rewritten — this is observation only.
    */
   errorIdentity(row: Row): { type?: string; code?: string } | undefined;
+  /**
+   * True when this record carries actual generation output: non-empty content,
+   * reasoning or tool-call argument text on one of the protocol's emitted
+   * channels. Declaring it also opts the protocol into the empty-completion
+   * check: a terminal stream that produced no output of any kind and reported
+   * no positive output tokens is not a success.
+   */
+  emitted?(row: Row): boolean;
 }
 
 /**
@@ -47,6 +56,8 @@ export class ResponseUsageObserver {
   private readonly reader = new SseDataReader(payload => this.consumeEvent(payload));
   private terminal = false;
   private failed = false;
+  private streamed = false;
+  private outputSeen = false;
   private observedError?: { type?: string; code?: string };
 
   constructor(private readonly adapter: UsageAdapter) {}
@@ -56,13 +67,32 @@ export class ResponseUsageObserver {
   feed(chunk: string): void { this.reader.feed(chunk); }
   end(): void { this.reader.end(); }
 
-  succeeded(): boolean { return this.terminal && !this.failed; }
+  /**
+   * A successful response completed without an error and, for a streamed
+   * response from a protocol that observes generation output, produced some:
+   * at least one emitted channel carried text or the usage reported positive
+   * output tokens. An empty terminal stream is not a success — it must be
+   * recorded as a route fault instead. A non-stream body is complete by itself.
+   */
+  succeeded(): boolean {
+    return this.terminal && !this.failed
+      && (this.adapter.emitted === undefined || !this.streamed || this.outputSeen || (this.usage.output ?? 0) > 0);
+  }
+  /**
+   * True when a protocol that observes generation output saw this stream reach
+   * completion with no output of any kind. It is the fail-closed view of a
+   * terminal response that {@link succeeded} refuses to accept.
+   */
+  emptyCompletion(): boolean {
+    return this.terminal && !this.failed && this.adapter.emitted !== undefined && !this.succeeded();
+  }
   result(): GatewayUsage | undefined { return Object.keys(this.usage).length ? { ...this.usage } : undefined; }
   error(): { type?: string; code?: string } | undefined {
     return this.observedError === undefined ? undefined : { ...this.observedError };
   }
 
   private consumeEvent(payload: string): void {
+    this.streamed = true;
     // A protocol that terminates with a raw non-JSON sentinel owns that
     // recognition; the shared observer only records the outcome.
     if (this.adapter.sentinel(payload)) { this.terminal = true; return; }
@@ -80,6 +110,7 @@ export class ResponseUsageObserver {
       if (identity !== undefined) this.observedError = identity;
     }
     if (this.adapter.terminal(row)) this.terminal = true;
+    if (this.adapter.emitted?.(row) === true) this.outputSeen = true;
     const raw = this.adapter.usage(row);
     if (!raw) return;
     const fields: GatewayUsage = {
@@ -92,4 +123,13 @@ export class ResponseUsageObserver {
       if (amount !== undefined) this.usage[key] = amount;
     }
   }
+}
+
+/**
+ * True when the observer saw a streamed response reach completion with no
+ * output of any kind. Only a protocol whose adapter observes generation output
+ * can report it; every other protocol and every non-stream body returns false.
+ */
+export function completedWithoutOutput(observer: ResponseObserver): boolean {
+  return observer instanceof ResponseUsageObserver && observer.emptyCompletion();
 }

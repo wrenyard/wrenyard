@@ -9,8 +9,10 @@ const MAX_TIME_MS = 8.64e15;
  * keeps its shared pool scope. `structured_output` is the delivery/protocol
  * failure of a model attempt: like the transport classes it is isolated to the
  * exact route that observed it and never claims a provider or shared pool.
+ * `empty_stream` is the delivered-nothing variant of that delivery failure: a
+ * response that completed without producing any output.
  */
-export type RouteFaultKind = GatewayRouteState | 'timeout' | 'transport' | 'server_error' | 'structured_output';
+export type RouteFaultKind = GatewayRouteState | 'timeout' | 'transport' | 'server_error' | 'structured_output' | 'empty_stream';
 
 /**
  * A poisoning outcome: it is allowed to mark a route (or its provider/pool)
@@ -186,6 +188,10 @@ export function classifyStreamFailure(identity: { type?: string; code?: string }
   if (/access.?denied|permission|forbidden/.test(token)) return { state: 'access_denied', scope: 'provider', faultKind: 'access_denied' };
   if (/authentication|unauthenticated|unauthorized|invalid.?api.?key|invalid_key|api_key_invalid/.test(token)) return { state: 'auth_failed', scope: 'provider', faultKind: 'auth_failed' };
   if (/timeout|timed_out/.test(token)) return { state: 'model_unavailable', scope: 'route', faultKind: 'timeout' };
+  // A completed response that delivered nothing is a delivery failure of the
+  // exact route, like a structured-output failure, not an upstream transport
+  // fault: no official error frame accompanied it.
+  if (/empty_stream|empty.?output/.test(token)) return { state: 'model_unavailable', scope: 'route', faultKind: 'empty_stream' };
   if (/overload|server_error|internal_error|api_error|unavailable|bad_gateway/.test(token)) return { state: 'model_unavailable', scope: 'route', faultKind: 'server_error' };
   return undefined;
 }

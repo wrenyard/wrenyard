@@ -40,6 +40,17 @@ function emitChatDelta(delta: Record<string, unknown>, choiceIndex: number, sink
   }
 }
 
+/** True when one incremental Chat delta carries non-empty generation output. */
+function hasChatOutput(delta: Record<string, unknown>): boolean {
+  const content = delta.content;
+  if (typeof content === 'string' && content !== '') return true;
+  if (firstNonemptyString(delta, ['reasoning_content', 'reasoning', 'reasoning_text']) !== undefined) return true;
+  return Array.isArray(delta.tool_calls) && delta.tool_calls.some((call) => {
+    const rawArgs = object(object(call)?.function)?.arguments;
+    return typeof rawArgs === 'string' && rawArgs !== '';
+  });
+}
+
 /** The first nonempty string among `fields`, in order; the protocol's precedence. */
 function firstNonemptyString(source: Record<string, unknown>, fields: readonly string[]): string | undefined {
   for (const field of fields) {
@@ -84,6 +95,13 @@ const adapter: UsageAdapter = {
   errorIdentity: (row) => (row.error !== undefined && row.error !== null
     ? errorIdentityOf(row.error) ?? {}
     : undefined),
+  // Only a real `delta` on one of the emitted channels is generation output; a
+  // sentinel-only or usage-only record produces none, so a terminal stream that
+  // carried no delta is an empty completion.
+  emitted: (row) => Array.isArray(row.choices) && row.choices.some((choice) => {
+    const delta = object(object(choice)?.delta);
+    return delta !== undefined && hasChatOutput(delta);
+  }),
 };
 
 export const chatProtocol: GatewayProtocolModule = {
