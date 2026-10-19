@@ -509,6 +509,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
           ...(taskConfig.dispatch ? { dispatch: taskConfig.dispatch as unknown as Record<string, unknown> } : {}),
         },
         ...(options.invocationSettings ? { invocation: options.invocationSettings } : {}),
+        mountedFeatures: selectedFeatures,
       })
       // Consume the canonical target produced by the settings service exactly;
       // never fall back to a stale agentRuntime pin when it is absent.

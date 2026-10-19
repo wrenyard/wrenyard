@@ -185,6 +185,9 @@ export interface TaskRunSettingsParams {
   }
   /** Optional public snake_case invocation settings layer. */
   invocation?: TaskSettingsLayer
+  /** Feature ids actually mounted for this input (not the declared tool
+   *  surface), used for input-specific automatic-routing preferences. */
+  mountedFeatures?: readonly string[]
 }
 
 export interface TaskRunSettingsResolution {

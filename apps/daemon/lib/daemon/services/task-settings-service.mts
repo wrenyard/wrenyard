@@ -378,6 +378,23 @@ function rawDefinitionDispatch(value: unknown): ConfigTaskDispatchRequirements {
   return {}
 }
 
+/**
+ * Inputs that actually mount computer-use are routed to models of high-or-above
+ * intelligence; declared-but-unmounted features do not trigger this.
+ */
+export function applyMountedFeatureRoutingPreferences(
+  dispatch: ConfigTaskDispatchRequirements | undefined,
+  mountedFeatures: readonly string[] | undefined,
+): ConfigTaskDispatchRequirements {
+  const base = dispatch ?? {}
+  // Feature id mounted for desktop control; no shared exported constant exists.
+  if (!mountedFeatures?.includes('computer-use')) return base
+  if (base.intelligenceMin !== undefined && INTELLIGENCE_ORDER[base.intelligenceMin] >= INTELLIGENCE_ORDER.high) {
+    return base
+  }
+  return { ...base, intelligenceMin: 'high' }
+}
+
 /** Synthetic task name used only to key the read-only routing form; it never
  *  identifies a real definition and never reaches a resolver error message. */
 const ROUTING_FORM_TASK_NAME = 'routing-form'
@@ -940,9 +957,10 @@ export class TaskSettingsService {
     // quota/free/cap policy + immutable ranking). Readiness already ran for
     // every exact choice before ranking, so there is NO second post-selection
     // runtimeAvailability call and no fallback after selection.
+    const routingRequirements = applyMountedFeatureRoutingPreferences(effective.dispatch, params.mountedFeatures)
     const selection = await this.resolveAutomaticSelection({
       taskName: params.taskName,
-      requirements: { ...effective.dispatch, inputTokens: params.inputTokens },
+      requirements: { ...routingRequirements, inputTokens: params.inputTokens },
       timeoutMs: effective.timeoutMs,
       routingWeights: effective.routingWeights,
     })
