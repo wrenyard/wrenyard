@@ -93,6 +93,8 @@ export type RouteHealth = GatewayRouteStatus;
 export const SUGGESTION_MAX_TOKENS = 384;
 /** Total deadline for the suggestion role, including auxiliary route selection (15 s). */
 export const SUGGESTION_TIMEOUT_MS = 15_000;
+/** Fixed cap for the compaction input threshold (spec: about 120k tokens). */
+export const COMPACTION_THRESHOLD_CAP = 120_000;
 
 /** Caller-supplied expensive model for the `reason` role. */
 export interface ReasonSelection {
@@ -403,8 +405,8 @@ export function checkContextBudget(
 /**
  * The budget facts compaction and the turn need, resolved exactly as
  * {@link checkContextBudget} resolves them. `threshold` is the input size above
- * which a request compacts before sending: 80% of the room left after the
- * output reservation.
+ * which a request compacts before sending: the lower of half the room left after
+ * the output reservation and the fixed {@link COMPACTION_THRESHOLD_CAP}.
  */
 export interface ContextBudgetFacts {
   contextWindow?: number;
@@ -436,7 +438,7 @@ export function contextBudgetOf(
         : Math.min(requestedMaxOutputTokens, sourceMax);
   const threshold = contextWindow === undefined || outputReservation === undefined
     ? undefined
-    : Math.floor(0.8 * (contextWindow - outputReservation));
+    : Math.min(Math.floor(0.5 * (contextWindow - outputReservation)), COMPACTION_THRESHOLD_CAP);
   return {
     ...(contextWindow === undefined ? {} : { contextWindow }),
     estimatedInputTokens,

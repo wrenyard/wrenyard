@@ -16,7 +16,7 @@ import { contextBudgetOf, resolveModelMetadata } from '../model/request.ts';
 import { type ToolCall } from '../transport/index.ts';
 import { ACTION_TOOL, parseActionCall } from '../reasoning/tool.ts';
 import { buildReason } from '../reasoning/prompt.ts';
-import { compactContext } from '../context/compaction.ts';
+import { compactContext, renderKernelFactsBlock } from '../context/compaction.ts';
 import {
   type ActionExecutionOutcome,
   type ActionRunContext,
@@ -291,7 +291,12 @@ export class TurnRunner {
           ...(compacted.contextWindow === undefined ? {} : { contextWindow: compacted.contextWindow }),
           ...(compacted.failure === undefined ? {} : { failure: compacted.failure }),
         });
-        view = buildView(this.engine.ledger.read(session.sessionId));
+        const kernelFacts = port?.kernelFacts?.();
+        const freshEvents = this.engine.ledger.read(session.sessionId);
+        view = buildView(freshEvents);
+        if (kernelFacts !== undefined && kernelFacts.trim() !== '') {
+          view.messages.splice(view.messages.length - 1, 0, { role: 'user', content: renderKernelFactsBlock(kernelFacts) });
+        }
         contextBudgetOf(
           turn.publicId,
           view.messages,

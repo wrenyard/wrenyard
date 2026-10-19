@@ -10,7 +10,7 @@
  * deterministic summary built from ledger facts and records the failure.
  */
 import type { ModelMetadata } from '../model/metadata.ts';
-import { estimateInputTokens, estimateTokens } from '../model/request.ts';
+import { COMPACTION_THRESHOLD_CAP, estimateInputTokens, estimateTokens } from '../model/request.ts';
 import { CONTEXT_EVENT_TYPES, type LedgerEvent } from '../ledger/store.ts';
 import { escapeBody, renderEventText, resumedOriginalTurns, tag } from './render.ts';
 import { messageOf } from '../errors.ts';
@@ -21,8 +21,8 @@ export const COMPACTION_MAX_OUTPUT_TOKENS = 2000;
 
 /** Share of the threshold kept verbatim as the most recent tail. */
 const TAIL_SHARE = 0.25;
-/** Share of the room left after the output reservation that triggers compaction. */
-const THRESHOLD_SHARE = 0.8;
+/** Share of the room left after the output reservation that triggers compaction, before the fixed cap. */
+const THRESHOLD_SHARE = 0.5;
 
 const COMPACTION_SYSTEM = `<wy-system>
 You are the context compactor for one working session. Summarise the supplied conversation records into a compact handover note that lets the next request continue the work.
@@ -38,6 +38,12 @@ Work that is still running, blocked or waiting.
 Decisions made and their reasons.
 ## pending_followups
 Promised follow-ups and open questions.
+## standing_instructions
+Role and standing instructions that arrived through wakes, not the config.
+## role_cursors
+Per-role cursors such as the last audited or reviewed commit.
+## known_pitfalls
+Pitfalls learned at run time.
 
 Rules:
 - Use only the supplied records. Never invent paths, ids, results or decisions.
@@ -111,7 +117,7 @@ export async function compactContext(input: CompactionInput): Promise<Compaction
   const outputReservation = input.outputReservation ?? input.metadata.maxOutputTokens ?? 0;
   const threshold = contextWindow === undefined
     ? 0
-    : Math.floor(THRESHOLD_SHARE * (contextWindow - outputReservation));
+    : Math.min(Math.floor(THRESHOLD_SHARE * (contextWindow - outputReservation)), COMPACTION_THRESHOLD_CAP);
   const echoed = {
     ...(input.estimatedInputTokens === undefined ? {} : { estimatedInputTokens: input.estimatedInputTokens }),
     ...(contextWindow === undefined ? {} : { contextWindow }),
@@ -227,5 +233,16 @@ function fallbackSummary(title: string | undefined, events: readonly LedgerEvent
     '_(none recorded)_',
     '## pending_followups',
     '_(none recorded)_',
+    '## standing_instructions',
+    '_(none recorded)_',
+    '## role_cursors',
+    '_(none recorded)_',
+    '## known_pitfalls',
+    '_(none recorded)_',
   ].join('\n');
+}
+
+/** Render verbatim kernel facts (watches, routines, bot roster) as one context block. */
+export function renderKernelFactsBlock(facts: string): string {
+  return tag('wy-kernel-facts', [], escapeBody(facts));
 }

@@ -151,6 +151,11 @@ export interface AgentToolPort {
   /** Per-turn tool-call cap; default 24. */
   maxToolCalls?: number;
   /**
+   * Kernel facts appended verbatim to the context after a compaction (watches,
+   * routines with last run, bot roster); undefined when the host has none.
+   */
+  kernelFacts?(): string | undefined;
+  /**
    * Execute one tool call the model returned. The result maps to the action's
    * `action.finished` status and result text.
    */

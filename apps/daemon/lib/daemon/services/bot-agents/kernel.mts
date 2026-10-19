@@ -621,6 +621,41 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     return undefined
   }
 
+  /**
+   * Verbatim kernel facts appended to a bot's context after compaction: the
+   * sessions it watches with their todos, its configured routines, and the
+   * enabled roster. Undefined when every section would be empty.
+   */
+  function kernelFactsFor(config: BotAgentConfig): string | undefined {
+    const sections: string[] = []
+    const watches = state.watches.filter(watch => watch.botId === config.id)
+    if (watches.length > 0) {
+      sections.push([
+        '## watches',
+        ...watches.map(watch => `- ${watch.sessionId}${
+          watch.todoIds === undefined || watch.todoIds.length === 0 ? '' : ` (todos: ${watch.todoIds.join(', ')})`
+        }`),
+      ].join('\n'))
+    }
+    if (config.routines.length > 0) {
+      sections.push([
+        '## routines',
+        ...config.routines.map(routine => `- ${routine.name}: every ${routine.intervalMinutes} min; last run unavailable`),
+      ].join('\n'))
+    }
+    const peers: BotAgentConfig[] = []
+    for (const entry of entries.values()) {
+      const peer = entry.config
+      if (peer === undefined || !peer.enabled || peer.id === config.id) continue
+      peers.push(peer)
+    }
+    peers.sort((left, right) => left.id.localeCompare(right.id))
+    if (peers.length > 0) {
+      sections.push(['## roster', ...peers.map(peer => `- @${peer.id} (${peer.name})`)].join('\n'))
+    }
+    return sections.length === 0 ? undefined : sections.join('\n\n')
+  }
+
   function portFor(botId: string): AgentToolPort | undefined {
     const config = entries.get(botId)?.config
     if (config === undefined) return undefined
@@ -628,6 +663,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       system: botSystemPrompt(config, entries.values()),
       tools: agentToolSpecs(config.tools),
       maxToolCalls: MAX_TOOL_CALLS,
+      kernelFacts: () => kernelFactsFor(config),
       // The invoking context session and turn decide which routine round a
       // watch inherits; a turn admitted before a rotation keeps its own round.
       run: (call, ctx) => runTools(call, toolContext(botId, ctx.sessionId, ctx.turn)),
