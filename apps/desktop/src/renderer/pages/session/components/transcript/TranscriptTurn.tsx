@@ -18,7 +18,7 @@ import {
   waitingStatusText,
 } from '../../model/describe.js';
 import type { TurnWaitingState } from '../../model/describe.js';
-import type { ActionModel, CallModel, ErrorItem, ReplyModel, TurnModel } from '../../model/types.js';
+import type { ActionModel, CallModel, ContextItem, ErrorItem, ReplyModel, TurnModel } from '../../model/types.js';
 import { MediaAttachments, fromSessionFile } from '../MediaAttachments.js';
 import { HoverTime } from '../conversation/HoverTime.js';
 import { Ellipsis, WorkingDots } from '../live-indicators.js';
@@ -264,6 +264,14 @@ export function TranscriptTurn({ turn, sessionId, latest = false, onCancelTask, 
   // elsewhere it shows on hover without reserving height.
   const footerInFlow = latest || turn.status === 'failed' || turn.status === 'interrupted';
 
+  // Every context item of the turn, including ones scoped to a span (memory
+  // recalls fold onto action.outputs while unscoped ones stay on the cycle);
+  // step naming looks memory-search hits up by their actionId.
+  const contextItems: ContextItem[] = [
+    ...turn.cycles.flatMap((cycle) => cycle.context),
+    ...turn.actions.flatMap((action) => action.outputs),
+  ];
+
   return (
     <div className="group/turn relative flex flex-col gap-3" data-lightbox-root>
       <div className="group/user flex justify-end">
@@ -285,6 +293,7 @@ export function TranscriptTurn({ turn, sessionId, latest = false, onCancelTask, 
             <ActivityGroup
               key={groupId(block.items[0]!)}
               items={block.items}
+              contextItems={contextItems}
               sessionId={sessionId}
               onCancelTask={onCancelTask}
             />

@@ -1,5 +1,5 @@
 import type { TimelineTone } from '@/renderer/components/timeline-bars';
-import type { ActionModel, CallModel, ContextItem, Phase, TurnModel } from './types.js';
+import type { ActionModel, ActivityItem, CallModel, ContextItem, Phase, TurnModel } from './types.js';
 
 /* Central product copy and mappings for the session page. */
 
@@ -331,4 +331,74 @@ export function actionLabel(action: {
 
 export function materialTitle(item: ContextItem): string {
   return item.title && item.title.trim() !== '' ? item.title : basename(item.path);
+}
+
+const STEP_NAME_MAX = 40;
+
+/** First sentence of a text: up to the first sentence mark or line break, whitespace-collapsed and capped. */
+function firstSentence(text: string, max = STEP_NAME_MAX): string {
+  const cut = text.search(/[。！？.!?\n]/u);
+  const head = (cut === -1 ? text : text.slice(0, cut)).replace(/\s+/gu, ' ').trim();
+  const chars = [...head];
+  return chars.length > max ? `${chars.slice(0, max).join('')}…` : head;
+}
+
+/**
+ * Readable display name of one transcript step, so rows and group headers no
+ * longer need to show the raw model id as the subject.
+ *
+ * - `reason`: the first sentence of the reasoning text or call output, else a
+ *   thinking verb for the step's cycle.
+ * - `call` `memory-search`: the first recalled memory path (via the turn's
+ *   context items), `记忆检索：无命中` when a finished search recalled nothing,
+ *   `记忆检索中` while it still runs.
+ * - other `call` roles: the parent action's title when a resolver yields one,
+ *   else the role label plus the first line of the output when it is short,
+ *   else just the role label.
+ * - `action`: its title; while the title is still empty the kind label plus
+ *   the subtitle or the first line of the prompt.
+ * - `context`: the context item's material title.
+ */
+export function stepName(
+  item: ActivityItem,
+  ctx?: {
+    contextItems?: readonly ContextItem[];
+    actionTitle?: (actionId: string) => string | undefined;
+  },
+): string {
+  switch (item.kind) {
+    case 'reason': {
+      const text = firstSentence(item.reasoning?.text ?? item.call.output);
+      return text !== '' ? text : thinkingVerb(item.call.cycle ?? item.call.turn);
+    }
+    case 'call': {
+      const call = item.call;
+      const label = CALL_ROLE_LABEL[call.role] ?? call.role;
+      if (call.role === 'memory-search') {
+        const hits = (ctx?.contextItems ?? []).filter(
+          (context) => context.kind === 'memory' && context.actionId === call.id,
+        );
+        if (hits.length > 0) {
+          const suffix = hits.length > 1 ? ` 等 ${hits.length} 条` : '';
+          return `记忆检索：${shortName(hits[0]!.path)}${suffix}`;
+        }
+        return call.status === 'running' ? '记忆检索中' : '记忆检索：无命中';
+      }
+      if (call.parent !== undefined) {
+        const title = ctx?.actionTitle?.(call.parent);
+        if (title !== undefined && title.trim() !== '') return title;
+      }
+      const line = firstSentence(call.output);
+      return line !== '' ? `${label}：${line}` : label;
+    }
+    case 'action': {
+      const action = item.action;
+      if (action.title.trim() !== '') return action.title;
+      const label = ACTION_KIND_LABEL[action.kind];
+      const detail = action.subtitle ?? (action.prompt === undefined ? '' : firstSentence(action.prompt));
+      return detail === undefined || detail.trim() === '' ? label : `${label}：${detail}`;
+    }
+    case 'context':
+      return materialTitle(item.item);
+  }
 }

@@ -11,8 +11,8 @@ import { Button } from '@/renderer/components/ui/button';
 import { Spinner } from '@/renderer/components/ui/spinner';
 import { shell } from '@/renderer/lib/desktop';
 import { formatTokenCount } from '@/renderer/lib/format';
-import { ACTION_KIND_LABEL, statusView } from '../../model/describe.js';
-import type { ActionModel, CallModel } from '../../model/types.js';
+import { ACTION_KIND_LABEL, statusView, stepName } from '../../model/describe.js';
+import type { ActionModel, CallModel, ContextItem } from '../../model/types.js';
 import { MediaAttachments, fromSessionFile } from '../MediaAttachments.js';
 import { ActivityRow, ActivityRowStatus, OutputBox } from './ActivityRow.js';
 import { CallMeta, NestedCallRow } from './CallRow.js';
@@ -61,6 +61,8 @@ export interface ActionRowProps {
   action: ActionModel;
   /** Auxiliary calls this action ran. */
   calls: readonly CallModel[];
+  /** The turn's context items, for nested step naming. */
+  contextItems?: readonly ContextItem[];
   /** Ledger session id, forwarded to attachment media. */
   sessionId?: string;
   /** Cancel one dispatched task run; rejects when the daemon refuses. */
@@ -74,13 +76,16 @@ function compiledInput(action: ActionModel, compile: CallModel | undefined): str
 }
 
 /** A dispatch's input: the full prompt and the compiled task input, collapsed. */
-function DispatchInput({ action, compile }: { action: ActionModel; compile: CallModel | undefined }) {
+function DispatchInput({ action, compile, contextItems }: { action: ActionModel; compile: CallModel | undefined; contextItems?: readonly ContextItem[] }) {
   const input = compiledInput(action, compile);
+  const name = compile === undefined
+    ? ''
+    : stepName({ kind: 'call', call: compile }, { contextItems, actionTitle: () => action.title || undefined });
   return (
     <div className="rounded-lg border">
       <ActivityRow
         verb="派发输入"
-        subject={<span className="font-mono text-xs font-normal">{compile?.model ?? ''}</span>}
+        subject={name}
         meta={compile === undefined ? undefined : <Elapsed start={compile.startedAt} end={compile.endedAt} />}
         openMeta={compile === undefined ? undefined : <CallMeta call={compile} />}
         status={compile === undefined ? undefined : (
@@ -111,12 +116,15 @@ function DispatchInput({ action, compile }: { action: ActionModel; compile: Call
 }
 
 /** One action as an expandable transcript step. */
-export function ActionRow({ action, calls, sessionId, onCancelTask }: ActionRowProps) {
+export function ActionRow({ action, calls, contextItems, sessionId, onCancelTask }: ActionRowProps) {
   const files = (action.files ?? []).map(fromSessionFile);
   const dispatch = action.kind === 'dispatch';
   // A dispatch folds its compile call into the input block; other nested calls stay listed.
   const compile = dispatch ? calls.filter((call) => call.role === 'dispatch').at(-1) : undefined;
   const nested = compile === undefined ? calls : calls.filter((call) => call !== compile);
+  // Nested calls name their parent action when it has one.
+  const naming = { contextItems, actionTitle: () => action.title || undefined };
+  const nameOf = (call: CallModel): string => stepName({ kind: 'call', call }, naming);
   return (
     <ActivityRow
       verb={ACTION_KIND_LABEL[action.kind]}
@@ -130,12 +138,12 @@ export function ActionRow({ action, calls, sessionId, onCancelTask }: ActionRowP
         />
       )}
     >
-      {dispatch ? <DispatchInput action={action} compile={compile} /> : action.subtitle !== undefined && (
+      {dispatch ? <DispatchInput action={action} compile={compile} contextItems={contextItems} /> : action.subtitle !== undefined && (
         <p className="text-xs text-muted-foreground">{action.subtitle}</p>
       )}
       {nested.length > 0 && (
         <div className="flex flex-col divide-y divide-border/60 rounded-lg border">
-          {nested.map((call) => <NestedCallRow key={call.id} call={call} />)}
+          {nested.map((call) => <NestedCallRow key={call.id} call={call} name={nameOf(call)} />)}
         </div>
       )}
       <ContextItems items={action.outputs} />

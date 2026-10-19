@@ -4,6 +4,7 @@
  * share the same timing and token metadata, including the time to first token.
  */
 import { ArrowDown, ArrowUp } from 'lucide-react';
+import { models } from '@wrenyard/models';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { elapsedBetween, formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
@@ -17,7 +18,14 @@ function ttftMs(call: CallModel): number | undefined {
   return elapsedBetween(call.startedAt, call.firstTokenAt, 0);
 }
 
-/** Timing and token metadata shared by the call rows and the dispatch input block. */
+/** Display name of a call's `provider/model` public id, else the raw id. */
+function callModelLabel(model: string): string {
+  const separator = model.indexOf('/');
+  const bare = separator > 0 && separator < model.length - 1 ? model.slice(separator + 1) : model;
+  return models.displayName(bare) ?? model;
+}
+
+/** Timing, model and token metadata shared by the call rows and the dispatch input block. */
 export function CallMeta({ call }: { call: CallModel }) {
   const ttft = ttftMs(call);
   const input = call.usage?.input;
@@ -25,6 +33,7 @@ export function CallMeta({ call }: { call: CallModel }) {
   return (
     <>
       {ttft !== undefined && <span>首字 {formatElapsedMs(ttft)}</span>}
+      {call.model !== '' && <span>模型 {callModelLabel(call.model)}</span>}
       <Elapsed start={call.startedAt} end={call.endedAt} />
       {input !== undefined && (
         <span className="inline-flex items-center gap-0.5" title={`输入 ${formatTokenCount(input)}`}>
@@ -41,7 +50,7 @@ export function CallMeta({ call }: { call: CallModel }) {
 }
 
 /** The reasoning span of one cycle as an expandable row. */
-export function ReasoningRow({ call, reasoning }: { call: CallModel; reasoning?: ReasoningModel }) {
+export function ReasoningRow({ call, reasoning, name }: { call: CallModel; reasoning?: ReasoningModel; name: string }) {
   const thinking = reasoning?.thinking ?? '';
   // Prefer the live streamed cycle text, then the committed call output.
   const liveText = reasoning?.text ?? '';
@@ -49,7 +58,7 @@ export function ReasoningRow({ call, reasoning }: { call: CallModel; reasoning?:
   return (
     <ActivityRow
       verb="思考"
-      subject={<span className="font-mono text-xs font-normal">{call.model}</span>}
+      subject={name}
       meta={<Elapsed start={call.startedAt} end={call.endedAt} />}
       openMeta={<CallMeta call={call} />}
       status={(
@@ -97,11 +106,11 @@ function CallRowBody({ call }: { call: CallModel }) {
 }
 
 /** One auxiliary call of a cycle, as a step row. */
-export function AuxiliaryCallRow({ call }: { call: CallModel }) {
+export function AuxiliaryCallRow({ call, name }: { call: CallModel; name: string }) {
   return (
     <ActivityRow
       verb={CALL_ROLE_LABEL[call.role] ?? call.role}
-      subject={<span className="font-mono text-xs font-normal">{call.model}</span>}
+      subject={name}
       meta={<Elapsed start={call.startedAt} end={call.endedAt} />}
       openMeta={<CallMeta call={call} />}
       status={(
@@ -118,11 +127,11 @@ export function AuxiliaryCallRow({ call }: { call: CallModel }) {
 }
 
 /** One auxiliary call nested inside an action, as a compact step row. */
-export function NestedCallRow({ call }: { call: CallModel }) {
+export function NestedCallRow({ call, name }: { call: CallModel; name: string }) {
   return (
     <ActivityRow
       verb={CALL_ROLE_LABEL[call.role] ?? call.role}
-      subject={<span className="font-mono text-xs font-normal">{call.model}</span>}
+      subject={name}
       meta={<Elapsed start={call.startedAt} end={call.endedAt} />}
       openMeta={<CallMeta call={call} />}
       status={(

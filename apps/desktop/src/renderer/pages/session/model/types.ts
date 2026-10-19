@@ -249,6 +249,16 @@ export interface TurnStats {
   docsWritten: number;
 }
 
+/**
+ * One transcript step inside an activity group. Lives in the model layer so
+ * describe.ts and the transcript components can share it without a cycle.
+ */
+export type ActivityItem =
+  | { kind: 'reason'; call: CallModel; reasoning?: ReasoningModel }
+  | { kind: 'call'; call: CallModel }
+  | { kind: 'action'; action: ActionModel; calls: readonly CallModel[] }
+  | { kind: 'context'; item: ContextItem };
+
 declare global {
   interface Window {
     wrenyardSession: SessionApi;

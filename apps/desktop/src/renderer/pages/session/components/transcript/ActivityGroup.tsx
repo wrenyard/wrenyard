@@ -28,8 +28,8 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/renderer/components/ui/collapsible';
-import { ACTION_KIND_LABEL, CALL_ROLE_LABEL, materialTitle } from '../../model/describe.js';
-import type { ActionModel, CallModel, ContextItem, ReasoningModel } from '../../model/types.js';
+import { ACTION_KIND_LABEL, CALL_ROLE_LABEL, materialTitle, stepName } from '../../model/describe.js';
+import type { ActionModel, CallModel, ContextItem } from '../../model/types.js';
 import { Ellipsis } from '../live-indicators.js';
 import { MorphText } from '../morph-text.js';
 import { ActionRow } from './ActionCard.js';
@@ -37,11 +37,9 @@ import { ActivityRow } from './ActivityRow.js';
 import { AuxiliaryCallRow, ReasoningRow } from './CallRow.js';
 import { ContextItemBody } from './ToolCard.js';
 
-export type ActivityItem =
-  | { kind: 'reason'; call: CallModel; reasoning?: ReasoningModel }
-  | { kind: 'call'; call: CallModel }
-  | { kind: 'action'; action: ActionModel; calls: readonly CallModel[] }
-  | { kind: 'context'; item: ContextItem };
+/** Re-exported from the model layer: the step union this group renders. */
+export type { ActivityItem } from '../../model/types.js';
+import type { ActivityItem } from '../../model/types.js';
 
 /** Stable key of one item within its group. */
 export function groupId(item: ActivityItem): string {
@@ -153,6 +151,8 @@ function ContextItemRow({ item }: { item: ContextItem }) {
 export interface ActivityGroupProps {
   /** The group's items in time order. */
   items: readonly ActivityItem[];
+  /** The turn's context items, including action-scoped ones, for step naming. */
+  contextItems?: readonly ContextItem[];
   /** Ledger session id, forwarded to attachment media. */
   sessionId?: string;
   /** Cancel one dispatched task run; rejects when the daemon refuses. */
@@ -160,14 +160,29 @@ export interface ActivityGroupProps {
 }
 
 /** One collapsed stretch of agent work. */
-export function ActivityGroup({ items, sessionId, onCancelTask }: ActivityGroupProps) {
+export function ActivityGroup({ items, contextItems, sessionId, onCancelTask }: ActivityGroupProps) {
   const [open, setOpen] = useState(false);
   const running = runningLabel(items);
   const failed = failedCount(items);
+  const actionTitleById = new Map(items.flatMap((item) => {
+    if (item.kind !== 'action' || item.action.title.trim() === '') return [];
+    return [[item.action.id, item.action.title] as const];
+  }));
+  const naming = { contextItems, actionTitle: (id: string) => actionTitleById.get(id) };
+  const nameOf = (item: ActivityItem): string => stepName(item, naming);
   // A reasoning step joins the summary once it settled.
   const settled = items.filter((item) => !(item.kind === 'reason' && item.call.status === 'running'));
   if (running === undefined && settled.length === 0) return null;
   const HeaderIcon = items.length === 1 ? itemIcon(items[0]!) : List;
+  // A group holding one settled step names that step; a multi-step group keeps
+  // its kind-count summary.
+  const settledLabel = settled.length === 1 && items.length === 1
+    ? nameOf(settled[0]!)
+    : `${summary(settled)}${failed > 0 ? `（${failed} 项失败）` : ''}`;
+  const runningStep = items.find((item) =>
+    (item.kind === 'reason' || item.kind === 'call') && item.call.status === 'running'
+    || item.kind === 'action' && item.action.status === 'running');
+  const runningText = runningStep === undefined ? running : nameOf(runningStep);
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="wy-rise-in">
       <CollapsibleTrigger
@@ -179,14 +194,14 @@ export function ActivityGroup({ items, sessionId, onCancelTask }: ActivityGroupP
         )}
       >
         <HeaderIcon className="size-3.5 shrink-0" aria-hidden />
-        {running !== undefined ? (
+        {runningText !== undefined ? (
           <span className="inline-flex min-w-0 items-baseline">
-            <MorphText className="shimmer truncate" text={running} />
+            <MorphText className="shimmer truncate" text={runningText} />
             <Ellipsis />
           </span>
         ) : (
           <>
-            <span className="truncate">{summary(settled)}{failed > 0 ? `（${failed} 项失败）` : ''}</span>
+            <span className="truncate">{settledLabel}</span>
             {failed > 0 && <TriangleAlert className="size-3.5 shrink-0" aria-label="有失败的步骤" />}
           </>
         )}
@@ -198,15 +213,16 @@ export function ActivityGroup({ items, sessionId, onCancelTask }: ActivityGroupP
             {items.map((item) => {
               switch (item.kind) {
                 case 'reason':
-                  return <ReasoningRow key={groupId(item)} call={item.call} reasoning={item.reasoning} />;
+                  return <ReasoningRow key={groupId(item)} call={item.call} reasoning={item.reasoning} name={nameOf(item)} />;
                 case 'call':
-                  return <AuxiliaryCallRow key={groupId(item)} call={item.call} />;
+                  return <AuxiliaryCallRow key={groupId(item)} call={item.call} name={nameOf(item)} />;
                 case 'action':
                   return (
                     <ActionRow
                       key={groupId(item)}
                       action={item.action}
                       calls={item.calls}
+                      contextItems={contextItems}
                       sessionId={sessionId}
                       onCancelTask={onCancelTask}
                     />
