@@ -59,6 +59,10 @@ mac:
   category: public.app-category.developer-tools
   hardenedRuntime: true
   forceCodeSigning: false
+  # Never auto-discover a keychain identity: afterPack's ad-hoc signature is
+  # the release signature on every host, and per-binary timestamped signing
+  # with a local developer certificate only slows local packs.
+  identity: null
   icon: resources/icon.icns
 
 win:
