@@ -66,10 +66,6 @@ import {
 
 export type { AgentModelRoute } from './tools.mts'
 
-/** How long one bot turn may run before it is interrupted. */
-const TURN_TIMEOUT_MS = 20 * 60_000
-/** How long an interrupted turn may take to settle before the wake gives up. */
-const INTERRUPT_GRACE_MS = 60_000
 /** How often the config directory is polled for new, changed or removed files. */
 const CONFIG_POLL_MS = 5_000
 /** Default page size of the shared group transcript. */
@@ -205,7 +201,6 @@ interface TrackedTurn {
   turn: number
   botId: string
   handlers: Set<(outcome: TurnOutcome) => void>
-  timer?: ReturnType<typeof setTimeout>
   unsubscribe?: () => void
 }
 
@@ -1409,7 +1404,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     const settle = (outcome: TurnOutcome): void => {
       if (trackedTurns.get(key) !== tracked) return
       trackedTurns.delete(key)
-      if (tracked.timer !== undefined) clearTimeout(tracked.timer)
       tracked.unsubscribe?.()
       const turns = activeTurns.get(botId)
       turns?.delete(turn)
@@ -1445,17 +1439,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       settle(recorded)
       return
     }
-    if (trackedTurns.get(key) !== tracked) return
-    tracked.timer = setTimeout(() => {
-      void contextSession().interrupt(sessionId, turn).catch(error => {
-        log('warn', `bot agent could not interrupt turn ${turn} of session ${sessionId}: ${errorText(error)}`)
-      })
-      tracked.timer = setTimeout(() => {
-        settle({ turn, status: 'interrupted', error: 'turn timed out after 20 minutes' })
-      }, INTERRUPT_GRACE_MS)
-      tracked.timer.unref()
-    }, TURN_TIMEOUT_MS)
-    tracked.timer.unref()
   }
 
   function finishWakeTurn(botId: string, wake: Wake, sessionId: string, outcome: TurnOutcome): void {
@@ -1887,7 +1870,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
           })
         }
         for (const tracked of trackedTurns.values()) {
-          if (tracked.timer !== undefined) clearTimeout(tracked.timer)
           tracked.unsubscribe?.()
         }
         trackedTurns.clear()
