@@ -16,6 +16,8 @@ export interface ResponseObserver {
   end(): void;
   /** True when the response reached a protocol completion without an error. */
   succeeded(): boolean;
+  /** True when an official failure or in-stream error frame was observed. */
+  failedStream(): boolean;
   result(): GatewayUsage | undefined;
   /**
    * The official error identity (`type` / `code`) this response carried, when

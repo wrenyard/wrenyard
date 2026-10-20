@@ -173,10 +173,10 @@ export async function relayResponse(
       options.observer.feed(text);
       pending += text;
       flushFrames();
-      // The protocol's terminal event completes the response. Some upstreams
-      // keep the body open afterwards; waiting for it would let the client's
-      // disconnect turn a finished call into a cancellation without usage.
-      if (options.observer.succeeded()) {
+      // Every terminal frame settles the stream immediately, whether completed,
+      // incomplete, failed, or an in-stream error. Waiting for upstream EOF
+      // afterwards lets a client disconnect record the call as 499 without usage.
+      if (options.observer.succeeded() || options.observer.failedStream()) {
         await reader.cancel().catch(() => undefined);
         break;
       }

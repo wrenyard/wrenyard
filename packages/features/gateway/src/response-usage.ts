@@ -78,6 +78,7 @@ export class ResponseUsageObserver {
     return this.terminal && !this.failed
       && (this.adapter.emitted === undefined || !this.streamed || this.outputSeen || (this.usage.output ?? 0) > 0);
   }
+  failedStream(): boolean { return this.failed; }
   /**
    * True when a protocol that observes generation output saw this stream reach
    * completion with no output of any kind. It is the fail-closed view of a
