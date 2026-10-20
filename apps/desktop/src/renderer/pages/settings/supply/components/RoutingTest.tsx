@@ -59,7 +59,6 @@ import {
   ROUTING_RUNNING_LABEL,
   ROUTING_TASK_EMPTY,
   ROUTING_TASK_PLACEHOLDER,
-  ROUTING_TITLE,
   errorMessage,
 } from '../model/describe.js';
 import {
@@ -185,8 +184,7 @@ export function RoutingTest({ snapshot, active }: RoutingTestProps) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2>{ROUTING_TITLE}</h2>
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <div className="flex items-center gap-2">
           <Combobox
             items={taskIds}

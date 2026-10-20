@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { StatusBadge, type StatusTone } from '@/renderer/components/status-badge';
 import { Button } from '@/renderer/components/ui/button';
+import { Spinner } from '@/renderer/components/ui/spinner';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { clientAct, clientList } from '@/renderer/lib/desktop';
@@ -130,6 +131,7 @@ export function ClientsSettings() {
           <span className="min-w-0 truncate text-xs text-muted-foreground">{detail}</span>
           <Button
             variant="default"
+            size="sm"
             className="shrink-0"
             disabled={loading}
             onClick={() => { void act(entry, confirm.action); }}
@@ -138,6 +140,7 @@ export function ClientsSettings() {
           </Button>
           <Button
             variant="ghost"
+            size="sm"
             className="shrink-0"
             disabled={loading}
             onClick={() =>
@@ -157,7 +160,7 @@ export function ClientsSettings() {
     if (entry.busy !== undefined) {
       return (
         <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-          <Loader2 className="h-3 w-3 animate-spin" />
+          <Spinner className="size-3" />
           {BUSY_LABEL[entry.busy]}
         </span>
       );
@@ -177,15 +180,17 @@ export function ClientsSettings() {
         {canInstall(entry) && (
           <Button
             variant="outline"
+            size="sm"
             disabled={loading}
             onClick={() => requestAction(entry, 'install')}
           >
             安装
           </Button>
         )}
-        {canUpgrade(entry) && (
+        {canUpgrade(entry) && entry.lastError === undefined && (
           <Button
             variant="outline"
+            size="sm"
             disabled={loading}
             onClick={() => requestAction(entry, 'upgrade')}
           >
@@ -195,6 +200,7 @@ export function ClientsSettings() {
         {entry.lastError !== undefined && (
           <Button
             variant="outline"
+            size="sm"
             disabled={loading}
             onClick={() => requestAction(entry, entry.installed ? 'upgrade' : 'install')}
           >
@@ -216,6 +222,7 @@ export function ClientsSettings() {
         </div>
         <Button
           variant="outline"
+          size="sm"
           className="shrink-0"
           disabled={loading}
           onClick={() => { void refresh(true); }}

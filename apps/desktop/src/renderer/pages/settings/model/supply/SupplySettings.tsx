@@ -130,7 +130,9 @@ export function SupplySettings({
         <RoutingExclusionsSettings />
         <section className="flex flex-col gap-2">
           <h3 className="text-sm font-medium text-muted-foreground">路由测试</h3>
-          <RoutingTest snapshot={snapshot} active={routingActive && tab === 'routing'} />
+          <div className="flex flex-col gap-3 overflow-hidden rounded-xl border bg-card p-4">
+            <RoutingTest snapshot={snapshot} active={routingActive && tab === 'routing'} />
+          </div>
         </section>
       </TabsContent>
 
