@@ -138,6 +138,11 @@ export interface SessionHost {
   }>;
   cancelTaskRun(taskRunId: string): Promise<void>;
   /**
+   * True while the task run exists and its status is still queued or running;
+   * null, unknown and terminal runs resolve false.
+   */
+  taskRunActive(taskRunId: string): Promise<boolean>;
+  /**
    * Optional agent tool port for one session. When a host returns one, the
    * session's reason request uses the port's own system prompt and native tool
    * set, and every completed tool call is dispatched to {@link AgentToolPort.run}

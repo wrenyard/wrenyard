@@ -438,11 +438,20 @@ export async function runDispatchAction(
   // The convergence gate: refuse a repeat full implementation dispatch for the
   // same target while it is still in flight or its failure has neither new
   // evidence nor a condition change behind it.
-  const decision = evaluateDispatchGate(ctx.currentEvents(), {
+  let decision = evaluateDispatchGate(ctx.currentEvents(), {
     project: project.id,
     task: taskId,
     ...(worktree === undefined ? {} : { worktree }),
   });
+  if (!decision.allowed && decision.kind === 'in-flight') {
+    // An open ledger span alone does not prove a live run: the parent action
+    // may have died without closing. Only a task run the host confirms queued
+    // or running — or an open span whose run id is missing — really refuses;
+    // otherwise the dispatch proceeds.
+    const anyActive = decision.hasMissingTaskRunId
+      || (await Promise.all(decision.taskRunIds.map((id) => deps.host.taskRunActive(id)))).some(Boolean);
+    if (!anyActive) decision = { allowed: true };
+  }
   if (!decision.allowed) return { status: 'failed', result: decision.message, deferred: [] };
 
   const rawTitle = typeof parsed.title === 'string' ? parsed.title.trim() : '';

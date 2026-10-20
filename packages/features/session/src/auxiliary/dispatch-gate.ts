@@ -5,7 +5,7 @@
  *
  * It reads only existing ledger events and adds no new event types.
  */
-import type { LedgerEvent } from '../ledger/store.ts';
+import type { LedgerEvent, TaskSpanRequest } from '../ledger/store.ts';
 
 /** The dispatch target identity: project, task and optional managed worktree. */
 export interface DispatchTarget {
@@ -22,7 +22,8 @@ export function targetKeyOf(target: DispatchTarget): string {
 /** The gate's verdict: allowed, or refused as blocked or in-flight. */
 export type DispatchGateDecision =
   | { allowed: true }
-  | { allowed: false; kind: 'blocked' | 'in-flight'; message: string };
+  | { allowed: false; kind: 'blocked'; message: string }
+  | { allowed: false; kind: 'in-flight'; message: string; taskRunIds: string[]; hasMissingTaskRunId: boolean };
 
 /** Bound for the refusal message; keeps the blocked summary readable. */
 const MESSAGE_LIMIT = 160;
@@ -61,35 +62,46 @@ function isEvidenceEvent(event: LedgerEvent, failedActionId: string): boolean {
 
 /**
  * Decide whether one more implementation dispatch may open a task run for the
- * target. A matching task span whose parent action never finished means a
- * dispatch is still in flight. Otherwise the latest matching failed action
- * blocks a repeat until an evidence event with a greater seq is recorded.
+ * target. A matching task span whose own `span.finished` is still absent is an
+ * open span: it may mean a dispatch is still in flight, so the gate reports
+ * its task run id and the caller verifies the run is still live before
+ * refusing. Otherwise the latest matching failed action blocks a repeat until
+ * an evidence event with a greater seq is recorded.
  */
 export function evaluateDispatchGate(
   events: readonly LedgerEvent[],
   target: DispatchTarget,
 ): DispatchGateDecision {
-  const finishedActions = new Set<string>();
+  const finishedTaskSpans = new Set<string>();
   for (const event of events) {
-    if (event.type === 'action.finished') finishedActions.add(event.id);
+    if (event.type === 'span.finished' && event.kind === 'task') finishedTaskSpans.add(event.id);
   }
 
   const matchingParents = new Set<string>();
-  let inFlight = false;
+  const taskRunIds: string[] = [];
+  let hasMissingTaskRunId = false;
   for (const event of events) {
     if (!isTaskSpanOfTarget(event, target)) continue;
     const parent = 'parent' in event ? (event as { parent?: string }).parent : undefined;
     if (parent === undefined) continue;
     matchingParents.add(parent);
-    if (!finishedActions.has(parent)) inFlight = true;
+    const span = event as Extract<LedgerEvent, { type: 'span.started' }>;
+    // A span that closed itself never blocks, even if its parent action
+    // never recorded action.finished.
+    if (finishedTaskSpans.has(span.id)) continue;
+    const taskRunId = (span.request as TaskSpanRequest).taskRunId;
+    if (typeof taskRunId === 'string' && taskRunId !== '') taskRunIds.push(taskRunId);
+    else hasMissingTaskRunId = true;
   }
-  if (inFlight) {
+  if (taskRunIds.length > 0 || hasMissingTaskRunId) {
     return {
       allowed: false,
       kind: 'in-flight',
       message: truncate(
         'Dispatch refused: another dispatch for this target is still running; no second run was created.',
       ),
+      taskRunIds,
+      hasMissingTaskRunId,
     };
   }
 
