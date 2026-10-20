@@ -1,4 +1,4 @@
-import { cp, mkdir } from 'node:fs/promises';
+import { cp, mkdir, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRequest } from '@wrenyard/agent-client';
@@ -61,6 +61,91 @@ function tomlString(value: string): string {
     return JSON.stringify(value);
 }
 
+/**
+ * Discover the newest native session id under a Grok run home. Grok stores
+ * sessions as `<home>/sessions/<encoded-cwd>/<session-id>` directories; the
+ * newest entry by mtime is the id `--resume` accepts. Returns `undefined`
+ * when the run home has no session tree yet or cannot be read.
+ */
+export async function findGrokSessionIdInHome(home: string): Promise<string | undefined> {
+    const sessionsDir = join(home, 'sessions');
+    let cwdDirs: string[];
+    try {
+        cwdDirs = await readdir(sessionsDir);
+    }
+    catch {
+        return undefined;
+    }
+    let newest: { id: string; mtimeMs: number } | undefined;
+    for (const cwdDir of cwdDirs) {
+        const parent = join(sessionsDir, cwdDir);
+        let entries: string[];
+        try {
+            entries = await readdir(parent);
+        }
+        catch {
+            continue;
+        }
+        for (const entry of entries) {
+            let mtimeMs: number;
+            try {
+                const info = await stat(join(parent, entry));
+                if (!info.isDirectory())
+                    continue;
+                mtimeMs = info.mtimeMs;
+            }
+            catch {
+                continue;
+            }
+            if (newest === undefined || mtimeMs > newest.mtimeMs)
+                newest = { id: entry, mtimeMs };
+        }
+    }
+    return newest?.id;
+}
+
+/**
+ * Find the newest Grok run home under the shared runs directory that carries
+ * a native session directory for `sessionId`. Returns `undefined` when no run
+ * home contains it or the runs directory cannot be read.
+ */
+async function findGrokRunHomeWithSession(env: NodeJS.ProcessEnv, sessionId: string): Promise<string | undefined> {
+    const runsDir = clientStateDirForEnv(env, 'grok', 'runs');
+    let runDirs: string[];
+    try {
+        runDirs = await readdir(runsDir);
+    }
+    catch {
+        return undefined;
+    }
+    let newest: { path: string; mtimeMs: number } | undefined;
+    for (const runDir of runDirs) {
+        const home = join(runsDir, runDir);
+        const sessionsDir = join(home, 'sessions');
+        let cwdDirs: string[];
+        try {
+            cwdDirs = await readdir(sessionsDir);
+        }
+        catch {
+            continue;
+        }
+        for (const cwdDir of cwdDirs) {
+            const candidate = join(sessionsDir, cwdDir, sessionId);
+            try {
+                const info = await stat(candidate);
+                if (!info.isDirectory())
+                    continue;
+                if (newest === undefined || info.mtimeMs > newest.mtimeMs)
+                    newest = { path: home, mtimeMs: info.mtimeMs };
+            }
+            catch {
+                continue;
+            }
+        }
+    }
+    return newest?.path;
+}
+
 export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv): Promise<ProcessSpec> {
     assertLaunch(request);
     if (!request.clientReasoningEffort)
@@ -81,7 +166,18 @@ export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv):
             await cp(snapshot, home, { recursive: true, force: false });
         }
         catch {
-            throw new Error(`native Grok resume snapshot for session ${request.resumeSessionId} was not found`);
+            // The dedicated snapshot may never have been written (e.g. the
+            // previous run was killed). Fall back to the newest run home that
+            // still holds this session's directory and copy that instead.
+            const runHome = await findGrokRunHomeWithSession(env, request.resumeSessionId);
+            if (runHome === undefined)
+                throw new Error(`native Grok resume snapshot for session ${request.resumeSessionId} was not found`);
+            try {
+                await cp(runHome, home, { recursive: true, force: false });
+            }
+            catch {
+                throw new Error(`native Grok resume snapshot for session ${request.resumeSessionId} was not found`);
+            }
         }
     }
     else if (request.mode !== 'gateway') {

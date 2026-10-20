@@ -14,7 +14,10 @@ import { positiveInt } from '@wrenyard/agent-client/statistics';
  * end aggregate, so usage is buffered last-wins and exactly one canonical
  * turn_usage is emitted at finalization, before the single terminal record.
  */
-export async function* decodeGrok(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent> {
+export async function* decodeGrok(
+    events: AsyncIterable<StreamChunk>,
+    discoverSessionId?: () => Promise<string | undefined>,
+): AsyncGenerator<AgentEvent> {
     let sessionId: string | undefined;
     let output = '';
     let message = '';
@@ -46,8 +49,24 @@ export async function* decodeGrok(events: AsyncIterable<StreamChunk>): AsyncGene
                     const canonical = canonicalUsage(usage);
                     if (canonical)
                         yield canonical;
-                    if (terminal)
-                        yield terminal;
+                    if (sessionId === undefined && discoverSessionId) {
+                        // The stream ended without a native session id (for
+                        // example a killed run); ask the caller to discover it
+                        // from the run home. Discovery failures degrade to
+                        // "no session id", never to a decoder failure.
+                        try {
+                            sessionId = await discoverSessionId();
+                        }
+                        catch {
+                            sessionId = undefined;
+                        }
+                    }
+                    if (terminal) {
+                        if (terminal.type === 'output' && sessionId !== undefined && terminal.record.native_session_id === undefined)
+                            yield { type: 'output', record: { ...terminal.record, native_session_id: sessionId } };
+                        else
+                            yield terminal;
+                    }
                     else
                         yield finishedEvent('grok', sessionId, output, failed || !ended || item.event.exitCode !== 0 && item.event.exitCode !== null);
                 }

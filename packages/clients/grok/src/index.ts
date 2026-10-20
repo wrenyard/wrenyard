@@ -4,7 +4,7 @@ import type { AccountOptions, AccountSnapshot, AgentClient, AgentRequest, AgentS
 import { readGrokAccount } from './account.ts';
 import { decodeGrok } from './events.ts';
 import { inspectGrok } from './installation.ts';
-import { launchGrok } from './launch.ts';
+import { findGrokSessionIdInHome, launchGrok } from './launch.ts';
 export class GrokClient implements AgentClient {
     readonly id = 'grok';
     readonly capabilities = { run: true, account: true, resume: true };
@@ -14,7 +14,12 @@ export class GrokClient implements AgentClient {
     }
     async start(request: AgentRequest, options?: OperationOptions): Promise<AgentSession> {
         const env = options?.env ?? process.env;
-        return await openSession(await launchGrok(request, env), decodeGrok, options);
+        const spec = await launchGrok(request, env);
+        const home = spec.env?.GROK_HOME;
+        const discover = typeof home === 'string' && home !== ''
+            ? () => findGrokSessionIdInHome(home)
+            : undefined;
+        return await openSession(spec, (chunks) => decodeGrok(chunks, discover), options);
     }
     readAccount(options?: AccountOptions): Promise<AccountSnapshot> {
         return readGrokAccount(this.execution, options);
