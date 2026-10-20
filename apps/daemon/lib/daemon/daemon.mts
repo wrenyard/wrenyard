@@ -1082,8 +1082,6 @@ async function createForemanDaemonResources(
       }
       // A structured-output delivery failure is already classified.
       if ('state' in fault) return gateway.reportNativeRouteFault(provider, bareModel, fault, guard)
-      // An upstream error without a status cannot be classified: record nothing.
-      if (fault.status === undefined) return undefined
       const providerDefinition = catalog.provider(provider)
       if (providerDefinition === undefined) return undefined
       // The provider hook reads the error identity exactly as it would from a

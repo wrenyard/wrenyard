@@ -95,7 +95,8 @@ function codeOf(body: unknown): string | undefined {
  * - every other 4xx is a request the caller must fix and never poisons a route;
  *   a context-window overflow is recorded under its own non-poisoning category.
  */
-function genericFailure(status: number, headers: Headers, body: unknown, nowMs: number): RouteFailureOutcome | undefined {
+function genericFailure(status: number | undefined, headers: Headers, body: unknown, nowMs: number): RouteFailureOutcome | undefined {
+  if (status === undefined) return undefined;
   if (status === 429) {
     const reset = retryAfter(headers.get('retry-after'), nowMs) ?? rateLimitReset(headers.get('x-ratelimit-reset'), nowMs);
     return { state: 'rate_limited', scope: 'pool', faultKind: 'rate_limited', ...(reset === undefined ? {} : { until: new Date(reset).toISOString() }) };
@@ -123,7 +124,7 @@ function genericFailure(status: number, headers: Headers, body: unknown, nowMs: 
 export function classifyRouteOutcome(
   provider: ProviderDefinition,
   modelId: string,
-  status: number,
+  status: number | undefined,
   headers: Headers,
   body: unknown,
   nowMs: number,
@@ -151,7 +152,7 @@ export function classifyRouteOutcome(
  * non-poisoning or non-error outcome. This is the exact view the route state
  * store consumes.
  */
-export function classifyRouteFailure(provider: ProviderDefinition, modelId: string, status: number, headers: Headers, body: unknown, nowMs: number): ClassifiedRouteFailure | undefined {
+export function classifyRouteFailure(provider: ProviderDefinition, modelId: string, status: number | undefined, headers: Headers, body: unknown, nowMs: number): ClassifiedRouteFailure | undefined {
   const outcome = classifyRouteOutcome(provider, modelId, status, headers, body, nowMs);
   return outcome !== undefined && isPoisoning(outcome) ? outcome : undefined;
 }

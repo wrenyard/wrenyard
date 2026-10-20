@@ -97,8 +97,8 @@ const PAID_DECLARATIONS = [
  * available only from within the OpenCode client, and a promotion that ends
  * returns the same family of codes, so both identities are read together.
  */
-function upstreamErrorParts(body: unknown): { identity: string; message: string } {
-  if (body === null || typeof body !== 'object' || Array.isArray(body)) return { identity: '', message: '' };
+function upstreamErrorParts(body: unknown): { identity: string; message: string; resetsAt: string } {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return { identity: '', message: '', resetsAt: '' };
   const root = body as Record<string, unknown>;
   const error = root.error !== null && typeof root.error === 'object' && !Array.isArray(root.error)
     ? root.error as Record<string, unknown>
@@ -107,6 +107,7 @@ function upstreamErrorParts(body: unknown): { identity: string; message: string 
   return {
     identity: `${text(error.type)} ${text(error.code)}`,
     message: `${text(error.message)} ${text(root.message)}`.trim(),
+    resetsAt: text(error.resets_at),
   };
 }
 
@@ -155,9 +156,17 @@ export const definition = defineProvider({
    * stays a fault of this exact route.
    */
   classifyUpstreamError({ status, body }: UpstreamRouteErrorInput): UpstreamRouteFailure | undefined {
-    const { identity, message } = upstreamErrorParts(body);
+    const { identity, message, resetsAt } = upstreamErrorParts(body);
     if (status === 403 && (/\bFreeTierError\b/i.test(identity) || /free[_ ]?tier|free promotion/i.test(message))) {
       return { state: 'access_denied', scope: 'pool', quotaPoolId: 'opencode-zen/free' };
+    }
+    // Free/Go usage is exhausted until the reset instant the upstream states;
+    // a native OpenCode client reports this without an HTTP status.
+    if (/\busage[\w_ ]*exceeded\b/i.test(`${identity} ${message}`)) {
+      if (/\bfree\b/i.test(`${identity} ${message}`)) {
+        return { state: 'quota_exhausted', scope: 'pool', quotaPoolId: 'opencode-zen/free', ...(resetsAt ? { until: resetsAt } : {}) };
+      }
+      return { state: 'quota_exhausted', scope: 'route', ...(resetsAt ? { until: resetsAt } : {}) };
     }
     const modelGone = /model not found|unknown model|(?:do(?:es)? not|don't) have access to (?:the )?model/i.test(message);
     if (modelGone || (status === 404 && /not found|unknown model|access to the model/i.test(message))) {

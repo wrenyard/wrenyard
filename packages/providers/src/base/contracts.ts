@@ -192,7 +192,7 @@ export interface UpstreamRouteFailure {
 }
 export interface UpstreamRouteErrorInput {
   modelId: string;
-  status: number;
+  status?: number;
   headers: Headers;
   body: unknown;
   nowMs: number;

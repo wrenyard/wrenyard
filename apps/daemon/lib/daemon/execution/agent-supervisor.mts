@@ -203,6 +203,8 @@ interface RegistryEntry {
   /** Client family chosen at launch; used for codebuddy-only session snapshots. */
   launchClientFamily?: ClientFamily
   pendingFailureClass?: string
+  // Structured upstream identity from a failed terminal record, verbatim.
+  pendingUpstreamError?: UpstreamError
   /** Resolved by the attempt-deadline (timeout) handler so a bounded
    *  stream-drain await converges at the deadline instead of hanging on a
    *  held stdio pipe after an early child close. */
@@ -991,6 +993,12 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         entry.sawErrorResult ||= final.isError
         if (final.output) entry.finalOutput = final.output
       }
+      // A failed terminal record can carry the upstream identity as a
+      // structured error object; keep it verbatim beside the scraped text.
+      if (final?.isError) {
+        const structured = extractUpstreamErrorRecord(event)
+        if (structured) entry.pendingUpstreamError = mergeUpstreamError(entry.pendingUpstreamError, structured)
+      }
       const streamErrorText = extractStreamJsonErrorText(event, final)
       if (streamErrorText) {
         entry.resultErrorTail = tailString(
@@ -1055,10 +1063,12 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     // The upstream identity the client reported, when its captured diagnostics
     // state one. It is carried beside the failure diagnostic so the downstream
     // gateway classification can decide the fault; this layer never classifies.
+    // A structured error object on the terminal record wins per-field over the
+    // scraped text.
     // Read from the client's own messages and diagnostics, never from tool
     // results, so a status line the agent merely printed cannot fault a route.
     const upstreamError = status === 'failed'
-      ? extractUpstreamError([messageOutput === null ? null : redactDiagnosticText(messageOutput), failureDiagnostic].filter((part): part is string => part !== null).join('\n') || null)
+      ? mergeUpstreamError(entry.pendingUpstreamError, extractUpstreamError([messageOutput === null ? null : redactDiagnosticText(messageOutput), failureDiagnostic].filter((part): part is string => part !== null).join('\n') || null))
       : undefined
 
     this.terminalizeRunning(entry, {
@@ -2342,6 +2352,40 @@ function extractUpstreamError(text: string | null): UpstreamError | undefined {
     ...(errorType === undefined ? {} : { errorType }),
     ...(message === undefined ? {} : { message }),
     ...(resetsAt === undefined || Number.isNaN(Date.parse(resetsAt)) ? {} : { resetsAt }),
+  }
+}
+
+/** The structured upstream identity on a failed terminal record, verbatim. */
+function extractUpstreamErrorRecord(event: StreamEventRecord): UpstreamError | undefined {
+  const error = recordProp(event, 'error')
+  if (error === null) return undefined
+  const status = numberProp(error, 'status') ?? undefined
+  const errorType = stringProp(error, 'type') ?? undefined
+  const message = stringProp(error, 'message') ?? undefined
+  const resetsAt = stringProp(error, 'resets_at') ?? undefined
+  if (status === undefined && errorType === undefined && message === undefined && resetsAt === undefined) return undefined
+  return {
+    ...(status === undefined ? {} : { status }),
+    ...(errorType === undefined || errorType === '' ? {} : { errorType }),
+    ...(message === undefined || message === '' ? {} : { message }),
+    ...(resetsAt === undefined || resetsAt === '' || Number.isNaN(Date.parse(resetsAt)) ? {} : { resetsAt }),
+  }
+}
+
+/** Structured fields win per-field over the scraped text identity. */
+function mergeUpstreamError(structured: UpstreamError | undefined, scraped: UpstreamError | undefined): UpstreamError | undefined {
+  if (structured === undefined) return scraped
+  if (scraped === undefined) return structured
+  const status = structured.status ?? scraped.status
+  const errorType = structured.errorType ?? scraped.errorType
+  const message = structured.message ?? scraped.message
+  const resetsAt = structured.resetsAt ?? scraped.resetsAt
+  if (status === undefined && errorType === undefined && message === undefined && resetsAt === undefined) return undefined
+  return {
+    ...(status === undefined ? {} : { status }),
+    ...(errorType === undefined ? {} : { errorType }),
+    ...(message === undefined ? {} : { message }),
+    ...(resetsAt === undefined ? {} : { resetsAt }),
   }
 }
 
