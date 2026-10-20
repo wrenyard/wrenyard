@@ -1,6 +1,7 @@
 /**
- * The memory auxiliary task: one memory-search call before every reason
- * request. It selects at most three root memory files from the current index
+ * The memory auxiliary task before every reason request: a BM25 lexical pass
+ * over INDEX lines may recall memories without a model call; otherwise one
+ * memory-search call selects at most three root memory files from the index
  * and publishes each changed one as a `memory.recalled` event with source
  * `memory-search`.
  */
@@ -119,6 +120,107 @@ function buildMemorySearch(input: MemorySearchViewInput, correction?: string): B
   return twoPartView(MEMORY_SEARCH_SYSTEM, tag('wy-memory-search', [], body), 'wy-memory-search');
 }
 
+// ─── Lexical memory recall ──────────────────────────────────────────────────
+
+/** Minimum indexed memories before the lexical pass may skip the LLM selector. */
+const LEXICAL_MIN_DOCS = 4;
+/** Top BM25 score must beat the runner-up by this factor to be a clear winner. */
+const LEXICAL_CLEAR_RATIO = 2;
+const BM25_K1 = 1.2;
+const BM25_B = 0.75;
+
+interface LexicalMemoryDoc {
+  path: string;
+  tokens: string[];
+}
+
+/** One lexical document per index-listed path; the first index line for each path wins. */
+function lexicalMemoryDocs(memoryIndex: string): LexicalMemoryDoc[] {
+  const lineByPath = new Map<string, string>();
+  for (const line of memoryIndex.split('\n')) {
+    for (const path of canonicalMemoryTargets(line)) {
+      if (!lineByPath.has(path)) lineByPath.set(path, line);
+    }
+  }
+  return [...lineByPath.entries()].map(([path, line]) => ({ path, tokens: recallTokens(line) }));
+}
+
+/** Lowercase Latin/digit/underscore tokens plus CJK unigrams or bigrams. */
+function recallTokens(text: string): string[] {
+  const tokens: string[] = [];
+  const lower = text.toLowerCase();
+  for (const match of lower.matchAll(/[a-z0-9_]+/gu)) tokens.push(match[0]!);
+  const cjk = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+/gu;
+  for (const match of text.matchAll(cjk)) {
+    const run = match[0]!;
+    if (run.length === 1) tokens.push(run);
+    else {
+      for (let index = 0; index < run.length - 1; index += 1) tokens.push(run.slice(index, index + 2));
+    }
+  }
+  return tokens;
+}
+
+/** Standard BM25 scores for one query against the given lexical documents. */
+function bm25Scores(query: readonly string[], docs: readonly LexicalMemoryDoc[]): number[] {
+  const n = docs.length;
+  if (n === 0) return [];
+  const avgLen = docs.reduce((sum, doc) => sum + doc.tokens.length, 0) / n || 1;
+  const df = new Map<string, number>();
+  for (const doc of docs) {
+    const seen = new Set<string>();
+    for (const token of doc.tokens) {
+      if (!seen.has(token)) {
+        seen.add(token);
+        df.set(token, (df.get(token) ?? 0) + 1);
+      }
+    }
+  }
+  return docs.map((doc) => {
+    const len = doc.tokens.length;
+    const freq = new Map<string, number>();
+    for (const token of doc.tokens) freq.set(token, (freq.get(token) ?? 0) + 1);
+    let score = 0;
+    for (const term of query) {
+      const f = freq.get(term) ?? 0;
+      if (f === 0) continue;
+      const docFreq = df.get(term) ?? 0;
+      const idf = Math.log(1 + (n - docFreq + 0.5) / (docFreq + 0.5));
+      score += idf * (f * (BM25_K1 + 1)) / (f + BM25_K1 * (1 - BM25_B + BM25_B * len / avgLen));
+    }
+    return score;
+  });
+}
+
+/**
+ * BM25 picks from the current recall text, or `undefined` when the corpus is
+ * too small, the query is empty, scores are non-positive, or the top hit is ambiguous.
+ */
+function lexicalMemoryPicks(
+  input: MemorySearchViewInput,
+  memoryIndex: string,
+): { path: string; reason: string }[] | undefined {
+  const docs = lexicalMemoryDocs(memoryIndex);
+  if (docs.length < LEXICAL_MIN_DOCS) return undefined;
+  const queryText = [
+    input.userText,
+    input.lastReasonText,
+    ...input.actionResults.map((result) => `${result.name} ${result.status} ${result.text}`),
+  ].join('\n');
+  const query = recallTokens(queryText);
+  if (query.length === 0) return undefined;
+  const scores = bm25Scores(query, docs);
+  const ranked = scores
+    .map((score, index) => ({ score, index }))
+    .sort((left, right) => right.score - left.score);
+  const first = ranked[0]?.score ?? 0;
+  const second = ranked[1]?.score ?? 0;
+  const best = ranked[0]?.index ?? 0;
+  if (first <= 0) return undefined;
+  if (second > 0 && first < LEXICAL_CLEAR_RATIO * second) return undefined;
+  return [{ path: docs[best]!.path, reason: `lexical match (score ${first.toFixed(2)})` }];
+}
+
 // ─── Memory search ──────────────────────────────────────────────────────────
 
 /** The engine surface one memory search needs. */
@@ -126,14 +228,15 @@ export type MemorySearchHost = Pick<SessionCallHost, 'ledger' | 'invoke' | 'port
 
 /**
  * One memory search before every reasoning request: a system auxiliary task
- * owned by the turn and indexed by the step it prepares. It selects at most
- * three root memory files from the current index and publishes each changed one
- * as a `memory.recalled` event whose parent is the search span. An unusable
- * selection (no tool call, several calls, unparsable arguments or a failed
- * validation) is retried exactly once through the same structured tool call,
- * with the classified diagnostic embedded in the correction request. A search
- * that is still unusable is reported as a `system.warning` and the reasoning
- * request still runs.
+ * owned by the turn and indexed by the step it prepares. A BM25 lexical pass
+ * over INDEX lines may recall memories without invoking the selector model; when
+ * it does not, the task selects at most three root memory files from the current
+ * index and publishes each changed one as a `memory.recalled` event whose parent
+ * is the search span. An unusable selection (no tool call, several calls,
+ * unparsable arguments or a failed validation) is retried exactly once through
+ * the same structured tool call, with the classified diagnostic embedded in the
+ * correction request. A search that is still unusable is reported as a
+ * `system.warning` and the reasoning request still runs.
  */
 export async function runMemorySearch(
   host: MemorySearchHost,
@@ -156,6 +259,11 @@ export async function runMemorySearch(
     lastReasonText: latestReasonText(events),
     actionResults: turnActionResults(turn, events),
   };
+  const lexical = lexicalMemoryPicks(input, memoryIndex);
+  if (lexical !== undefined) {
+    await publishMemoryPicks(host, session, turn, step, events, memory, lexical, turnId(turn.turn));
+    return;
+  }
   // The same tool declaration and forced tool choice on every attempt.
   const tools = [selectMemoriesTool(targets)];
   const toolChoice = { name: MEMORY_SELECTION.tool };
@@ -187,7 +295,21 @@ export async function runMemorySearch(
     return;
   }
   const { selection, spanId } = result.value;
-  for (const pick of selection.picks) {
+  await publishMemoryPicks(host, session, turn, step, events, memory, selection.picks, spanId);
+}
+
+/** Publish validated memory picks as `memory.recalled` events when content changed. */
+async function publishMemoryPicks(
+  host: MemorySearchHost,
+  session: SessionRuntime,
+  turn: TurnRuntime,
+  step: number,
+  events: readonly LedgerEvent[],
+  memory: WorkspaceMemoryPort | undefined,
+  picks: readonly { path: string; reason: string }[],
+  parent: string,
+): Promise<void> {
+  for (const pick of picks) {
     if (turn.finished || turn.abort.signal.aborted) break;
     const file = memory === undefined ? session.files.read(pick.path) : readMemoryFile(memory, pick.path);
     if (!file) continue;
@@ -197,7 +319,7 @@ export async function runMemorySearch(
       type: 'memory.recalled',
       turn: turn.turn,
       step,
-      parent: spanId,
+      parent,
       path: pick.path,
       content: file.content,
       version,
