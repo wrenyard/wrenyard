@@ -85,8 +85,9 @@ ends its turn, and continues when the result is in, instead of polling.
 - A bot's memory works like workspace memory: before each step the memory
   search picks the entries the turn needs from the bot's own memory index, and
   a final reply may save new entries there.
-- Queued wakes and watched sessions survive a daemon restart,
-  and a wake interrupted by a restart is retried once.
+- Queued wakes and watched sessions survive a daemon restart. A bot turn
+  interrupted by shutdown stays interrupted; the bot acts again on its next
+  routine fire or message.
 - The bot's conversation is shown on the Bots page. Type in the composer there
   to wake the bot with your own message.
 

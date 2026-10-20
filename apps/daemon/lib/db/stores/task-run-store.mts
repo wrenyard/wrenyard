@@ -15,7 +15,6 @@ export interface RunningTaskRunWrite {
   structured: boolean
   startedAt: string
   updatedAt: string
-  resumeInterruptedTask: boolean
   /** Authoritative resolved definition provenance; null for pre-migration unknown. */
   definitionSource: TaskRunDefinitionSource
 }
@@ -75,7 +74,6 @@ export class TaskRunStore {
       write.taskRunId,
     )
     if (existing?.status === 'cancelled') return 'cancelled'
-    if (existing?.status === 'interrupted' && !write.resumeInterruptedTask) return 'interrupted'
 
     this.run(
       `INSERT INTO tasks (

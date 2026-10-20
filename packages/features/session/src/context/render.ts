@@ -211,9 +211,7 @@ export interface RenderEventOptions {
  * Render one current context event as text, or `undefined` for observational
  * events (spans, `step.finished`, `action.titled`), post-interrupt results and
  * every event outside {@link CONTEXT_EVENT_TYPES}. Thinking is a context event
- * and renders before the message it precedes. `resumedTurns` names the original
- * turns a restart continuation resumes: only their after-interrupt results are
- * preserved, so completed side effects survive the restart.
+ * and renders before the message it precedes.
  *
  * `opts.reduced` renders the cold form of a reduced event: long assistant texts
  * and tool results are cut to head plus tail, documents, memory recalls and
@@ -223,7 +221,6 @@ export interface RenderEventOptions {
  */
 export function renderEventText(
   event: LedgerEvent,
-  resumedTurns?: ReadonlySet<number>,
   opts?: RenderEventOptions,
 ): string | undefined {
   if (!CONTEXT_EVENT_TYPES.has(event.type)) return undefined;
@@ -266,11 +263,8 @@ export function renderEventText(
     case 'action.started':
       return tag('action', [['id', event.id], ['type', event.action.type]], escapeBody(event.action.prompt));
     case 'action.finished':
-      // An interrupted result stays out of the context, unless the turn was
-      // resumed by a restart continuation: then the completed side effect is
-      // exactly what the follow-up turn must not repeat.
-      if (event.afterInterrupt === true
-        && (event.turn === undefined || resumedTurns?.has(event.turn) !== true)) {
+      // An interrupted result stays out of the context.
+      if (event.afterInterrupt === true) {
         return undefined;
       }
       // The status and the structured fields are always kept; only the bulky
@@ -314,28 +308,10 @@ export function renderEventText(
   }
 }
 
-/**
- * The original turns a restart continuation links back to, derived from the
- * `turn.started.resumedFrom` markers on the ledger. Only these turns keep their
- * post-interrupt action results visible.
- */
-export function resumedOriginalTurns(events: readonly LedgerEvent[]): Set<number> {
-  const resumedTurns = new Set<number>();
-  for (const event of events) {
-    if (event.type !== 'turn.started' || event.resumedFrom === undefined) continue;
-    const match = /^t(\d+)$/u.exec(event.resumedFrom);
-    if (match !== null) resumedTurns.add(Number(match[1]));
-  }
-  return resumedTurns;
-}
-
 /** Render the approved context events as TEXT ONLY inside `<events>`. */
 export function renderEventsBlock(events: readonly LedgerEvent[]): string {
-  // A restart continuation names the turn it resumes; that turn's post-interrupt
-  // results stay visible only for this linked follow-up.
-  const resumedTurns = resumedOriginalTurns(events);
   const rendered = events
-    .map((event) => renderEventText(event, resumedTurns))
+    .map((event) => renderEventText(event))
     .filter((text): text is string => text !== undefined);
   const body = rendered.length === 0 ? '' : `\n${rendered.join('\n')}`;
   return `<events>${body}\n</events>`;

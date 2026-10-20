@@ -268,17 +268,6 @@ export interface CreateBotAgentKernelOptions {
 export interface BotAgentKernel {
   start(): Promise<void>
   stop(): Promise<void>
-  /**
-   * Opt the private bot context engine into restart recovery before a graceful
-   * shutdown closes it. A no-op once the kernel is stopped or while the lazy
-   * context was never created: an absent engine has no in-flight turns.
-   */
-  prepareForRestart(): void
-  /**
-   * Arm the bot context engine's deferred restart recovery, creating the
-   * engine when absent so it can seed continuations from this kernel's ledger.
-   */
-  startBackgroundRecovery(): void
   list(): AgentBotSummary[]
   get(id: string): Promise<{
     bot: AgentBotSummary
@@ -574,15 +563,6 @@ function parseState(raw: string): KernelState {
       const queue = Array.isArray(value.queue)
         ? value.queue.map(readWake).filter((wake): wake is Wake => wake !== undefined)
         : []
-      // One-shot migration of a legacy HEAD `inflight` entry: replay it only
-      // while its raw attempts are below HEAD's replay cap of 2.
-      if (isPlainObject(value.inflight)) {
-        const attempts = typeof value.inflight.attempts === 'number' ? value.inflight.attempts : 0
-        const inflight = readWake(value.inflight)
-        if (attempts < 2 && inflight !== undefined && !queue.some(wake => wake.id === inflight.id)) {
-          queue.unshift(inflight)
-        }
-      }
       const wakeKeys = Array.isArray(value.wakeKeys)
         ? value.wakeKeys.filter((key): key is string => typeof key === 'string' && key !== '')
         : undefined
@@ -1926,23 +1906,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
         context = undefined
       })()
       return stopPromise
-    },
-
-    prepareForRestart(): void {
-      // Same guard as stop(): once stopped there is nothing left to prepare.
-      // The context is created lazily, so an absent one has no in-flight turns
-      // and must not be created here just to opt it in.
-      if (stopped) return
-      if (context === undefined) return
-      context.prepareForRestart?.()
-    },
-
-    startBackgroundRecovery(): void {
-      // Unlike prepareForRestart this must create the engine: its constructor
-      // seeds restart continuations from this kernel's own ledger under
-      // stateDir, and the deferred pass then admits one resumed follow-up turn
-      // per shutdown-interrupted turn.
-      contextSession().startBackgroundRecovery()
     },
 
     list(): AgentBotSummary[] {

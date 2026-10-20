@@ -445,15 +445,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
     // even before resources exist, so a request during startup stops the
     // scheduler the instance was handed.
     this.scheduler?.stop()
-    // The bot kernel's context must be opted in before its stop closes it:
-    // once stopped the engine is closed and the opt-in becomes a no-op, so a
-    // live bot turn would lose its resume token.
-    this.botAgents?.prepareForRestart()
     void this.botAgents?.stop()
-    // With every producer stopped, opt the session service into restart
-    // recovery before teardown closes it, so each shutdown interrupt persists
-    // its resume token ahead of the terminating turn.finished.
-    this.resources?.session.prepareForRestart?.()
     // Runs still queued for the desktop lane must not start while the drain
     // finalises: close the lane so their admission fails instead of handing
     // them ownership when the current holder releases.
@@ -1981,12 +1973,6 @@ async function createForemanDaemonResources(
   // A shutdown requested during startup skips start entirely: no interval is
   // armed and the stopped scheduler stays stopped.
   if (!options.isShuttingDown()) await workspaceScoped.scheduler.start()
-  // Arm the session's deferred recovery only now that IPC is listening: the
-  // passes replay session bodies, so they must never run before healthy.
-  if (!options.isShuttingDown()) workspaceScoped.session.startBackgroundRecovery()
-  // The bot kernel's context engine keeps its own ledger under the kernel
-  // state directory, so it needs the same deferred pass armed separately.
-  if (!options.isShuttingDown()) workspaceScoped.botAgents.startBackgroundRecovery()
 
   /**
    * Rebind every workspace-scoped resource to a new root and persist the
@@ -2107,20 +2093,6 @@ async function createForemanDaemonResources(
         await staged.scheduler.start()
       } catch (error) {
         writeDaemonLog('warn', 'scheduler failed to start after workspace switch', error)
-      }
-      // Arm deferred session recovery on the new binding only after the switch
-      // published and its services started; IPC is already listening here.
-      try {
-        staged.session.startBackgroundRecovery()
-      } catch (error) {
-        writeDaemonLog('warn', 'session background recovery failed to start after workspace switch', error)
-      }
-      // The bot kernel context keeps its own ledger, so arm its deferred
-      // restart recovery on the same staged binding.
-      try {
-        staged.botAgents.startBackgroundRecovery()
-      } catch (error) {
-        writeDaemonLog('warn', 'bot agent background recovery failed to start after workspace switch', error)
       }
     }
     return { ok: true, outcome: 'switched', workspace_root: targetRoot }

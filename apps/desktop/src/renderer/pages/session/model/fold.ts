@@ -379,7 +379,16 @@ function buildTurn(
   // before the terminal answer existed therefore look like new ones, and no
   // turn is ever shown as missing a reply.
   const derived = committedFinal === undefined
-    ? derivedFinalReply({ status, cycles, actions, calls, errors, startedAt, endedAt })
+    ? derivedFinalReply({
+      status,
+      cycles,
+      actions,
+      calls,
+      errors,
+      startedAt,
+      endedAt,
+      ...(interrupted === undefined ? {} : { interruptReason: interrupted.reason }),
+    })
     : undefined;
   const allReplies = derived === undefined ? replies : [...replies, derived];
 
@@ -444,6 +453,7 @@ function derivedFinalReply(turn: {
   errors: readonly ErrorItem[];
   startedAt: string;
   endedAt?: string;
+  interruptReason?: 'user' | 'shutdown' | 'restart';
 }): ReplyModel | undefined {
   if (turn.status === 'running') return undefined;
   const at = turn.endedAt ?? turn.startedAt;
@@ -462,7 +472,10 @@ function derivedFinalReply(turn: {
   const result = lastActionResult(turn.actions);
   if (result !== undefined) return closing(result);
   if (turn.status === 'failed') return closing(`出错了：${summarizeError(turn.errors[0]?.message ?? '未知错误')}`);
-  if (turn.status === 'interrupted') return closing('已中断');
+  if (turn.status === 'interrupted') {
+    if (turn.interruptReason === 'shutdown') return closing('已中断 · 守护进程已关闭');
+    return closing('已中断');
+  }
   const done = turn.actions.reduce((count, action) => (action.status === 'running' ? count : count + 1), 0);
   return closing(`本轮已完成，执行了 ${done} 个操作，未生成文字说明。`);
 }

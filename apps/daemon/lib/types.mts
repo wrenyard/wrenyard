@@ -132,8 +132,6 @@ export interface ExecutionOptions {
   primitives?: Partial<PrimitiveSet>
   workflowId?: string
   taskId?: string
-  /** Internal: allow rerunning an interrupted persisted task with the same task id. */
-  resumeInterruptedTask?: boolean
   /** MCP connection id that triggered the run (for cc-channel session targeting) */
   connectingId?: string
   /** Bounded JSON-safe context inherited from a direct run or TaskGraph. */

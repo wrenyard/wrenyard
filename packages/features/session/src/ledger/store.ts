@@ -35,7 +35,7 @@ import {
 import { open, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionFile } from '@wrenyard/protocol';
-import type { LedgerEvent, LedgerEventDraft, TurnResumeMarker } from './events.ts';
+import type { LedgerEvent, LedgerEventDraft } from './events.ts';
 import { normalizeStoredEvent } from './compat.ts';
 
 // ─── Event model ───────────────────────────────────────────────────────────
@@ -113,15 +113,6 @@ export interface SessionSummary {
    * is never body-read at startup.
    */
   pendingTurns?: number[];
-  /**
-   * Original turns whose opted-in shutdown interrupt asked for one restart
-   * continuation, in timeline order. Derived with the marked `turn.interrupted`
-   * events and removed by the linked `turn.started` (`resumedFrom`), by a
-   * normal new turn, and by a user interrupt. Always present on a summary this
-   * ledger wrote; an index without the field is a legacy entry and is rebuilt
-   * from the body rather than trusted.
-   */
-  pendingRestarts?: TurnResumeMarker[];
   /**
    * Serialized size of the timeline file at the last index write. A mismatch
    * with the file's current size marks the summary stale, so it is rebuilt from
@@ -414,7 +405,6 @@ export class Ledger {
       ...(lastTurn === undefined ? {} : { lastTurn }),
       lastSeq: event.seq,
       pendingTurns: pendingTurnsAfter(previous?.pendingTurns, event),
-      pendingRestarts: pendingRestartsAfter(previous?.pendingRestarts, event),
       bytes,
     });
     this.staleSummaries.delete(sessionId);
@@ -485,7 +475,6 @@ export class Ledger {
       ...summary,
       lastSeq: events[events.length - 1]!.seq,
       pendingTurns: pendingTurnsOf(events),
-      pendingRestarts: pendingRestartsOf(events),
       bytes,
     });
     this.staleSummaries.delete(sessionId);
@@ -568,8 +557,7 @@ export class Ledger {
         continue;
       }
       const complete = summary.lastSeq !== undefined
-        && summary.pendingTurns !== undefined
-        && summary.pendingRestarts !== undefined;
+        && summary.pendingTurns !== undefined;
       if (complete && summary.bytes === stat.size) {
         this.staleSummaries.delete(sessionId);
         continue;
@@ -587,12 +575,9 @@ export class Ledger {
       // typically empty and misses that unfinished turn. Keeping it would let
       // a byte-mismatched summary masquerade as a trusted recovery signal.
       // A missing pendingTurns routes the session to uncertain recovery, which
-      // the engine defers to the post-listen body replay pass. The pending
-      // restart-continuation markers are dropped the same way, so a stale index
-      // can never resume a turn twice.
+      // the engine defers to the post-listen body replay pass.
       delete summary.lastSeq;
       delete summary.pendingTurns;
-      delete summary.pendingRestarts;
       summary.bytes = stat.size;
       this.staleSummaries.add(sessionId);
     }
@@ -923,7 +908,6 @@ function readSummary(value: unknown): SessionSummary | undefined {
   const lastSeq = nonNegativeInteger(record.lastSeq);
   const bytes = nonNegativeInteger(record.bytes);
   const pendingTurns = readPendingTurns(record.pendingTurns);
-  const pendingRestarts = readPendingRestarts(record.pendingRestarts);
   return {
     sessionId,
     title,
@@ -935,7 +919,6 @@ function readSummary(value: unknown): SessionSummary | undefined {
     ...(lastTurn === undefined ? {} : { lastTurn }),
     ...(lastSeq === undefined ? {} : { lastSeq }),
     ...(pendingTurns === undefined ? {} : { pendingTurns }),
-    ...(pendingRestarts === undefined ? {} : { pendingRestarts }),
     ...(bytes === undefined ? {} : { bytes }),
   };
 }
@@ -976,34 +959,6 @@ function nonNegativeInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
-/** Validate one persisted restart-continuation list; any invalid entry distrusts it. */
-function readPendingRestarts(value: unknown): TurnResumeMarker[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const restarts: TurnResumeMarker[] = [];
-  for (const entry of value) {
-    if (entry === null || typeof entry !== 'object') return undefined;
-    const record = entry as Record<string, unknown>;
-    const fast = record.fast;
-    if (
-      typeof record.turnId !== 'string'
-      || typeof record.provider !== 'string'
-      || typeof record.model !== 'string'
-      || typeof record.reasoningEffort !== 'string'
-      || (fast !== undefined && typeof fast !== 'boolean')
-    ) {
-      return undefined;
-    }
-    restarts.push({
-      turnId: record.turnId,
-      provider: record.provider,
-      model: record.model,
-      reasoningEffort: record.reasoningEffort as TurnResumeMarker['reasoningEffort'],
-      ...(fast === undefined ? {} : { fast }),
-    });
-  }
-  return restarts;
-}
-
 /** The turns that started without a matching `turn.finished`, ascending. */
 function pendingTurnsOf(events: readonly LedgerEvent[]): number[] {
   const started = new Set<number>();
@@ -1027,55 +982,12 @@ function pendingTurnsAfter(previous: readonly number[] | undefined, event: Ledge
 }
 
 /**
- * Advance the pending restart-continuation list with one appended event,
- * exactly as the full-body rebuild folds it: a marked shutdown interrupt adds
- * one token, a linked continuation consumes exactly that one, a normal new
- * turn supersedes them all, and a user interrupt clears them.
- */
-function pendingRestartsAfter(
-  previous: readonly TurnResumeMarker[] | undefined,
-  event: LedgerEvent,
-): TurnResumeMarker[] {
-  const restarts = [...(previous ?? [])];
-  switch (event.type) {
-    case 'turn.interrupted': {
-      if (event.reason === 'user') return [];
-      const resume = event.resume;
-      if (event.reason === 'shutdown' && resume !== undefined) {
-        return [
-          ...restarts.filter((marker) => marker.turnId !== resume.turnId),
-          resume,
-        ];
-      }
-      return restarts;
-    }
-    case 'turn.started':
-      if (event.resumedFrom !== undefined) {
-        return restarts.filter((marker) => marker.turnId !== event.resumedFrom);
-      }
-      // A normal new user or bot turn supersedes every pending continuation.
-      return [];
-    default:
-      return restarts;
-  }
-}
-
-/** The pending restart continuations a whole timeline still asks for. */
-function pendingRestartsOf(events: readonly LedgerEvent[]): TurnResumeMarker[] {
-  let restarts: TurnResumeMarker[] = [];
-  for (const event of events) restarts = pendingRestartsAfter(restarts, event);
-  return restarts;
-}
-
-/**
  * Whether one event changes the state startup recovery depends on. Only these
  * flush the index before the append resolves; everything else is coalesced.
  */
 function isLifecycleEvent(event: LedgerEvent): boolean {
   return event.type === 'session.created'
     || event.type === 'turn.started'
-    // A shutdown interrupt may carry the restart-continuation token; it must
-    // reach the index before the terminating turn.finished is appended.
     || event.type === 'turn.interrupted'
     || event.type === 'turn.finished';
 }

@@ -91,7 +91,7 @@ export class ForemanEventPoller {
   private readonly onCursor: ForemanEventPollerOptions['onCursor'];
   private readonly logger: DiagnosticLogger | undefined;
   private readonly ownedClient: DaemonClient | undefined;
-  private readonly resumedFromCursor: boolean;
+  private readonly resumeCursor: boolean;
   private readonly workerKeyAliases = new Map<string, string>();
   private readonly hasSpawnByWorker = new Map<string, boolean>();
   private readonly metadataByWorker = new Map<string, SessionMetaData>();
@@ -121,7 +121,7 @@ export class ForemanEventPoller {
     this.onSignal = opts.onSignal;
     this.onCursor = opts.onCursor;
     this.cursor = normalizeCursor(opts.initialCursor);
-    this.resumedFromCursor = this.cursor !== undefined;
+    this.resumeCursor = this.cursor !== undefined;
   }
 
   getIpcPath(): string {
@@ -262,7 +262,7 @@ export class ForemanEventPoller {
   private async probeStaleCursorOnce(): Promise<void> {
     if (this.headProbed) return;
     this.headProbed = true;
-    if (!this.resumedFromCursor || this.cursor === undefined) return;
+    if (!this.resumeCursor || this.cursor === undefined) return;
     try {
       const payload = await this.request('event.list', { tail: true, limit: 1 });
       const parsed = parseEventsPayload(payload, this.logger);
@@ -423,7 +423,7 @@ export class ForemanEventPoller {
   private isStartupReplay(event: ForemanEventRecord, expectedGeneration: number | undefined): boolean {
     // A resumed poller continues from the owner's cursor, so everything the
     // daemon returns after it is genuinely new and must be ingested.
-    if (this.resumedFromCursor) return false;
+    if (this.resumeCursor) return false;
     if (expectedGeneration === undefined || this.startedAtMs === undefined) return false;
     const eventMs = eventTimestampMs(event);
     return eventMs !== null && eventMs < this.startedAtMs;

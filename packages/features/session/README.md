@@ -19,7 +19,8 @@ Auxiliary calls select a Gateway route freshly for each role using the shared Ta
 
 The daemon supplies its state root and configured workspace root. Desktop restart
 does not interrupt turns; daemon shutdown drains them or interrupts with `shutdown`.
-Old Desktop preview ledgers are not imported.
+A daemon restart does not resume interrupted turns. Old Desktop preview ledgers
+are not imported.
 
 Attached files are stored outside the ledger at
 `<stateRoot>/sessions/<sessionId>/files`; Task artifacts stay in their run

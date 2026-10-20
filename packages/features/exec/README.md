@@ -32,7 +32,10 @@ resolves model / provider / mode   already resolved by the caller
 queues, locks, retries             starts immediately, no queue, no retry
 persisted execution events         in-memory bounded replay
 task id, taskgraph membership      neither
-survives a daemon restart          does not
+persisted task record survives     does not survive a daemon restart
+a daemon restart; interrupted
+runs stay interrupted (no auto
+resume)
 ```
 
 The translation is one-directional and lossy by design: a structured task *can*

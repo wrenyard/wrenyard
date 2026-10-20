@@ -1,7 +1,7 @@
 /**
  * session engine: the session lifecycle and composition of the turn loop.
  *
- * The engine owns session creation, recovery, deletion, media and the
+ * The engine owns session creation, on-demand timeline recovery, deletion, media and the
  * observability reads; every work turn runs in {@link TurnRunner}. `index.ts`
  * is the only composition root: it builds the ports and hands them to
  * {@link createEngine}. There is no compatibility mechanism and no legacy role.
@@ -16,7 +16,6 @@ import {
   type LedgerEvent,
   type LedgerPage,
   type SessionSummary,
-  type TurnResumeMarker,
   type WorkspaceSnapshot,
 } from '../ledger/store.ts';
 import { ModelCallError, resolveModelMetadata, type CallRole } from '../model/request.ts';
@@ -80,7 +79,6 @@ class Engine implements Session, SessionCallHost {
   private readonly replies: ReplyWriter;
   private readonly turnRunner: TurnRunner;
   private readonly ensuring = new Map<string, Promise<SessionRuntime>>();
-  private readonly recoveringTurns = new Set<string>();
   /**
    * Per-session count of in-flight attachment imports/admissions. A plain Set
    * was wrong: two concurrent imports of the same session would let the first
@@ -127,47 +125,6 @@ class Engine implements Session, SessionCallHost {
   private ready: Promise<void>;
   private closed = false;
   private closePromise?: Promise<void>;
-  /** Deferred startup recovery of the sessions the index flagged as active. */
-  private startupRecoveryTimer?: ReturnType<typeof setTimeout>;
-  /** Deferred body recovery of sessions whose index metadata is uncertain. */
-  private backgroundRecoveryTimer?: ReturnType<typeof setTimeout>;
-  /** Whether the deferred recovery passes were armed by the host. */
-  private backgroundRecoveryStarted = false;
-  /**
-   * Whether the daemon opted this session service into restart recovery. Only
-   * the graceful shutdown path calls {@link prepareForRestart}; an ordinary
-   * interrupt and a default `close` never enable it. Bot context enables it
-   * through the bot kernel's `prepareForRestart` during graceful shutdown.
-   */
-  private restartOptIn = false;
-  /**
-   * Sessions whose restart markers must not be resurrected from a legacy body
-   * replay after a deliberate stop. Populated synchronously by a normal send or
-   * a user interrupt in this process, before any await, and dropped on delete.
-   */
-  private readonly restartSuppressed = new Set<string>();
-  /**
-   * Restart continuations still pending, keyed by session and original turn id.
-   * Loaded from the index and kept in memory only as the synchronous admission
-   * fence: the ledger summary stays authoritative, and a token is removed from
-   * the durable state by the same append that writes `turn.started`.
-   */
-  private readonly restartContinuations = new Map<string, Map<string, TurnResumeMarker>>();
-  /** Deferred admission of the pending restart continuations. */
-  private restartRecoveryTimer?: ReturnType<typeof setTimeout>;
-  /** Whether a restart-continuation pass is running, so it stays single-flight. */
-  private recoveringRestarts = false;
-  /**
-   * Sessions whose persisted summary carries no reliable pending-turn list — a
-   * legacy entry, an unindexed file, or a placeholder — so only their body can
-   * say whether a turn is unfinished. Their bodies are read by a deferred pass
-   * after startup, never in the constructor.
-   */
-  private readonly uncertainSessions = new Set<string>();
-  /** Whether a deferred body-recovery pass is reading a timeline right now. */
-  private recoveringBodies = false;
-  /** In-progress deferred recovery passes, awaited by close before the ledger closes. */
-  private readonly recoveryPasses = new Set<Promise<void>>();
   /** When each idle runtime was first seen with no work left, for unloading. */
   private readonly idleSince = new Map<string, number>();
   private idleTimer?: ReturnType<typeof setInterval>;
@@ -190,28 +147,7 @@ class Engine implements Session, SessionCallHost {
       now: () => this.now(),
       createSnapshot: () => buildSnapshot(this.host),
     });
-    // Startup is metadata-only: the index records which turns never finished,
-    // so no timeline body is parsed to decide whether anything is active.
-    for (const summary of ports.ledger.listSessions()) {
-      // A pending restart continuation is independent of the pending-turn list:
-      // its original turn is already terminal, so only this marker asks for a
-      // follow-up after the restart.
-      if (summary.pendingRestarts !== undefined && summary.pendingRestarts.length > 0) {
-        this.restartContinuations.set(
-          summary.sessionId,
-          new Map(summary.pendingRestarts.map((marker) => [marker.turnId, marker])),
-        );
-      }
-      if (summary.pendingTurns === undefined) {
-        // A legacy, unindexed or rebuilt summary cannot say which turns are
-        // unfinished. Its body decides, on a deferred pass after startup.
-        this.uncertainSessions.add(summary.sessionId);
-        continue;
-      }
-      for (const turn of summary.pendingTurns) {
-        this.recoveringTurns.add(`${summary.sessionId}:${turn}`);
-      }
-    }
+    // Startup is metadata-only: session bodies are read only on first touch.
     this.turnRunner = new TurnRunner(this, this.replies);
     this.ready = this.initialize();
     void this.ready.catch(() => undefined);
@@ -228,300 +164,11 @@ class Engine implements Session, SessionCallHost {
 
   /**
    * Recover only the sessions the index flagged as having unfinished turns.
-   * Completed timelines are never parsed here, and the recovery runs on a later
-   * tick so a healthy startup is not held behind a large replay. A session that
-   * is touched first is recovered by `ensureSession` and skipped by this pass.
+   * Completed timelines are never parsed here. A session that is touched first
+   * is recovered by `ensureSession` on demand.
    */
   private async initialize(): Promise<void> {
     await this.ports.ledger.init();
-  }
-
-  /**
-   * Arm the deferred recovery passes. Both run on a later tick so a healthy
-   * startup is never held behind a replay; the host calls this once it is
-   * listening, so no session body is parsed before the daemon is healthy.
-   * Idempotent: a repeated call or a call after close is a no-op.
-   */
-  startBackgroundRecovery(): void {
-    if (this.closed || this.backgroundRecoveryStarted) return;
-    this.backgroundRecoveryStarted = true;
-    if (this.recoveringTurns.size > 0) {
-      this.startupRecoveryTimer = setTimeout(() => {
-        this.startupRecoveryTimer = undefined;
-        void this.trackRecoveryPass(this.recoverFlaggedSessions());
-      }, 0);
-      this.startupRecoveryTimer.unref();
-    }
-    if (this.uncertainSessions.size > 0) {
-      this.backgroundRecoveryTimer = setTimeout(() => {
-        this.backgroundRecoveryTimer = undefined;
-        void this.trackRecoveryPass(this.recoverUncertainSessions());
-      }, 0);
-      this.backgroundRecoveryTimer.unref();
-    }
-    this.scheduleRestartRecovery();
-  }
-
-  /**
-   * Arm one deferred pass that admits the pending restart continuations. Runs
-   * only after the host is listening, is idempotent, and is re-armed when a
-   * body replay reveals markers a legacy index did not carry.
-   */
-  private scheduleRestartRecovery(): void {
-    if (this.closed || !this.backgroundRecoveryStarted) return;
-    if (this.restartRecoveryTimer !== undefined || this.recoveringRestarts) return;
-    if (this.restartContinuations.size === 0) return;
-    this.restartRecoveryTimer = setTimeout(() => {
-      this.restartRecoveryTimer = undefined;
-      void this.trackRecoveryPass(this.recoverRestartContinuations());
-    }, 0);
-    this.restartRecoveryTimer.unref();
-  }
-
-  /**
-   * Keep a deferred recovery pass reachable so `close` can wait for it to
-   * observe `closed` and finish before the ledger is closed. The passes
-   * early-return on `closed`, so awaiting them cannot deadlock.
-   */
-  private async trackRecoveryPass(pass: Promise<void>): Promise<void> {
-    this.recoveryPasses.add(pass);
-    try {
-      await pass;
-    } finally {
-      this.recoveryPasses.delete(pass);
-    }
-  }
-
-  private async recoverFlaggedSessions(): Promise<void> {
-    const sessionIds = new Set<string>();
-    for (const key of this.recoveringTurns) {
-      const separator = key.lastIndexOf(':');
-      if (separator > 0) sessionIds.add(key.slice(0, separator));
-    }
-    for (const sessionId of sessionIds) {
-      // Every path drops this session's markers: a marker left behind by a
-      // skip or a failure would keep the session permanently "recovering",
-      // block its deletion and block its runtime from ever being unloaded.
-      if (this.closed) {
-        this.clearRecoveringTurns(sessionId);
-        return;
-      }
-      // A session a concurrent `send` already resolved, or one deleted while
-      // this pass was waiting, owns its own recovery.
-      if (this.sessions.has(sessionId) || this.deletedSessions.has(sessionId)) {
-        this.clearRecoveringTurns(sessionId);
-        continue;
-      }
-      try {
-        // Single-flight with a concurrent `send`; its own recovery wins.
-        await this.ensureSession(sessionId);
-      } catch {
-        // Nothing runs for a turn whose recovery failed, so it is not active work.
-      } finally {
-        this.clearRecoveringTurns(sessionId);
-      }
-    }
-  }
-
-  /**
-   * Read the bodies of sessions whose index metadata cannot say whether a turn
-   * is unfinished: a legacy summary, an unindexed file or a placeholder. The
-   * pass runs after startup readiness and yields between sessions, so a large
-   * history is migrated in the background instead of blocking `ready`. It still
-   * performs the normal recovery, so an orphaned turn is closed and its task
-   * runs cancelled exactly as a flagged session's would be.
-   */
-  private async recoverUncertainSessions(): Promise<void> {
-    this.recoveringBodies = true;
-    try {
-      for (const sessionId of [...this.uncertainSessions]) {
-        if (this.closed) return;
-        if (this.sessions.has(sessionId) || this.deletedSessions.has(sessionId)) {
-          // A concurrent `send` or a deletion owns this session's recovery, so
-          // its body is already resolved and the marker can go.
-          this.uncertainSessions.delete(sessionId);
-          continue;
-        }
-        try {
-          // The marker is kept until the replay has been awaited: until then
-          // this session's active state is unknown, so it must still count as
-          // busy rather than let an interrupted turn look idle.
-          await this.ensureSession(sessionId);
-        } catch {
-          // An unreadable timeline is retried on first touch, not at startup.
-        } finally {
-          // Released on the failure path as well, so an unreadable timeline
-          // cannot keep the session counted as active forever.
-          this.uncertainSessions.delete(sessionId);
-        }
-        // A legacy index carries no restart markers, so the replayed body is
-        // what decides whether a continuation is still owed.
-        if (this.syncRestartContinuations(sessionId)) this.scheduleRestartRecovery();
-        // A fully replayed session with nothing left to recover is released at
-        // once: keeping every rebuilt runtime resident for the whole pass
-        // would hold ~250 sessions in memory until the idle sweep arrives.
-        this.releaseQuiescentRuntime(sessionId);
-        // Yield between sessions so one body parse never monopolizes the loop.
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-      }
-    } finally {
-      this.recoveringBodies = false;
-    }
-  }
-
-  /**
-   * Admit one linked follow-up turn for every still-pending restart marker.
-   * The pass consumes the in-memory map, so it is single-flight and repeated
-   * concurrent passes cannot admit a duplicate: a marker is deleted once its
-   * continuation is durably started, dropped when it can no longer be admitted,
-   * and cleared synchronously by any normal send or user interrupt. Sessions
-   * already resident reuse their runtime; a session whose body a legacy index
-   * left uncertain is replayed by the body pass and its markers re-synced.
-   */
-  private async recoverRestartContinuations(): Promise<void> {
-    if (this.recoveringRestarts) return;
-    this.recoveringRestarts = true;
-    try {
-      while (!this.closed && this.restartContinuations.size > 0) {
-        const sessionId = this.restartContinuations.keys().next().value;
-        if (sessionId === undefined) break;
-        await this.resumeSessionRestarts(sessionId);
-        // Yield between sessions so one admission never monopolizes the loop.
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-      }
-    } finally {
-      this.recoveringRestarts = false;
-      // A body pass may have discovered a marker while this pass was running and
-      // found it already claimed. Re-arm instead of dropping that continuation.
-      this.scheduleRestartRecovery();
-    }
-  }
-
-  /**
-   * Resolve one session and admit its pending continuations in turn order. The
-   * original route is reused exactly and still passes through `send`, so the
-   * historical model-id mapping and every admission check apply unchanged.
-   * Action sequence numbers come from the replayed ledger; no action is replayed.
-   */
-  private async resumeSessionRestarts(sessionId: string): Promise<void> {
-    if (this.deletedSessions.has(sessionId)) {
-      this.restartContinuations.delete(sessionId);
-      return;
-    }
-    try {
-      // Reuse a resident runtime and never touch it recursively: this pass is
-      // outside `ensureSession`, so the replay can complete before admission.
-      await this.ensureSession(sessionId);
-    } catch {
-      // A session that cannot be replayed keeps no continuation; the ledger
-      // still holds the interrupted turn.
-      this.restartContinuations.delete(sessionId);
-      return;
-    }
-    const pending = this.restartContinuations.get(sessionId);
-    if (pending === undefined) return;
-    const markers = [...pending.values()]
-      .sort((left, right) => markerTurn(left) - markerTurn(right));
-    for (const marker of markers) {
-      if (this.closed) return;
-      // A normal send or a user interrupt may have cleared it while this pass
-      // was replaying; the check runs immediately before the durable turn.
-      if (!this.isRestartPending(sessionId, marker.turnId)) continue;
-      try {
-        await this.send(sessionId, {
-          text: restartContinuationText(marker),
-          model: {
-            provider: marker.provider,
-            model: marker.model,
-            reasoningEffort: marker.reasoningEffort,
-            ...(marker.fast === undefined ? {} : { fast: marker.fast }),
-          },
-        }, marker.turnId);
-      } catch {
-        // A continuation that cannot be admitted is dropped rather than
-        // retried: the original work stays in the ledger and its context.
-        this.restartContinuations.get(sessionId)?.delete(marker.turnId);
-      }
-    }
-    // Every marker this pass saw is settled: consumed with its durable start or
-    // dropped above. Forget the key so the loop cannot spin on a marker whose
-    // send returned without admitting a new turn; its durable token, if any,
-    // stays in the ledger and is retried on the next start.
-    this.restartContinuations.delete(sessionId);
-    this.releaseQuiescentRuntime(sessionId);
-  }
-
-  /** Replace one session's in-memory markers with its durable summary. */
-  private syncRestartContinuations(sessionId: string): boolean {
-    // A session stopped deliberately in this process must not regain a marker
-    // from a legacy body replay: the normal send or user interrupt already won.
-    if (this.restartSuppressed.has(sessionId)) {
-      this.restartContinuations.delete(sessionId);
-      return false;
-    }
-    const summary = this.ports.ledger.listSessions().find((entry) => entry.sessionId === sessionId);
-    const restarts = summary?.pendingRestarts ?? [];
-    if (restarts.length === 0) {
-      this.restartContinuations.delete(sessionId);
-      return false;
-    }
-    this.restartContinuations.set(
-      sessionId,
-      new Map(restarts.map((marker) => [marker.turnId, marker])),
-    );
-    return true;
-  }
-
-  /** Whether one session still owes a continuation for this original turn. */
-  private isRestartPending(sessionId: string, originalTurnId: string): boolean {
-    return this.restartContinuations.get(sessionId)?.has(originalTurnId) === true;
-  }
-
-  /** Whether one session has any pending restart continuation. */
-  private hasRestartContinuation(sessionId: string): boolean {
-    return (this.restartContinuations.get(sessionId)?.size ?? 0) > 0;
-  }
-
-  /** Forget one session's pending continuations synchronously. */
-  private clearRestartContinuation(sessionId: string): void {
-    this.restartContinuations.delete(sessionId);
-  }
-
-  /**
-   * Opt this session service into restart recovery. Called only by the daemon's
-   * shutdown-for-upgrade path, before teardown; `close` alone never opts in, so
-   * an ordinary shutdown keeps its previous behaviour.
-   */
-  prepareForRestart(): void {
-    if (this.closed) return;
-    this.restartOptIn = true;
-  }
-
-  /**
-   * Drop one session's runtime when nothing in or around it can still make
-   * progress. Used by the background recovery pass, so it shares every
-   * quiescence gate of `isSessionQuiescent` except the `recoveringBodies`
-   * flag itself, which the pass holds for its whole duration. The ledger
-   * keeps the durable truth, so a later access replays it again.
-   */
-  private releaseQuiescentRuntime(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (session === undefined) return;
-    if (!this.isSessionQuiescent(sessionId, session, { ignoreRecoveringBodies: true })) return;
-    this.sessions.delete(sessionId);
-    this.idleSince.delete(sessionId);
-  }
-
-  /** Forget every pending-turn marker of one session. */
-  private clearRecoveringTurns(sessionId: string): void {
-    const prefix = `${sessionId}:`;
-    for (const key of [...this.recoveringTurns]) {
-      if (key.startsWith(prefix)) this.recoveringTurns.delete(key);
-    }
   }
 
   async createSession(): Promise<{ sessionId: string }> {
@@ -549,9 +196,8 @@ class Engine implements Session, SessionCallHost {
 
   /**
    * Whether a session has an in-flight turn right now. A loaded runtime is
-   * checked turn by turn; a session still being recovered at startup is running
-   * while any of its recovering turns remain. Never touches the ledger, so it
-   * stays a pure read of in-memory state.
+   * checked turn by turn. Never touches the ledger, so it stays a pure read of
+   * in-memory state.
    */
   private sessionHasRunningTurns(sessionId: string): boolean {
     const runtime = this.sessions.get(sessionId);
@@ -559,10 +205,6 @@ class Engine implements Session, SessionCallHost {
       for (const turn of runtime.turns.values()) {
         if (!turn.durableTerminal) return true;
       }
-    }
-    const prefix = `${sessionId}:`;
-    for (const key of this.recoveringTurns) {
-      if (key.startsWith(prefix)) return true;
     }
     return false;
   }
@@ -604,9 +246,7 @@ class Engine implements Session, SessionCallHost {
       attachments?: AttachmentInput[];
       /** Optional provenance of a bot-originated send; absent on ordinary sends. */
       sender?: { botId: string };
-    },
-    /** Original turn id when this send is the restart continuation for it. */
-    resumedFrom?: string,
+    }
   ): Promise<{ turn: number }> {
     this.assertOpen();
     // Historical identity migration, before admission, deduplication and the
@@ -670,17 +310,7 @@ class Engine implements Session, SessionCallHost {
       return pending.result;
     }
 
-    // A normal user or bot turn supersedes any pending restart continuation and
-    // a valid continuation of its own does not. Cleared synchronously, before
-    // any await, so a recovery pass still resolving the session cannot admit
-    // the continuation afterwards, and recorded so a legacy body replay cannot
-    // resurrect the marker either.
-    if (resumedFrom === undefined) {
-      this.restartSuppressed.add(sessionId);
-      this.clearRestartContinuation(sessionId);
-    }
-
-    const result = this.admitTurn(sessionId, modelInput, model, resumedFrom);
+    const result = this.admitTurn(sessionId, modelInput, model);
     this.pendingSends.set(sessionId, { model, effort, fast, text: modelInput.text, attachmentsKey, result });
     try {
       return await result;
@@ -730,9 +360,7 @@ class Engine implements Session, SessionCallHost {
       /** Optional provenance of a bot-originated send; absent on ordinary sends. */
       sender?: { botId: string };
     },
-    publicId: string,
-    /** Original turn id when this admission is its restart continuation. */
-    resumedFrom?: string,
+    publicId: string
   ): Promise<{ turn: number }> {
     // Universal application admission, evaluated before the session is even
     // resolved: every admitted turn — a new session, a resume or a restored
@@ -782,23 +410,6 @@ class Engine implements Session, SessionCallHost {
     }
     this.assertNotDeleted(sessionId);
 
-    // Restart continuation fence: every await above may have let a normal send,
-    // a bot turn or a user interrupt clear the token. This check is synchronous
-    // and runs immediately before the durable turn is created, so that send
-    // wins and no duplicate follow-up is admitted. The token's route must still
-    // match the provider, effort and Fast preference; the model id is not
-    // compared because admission already migrated a historical spelling and
-    // `send` validates the registered identity.
-    if (resumedFrom !== undefined) {
-      const token = this.restartContinuations.get(sessionId)?.get(resumedFrom);
-      if (token === undefined
-        || token.provider !== input.model.provider
-        || token.reasoningEffort !== input.model.reasoningEffort
-        || token.fast !== input.model.fast) {
-        throw new Error(`Restart continuation ${resumedFrom} is no longer pending for session ${sessionId}`);
-      }
-    }
-
     // Turn numbers are assigned synchronously here, so concurrent sends take
     // their numbers in invocation order rather than in resolution order.
     const turnNumber = session.nextTurn;
@@ -825,7 +436,6 @@ class Engine implements Session, SessionCallHost {
         id: turnId(turnNumber),
         text: input.text,
         model: input.model,
-        ...(resumedFrom === undefined ? {} : { resumedFrom }),
         ...(input.sender === undefined ? {} : { sender: input.sender }),
       });
     } catch (error) {
@@ -834,15 +444,6 @@ class Engine implements Session, SessionCallHost {
       session.turns.delete(turnNumber);
       throw error;
     }
-    // Consumed only now, as part of the same durable append: the ledger already
-    // dropped this marker from the derived summary, and the in-memory fence
-    // mirrors it for anything still waiting.
-    if (resumedFrom !== undefined) {
-      const pending = this.restartContinuations.get(sessionId);
-      pending?.delete(resumedFrom);
-      if (pending !== undefined && pending.size === 0) this.restartContinuations.delete(sessionId);
-    }
-
     // A model the user switched to is a fact the reasoning model should read.
     const previousModel = lastTurnModel(this.ports.ledger.read(sessionId), turnNumber);
     const currentModel = `${input.model.provider}/${input.model.model}`;
@@ -951,10 +552,6 @@ class Engine implements Session, SessionCallHost {
   async deleteSession(sessionId: string): Promise<void> {
     this.assertOpen();
     await this.ready;
-    const prefix = `${sessionId}:`;
-    if ([...this.recoveringTurns].some((key) => key.startsWith(prefix))) {
-      throw new Error(`Cannot delete a session with a recovering turn: ${sessionId}`);
-    }
     if ((this.pendingAdmissions.get(sessionId) ?? 0) > 0) {
       throw new Error(`Cannot delete a session while an attachment import is pending: ${sessionId}`);
     }
@@ -1005,11 +602,6 @@ class Engine implements Session, SessionCallHost {
     }
     this.sessions.delete(sessionId);
     this.ensuring.delete(sessionId);
-    // The timeline is gone, so nothing is left to recover: drop the uncertain
-    // marker that would otherwise keep this session counted as active.
-    this.uncertainSessions.delete(sessionId);
-    this.restartContinuations.delete(sessionId);
-    this.restartSuppressed.delete(sessionId);
     this.recoveryWaits.delete(sessionId);
     this.pendingSends.delete(sessionId);
     this.live.drop(sessionId);
@@ -1080,68 +672,25 @@ class Engine implements Session, SessionCallHost {
     turn: number,
     reason: 'user' | 'shutdown',
   ): Promise<void> {
-    // A user interrupt is a deliberate stop: it never resumes and it clears any
-    // pending restart continuation, including when the original turn already
-    // reached its terminal event and the early return below applies. Both the
-    // check and the clear run synchronously, before the first await.
-    const cancelledRestart = reason === 'user' && this.hasRestartContinuation(sessionId);
-    if (reason === 'user') {
-      this.restartSuppressed.add(sessionId);
-      this.clearRestartContinuation(sessionId);
-    }
     const session = await this.ensureSession(sessionId);
-    // A legacy index carried no in-memory marker, so the durable summary is the
-    // only place a terminal original turn's pending continuation can be seen.
-    // This is read after `ensureSession` because a body replay may have just
-    // revealed it.
-    const durableRestart = reason === 'user'
-      && !cancelledRestart
-      && turn >= 1
-      && (this.ports.ledger.listSessions()
-        .find((entry) => entry.sessionId === sessionId)
-        ?.pendingRestarts?.some((marker) => marker.turnId === turnId(turn)) ?? false);
     const runtime = session.turns.get(turn);
     if (!runtime || runtime.finished) {
-      // The original turn is already terminal, so no running work is cancelled;
-      // the user's stop still has to durably cancel the continuation the
-      // shutdown left pending, or the next start would resume it anyway.
-      if ((cancelledRestart || durableRestart) && turn >= 1) {
-        await this.ports.ledger.append(sessionId, {
-          type: 'turn.interrupted',
-          turn,
-          parent: turnId(turn),
-          reason: 'user',
-        });
-      }
       return;
     }
 
-    // Flip the terminal flag synchronously so an in-flight continuation cannot
-    // race this interrupt into writing a second `turn.finished`.
+    // Flip the terminal flag synchronously so an in-flight step cannot race
+    // this interrupt into writing a second `turn.finished`.
     runtime.status = 'interrupted';
     runtime.phase = 'terminal';
     runtime.finished = true;
     // Late action results are appended immediately, flagged as post-interrupt.
     runtime.reasonCompleted = true;
 
-    // An opted-in shutdown persists the exact route the turn ran with, on the
-    // interrupt itself and before cancelling anything, so a later start can
-    // admit one linked continuation. A user interrupt never carries it.
-    const resume = reason === 'shutdown' && this.restartOptIn
-      ? {
-          turnId: turnId(turn),
-          provider: runtime.model.provider,
-          model: runtime.model.model,
-          reasoningEffort: runtime.model.reasoningEffort,
-          ...(runtime.model.fast === undefined ? {} : { fast: runtime.model.fast }),
-        }
-      : undefined;
     await this.ports.ledger.append(sessionId, {
       type: 'turn.interrupted',
       turn,
       parent: turnId(turn),
       reason,
-      ...(resume === undefined ? {} : { resume }),
     });
     runtime.abort.abort();
     // Queued and in-flight replies check this turn's terminal flag before
@@ -1156,12 +705,7 @@ class Engine implements Session, SessionCallHost {
   }
 
   activeTurnCount(): number {
-    // A session with uncertain metadata counts as busy until its deferred body
-    // recovery has replayed it: it can hold an interrupted turn that no
-    // persisted marker records, so treating it as idle would let the daemon
-    // report "no running turns" over work that still has to be recovered and
-    // cancelled. The marker is released as soon as the replay settles.
-    let count = this.recoveringTurns.size + this.uncertainSessions.size;
+    let count = 0;
     for (const session of this.sessions.values()) {
       for (const turn of session.turns.values()) {
         if (!turn.durableTerminal) count += 1;
@@ -1290,25 +834,6 @@ class Engine implements Session, SessionCallHost {
 
   private async doClose(): Promise<void> {
     this.closed = true;
-    if (this.startupRecoveryTimer !== undefined) {
-      clearTimeout(this.startupRecoveryTimer);
-      this.startupRecoveryTimer = undefined;
-    }
-    if (this.backgroundRecoveryTimer !== undefined) {
-      clearTimeout(this.backgroundRecoveryTimer);
-      this.backgroundRecoveryTimer = undefined;
-    }
-    if (this.restartRecoveryTimer !== undefined) {
-      clearTimeout(this.restartRecoveryTimer);
-      this.restartRecoveryTimer = undefined;
-    }
-    this.uncertainSessions.clear();
-    // Drain a recovery pass already in flight: each pass checks `closed`
-    // between sessions, so it finishes its current session and returns
-    // instead of deadlocking the close.
-    while (this.recoveryPasses.size > 0) {
-      await Promise.allSettled([...this.recoveryPasses]);
-    }
     if (this.idleTimer !== undefined) {
       clearInterval(this.idleTimer);
       this.idleTimer = undefined;
@@ -1370,16 +895,10 @@ class Engine implements Session, SessionCallHost {
     this.pruneDeletedSessions();
   }
 
-  /**
-   * Whether nothing in or around one runtime can still make progress. The
-   * `ignoreRecoveringBodies` option is used only by the background recovery
-   * pass, which holds that flag for its whole run and so could never release
-   * a runtime otherwise; every other gate still applies.
-   */
+  /** Whether nothing in or around one runtime can still make progress. */
   private isSessionQuiescent(
     sessionId: string,
     session: SessionRuntime,
-    options?: { ignoreRecoveringBodies?: boolean },
   ): boolean {
     // Conservative global gate first. The pipeline holds the turn runs, the
     // interrupts and the deferred reply, reason, title and status work, and a
@@ -1387,19 +906,12 @@ class Engine implements Session, SessionCallHost {
     // released while any of it is in flight: an unloaded runtime would still be
     // referenced by a callback that is about to append to its ledger.
     if (this.pipeline.size > 0) return false;
-    // A background pass is reading the body of a session whose pending turns
-    // are unknown; a runtime it is about to rebuild must not be dropped.
-    if (this.recoveringBodies && !options?.ignoreRecoveringBodies) return false;
     if (this.ensuring.has(sessionId)) return false;
     if (this.pendingSends.has(sessionId)) return false;
     if (this.suggestionRequests.has(sessionId)) return false;
     if ((this.pendingAdmissions.get(sessionId) ?? 0) > 0) return false;
     // A live streaming call still owns this runtime's call port.
     if (this.live.read(sessionId).length > 0) return false;
-    const prefix = `${sessionId}:`;
-    for (const key of this.recoveringTurns) {
-      if (key.startsWith(prefix)) return false;
-    }
     for (const turn of session.turns.values()) {
       if (!turn.durableTerminal) return false;
       if (turn.parsePromises.size > 0 || turn.actionPromises.size > 0 || turn.resultQueue.length > 0) return false;
@@ -1432,15 +944,7 @@ class Engine implements Session, SessionCallHost {
       if (this.pendingSends.has(sessionId)) continue;
       if (this.ensuring.has(sessionId)) continue;
       if ((this.pendingAdmissions.get(sessionId) ?? 0) > 0) continue;
-      const prefix = `${sessionId}:`;
-      let recovering = false;
-      for (const key of this.recoveringTurns) {
-        if (key.startsWith(prefix)) {
-          recovering = true;
-          break;
-        }
-      }
-      if (!recovering) this.deletedSessions.delete(sessionId);
+      this.deletedSessions.delete(sessionId);
     }
   }
 
@@ -1573,7 +1077,7 @@ class Engine implements Session, SessionCallHost {
       if (event.type === 'turn.started') started.add(event.turn);
       if (event.type === 'turn.finished') finished.add(event.turn);
       // A dispatch's run id is durable on its task span; a task span without a
-      // matching span.finished is the live run a restart must cancel.
+      // matching span.finished is the live run an orphaned turn must cancel.
       if (event.type === 'span.started' && event.kind === 'task' && !finishedSpans.has(event.id)) {
         liveTaskRuns.set(event.turn, [...(liveTaskRuns.get(event.turn) ?? []), event.request.taskRunId]);
       }
@@ -1584,12 +1088,11 @@ class Engine implements Session, SessionCallHost {
       // Close dangling children before the turn itself: spans, then actions,
       // then steps, so no started id is left without its finish event.
       await this.closeDanglingChildren(session, events, turn);
-      await this.ports.ledger.append(session.sessionId, { type: 'turn.interrupted', turn, parent: turnId(turn), reason: 'restart' });
+      await this.ports.ledger.append(session.sessionId, { type: 'turn.interrupted', turn, parent: turnId(turn), reason: 'shutdown' });
       for (const taskRunId of liveTaskRuns.get(turn) ?? []) {
         await this.safeCancelTask(taskRunId);
       }
       await this.ports.ledger.append(session.sessionId, { type: 'turn.finished', turn, id: turnId(turn), status: 'interrupted' });
-      this.recoveringTurns.delete(`${session.sessionId}:${turn}`);
     }
   }
 
@@ -1931,26 +1434,6 @@ function attachmentKey(attachments: readonly AttachmentInput[] | undefined): str
 function isPlainContinue(text: string): boolean {
   const trimmed = text.trim();
   return trimmed === '继续' || trimmed.toLowerCase() === 'continue';
-}
-
-/** The original turn number a restart marker names; unparsable ids sort first. */
-function markerTurn(marker: TurnResumeMarker): number {
-  const match = /^t(\d+)$/u.exec(marker.turnId);
-  return match === null ? 0 : Number(match[1]);
-}
-
-/**
- * The one user message of a restart continuation. It names the restart as the
- * reason for the interruption and asks the model to continue from the durable
- * worktree and ledger state, without repeating already completed effects.
- */
-function restartContinuationText(marker: TurnResumeMarker): string {
-  return [
-    `The daemon was restarted to install an upgrade while turn ${marker.turnId} was still running.`,
-    'Continue that work from the current worktree and ledger state.',
-    'Do not repeat completed side effects or dispatches, and do not replay earlier actions.',
-    'Before acting, reconcile the task ids that already exist and any interrupted action whose outcome is uncertain.',
-  ].join(' ');
 }
 
 /** Page a copied timeline for a ledger that has no native page read. */

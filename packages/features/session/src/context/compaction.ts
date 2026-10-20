@@ -12,7 +12,7 @@
 import { boundedOutputReservation, type ModelMetadata } from '../model/metadata.ts';
 import { COMPACTION_THRESHOLD_CAP, estimateInputTokens, estimateTokens } from '../model/request.ts';
 import { CONTEXT_EVENT_TYPES, type LedgerEvent } from '../ledger/store.ts';
-import { escapeBody, renderEventText, resumedOriginalTurns, tag } from './render.ts';
+import { escapeBody, renderEventText, tag } from './render.ts';
 import { hotZoneStart } from './reduction.ts';
 import { messageOf } from '../errors.ts';
 import type { Message as ModelMessage } from '../transport/index.ts';
@@ -137,10 +137,9 @@ export async function compactContext(input: CompactionInput): Promise<Compaction
   };
 
   const contextEvents = input.events.filter((event) => CONTEXT_EVENT_TYPES.has(event.type));
-  const resumedTurns = resumedOriginalTurns(input.events);
   const renderOne = (event: LedgerEvent): string => (event.type === 'context.compacted'
     ? renderCompactionBlock(event)
-    : renderEventText(event, resumedTurns) ?? '');
+    : renderEventText(event) ?? '');
   const tailBudget = Math.floor(TAIL_SHARE * threshold);
   const tailFromSeq = input.tailFromSeq;
   const found = tailFromSeq === undefined
@@ -160,7 +159,7 @@ export async function compactContext(input: CompactionInput): Promise<Compaction
     .filter((event) => event.seq > previous.floor
       && event.type !== 'reasoning.thinking'
       && event.type !== 'context.compacted')
-    .map((event) => renderEventText(event, resumedTurns, { reduced: true }) ?? '')
+    .map((event) => renderEventText(event, { reduced: true }) ?? '')
     .filter((text) => text !== '')
     .join('\n');
   const source = [

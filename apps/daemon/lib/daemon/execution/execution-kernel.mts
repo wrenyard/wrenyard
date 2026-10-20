@@ -165,7 +165,6 @@ function upsertRunningTaskRow(
     structured,
     startedAt: record.startedAt,
     updatedAt: new Date().toISOString(),
-    resumeInterruptedTask: Boolean(options.resumeInterruptedTask),
     definitionSource: target.source ?? null,
   })
 }

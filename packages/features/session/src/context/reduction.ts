@@ -17,7 +17,7 @@
 import { CONTEXT_EVENT_TYPES, type LedgerEvent } from '../ledger/store.ts';
 import { estimateTokens } from '../model/request.ts';
 import { renderCompactionBlock } from './compaction.ts';
-import { renderEventText, resumedOriginalTurns } from './render.ts';
+import { renderEventText } from './render.ts';
 
 /** Share of the threshold the hot zone may occupy. */
 const HOT_SHARE = 0.25;
@@ -43,7 +43,6 @@ export function computeReduction(
   // The cold zone starts above every floor already recorded, so a reduction
   // never re-releases what an earlier reduction or summary already bounded.
   const floor = previousFloor(events);
-  const resumedTurns = resumedOriginalTurns(events);
   const contextEvents = events.filter(
     (event) => event.seq > floor && CONTEXT_EVENT_TYPES.has(event.type),
   );
@@ -51,10 +50,10 @@ export function computeReduction(
 
   const renderFull = (event: LedgerEvent): string => (event.type === 'context.compacted'
     ? renderCompactionBlock(event)
-    : renderEventText(event, resumedTurns) ?? '');
+    : renderEventText(event) ?? '');
   const renderReduced = (event: LedgerEvent): string => (event.type === 'context.compacted'
     ? renderCompactionBlock(event)
-    : renderEventText(event, resumedTurns, { reduced: true }) ?? '');
+    : renderEventText(event, { reduced: true }) ?? '');
 
   const hotStart = hotZoneStart(contextEvents, (event) => estimateTokens(renderFull(event)), Math.floor(HOT_SHARE * threshold));
   if (hotStart <= 0) return undefined;

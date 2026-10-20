@@ -30,7 +30,6 @@ import {
   renderEventText,
   renderEventsBlock,
   renderFiles,
-  resumedOriginalTurns,
   tag,
 } from '../context/render.ts';
 import { renderCompactionBlock } from '../context/compaction.ts';
@@ -157,12 +156,9 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
     ? undefined
     : reduction.throughSeq;
   const isReduced = (event: LedgerEvent): boolean => reducedFloor !== undefined && event.seq <= reducedFloor;
-  // A restart continuation keeps its linked original turn's post-interrupt
-  // results; an ordinary user-interrupted turn keeps them hidden.
-  const resumedTurns = resumedOriginalTurns(events);
   /** Render one event in full, or in reduced form when it is below the floor. */
   const render = (event: LedgerEvent): string | undefined =>
-    renderEventText(event, resumedTurns, isReduced(event) ? { reduced: true } : undefined);
+    renderEventText(event, isReduced(event) ? { reduced: true } : undefined);
 
   // Index the ledger by occurrence, not by raw action id: a recovered session
   // can reuse an id, and each reuse is its own call with its own result.
@@ -224,8 +220,7 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
       const key = occurrenceKey(event.id, event.turn, event.step);
       if (key !== undefined) awaiting.set(key, [...(awaiting.get(key) ?? []), start]);
     } else if (event.type === 'action.finished'
-      && (event.afterInterrupt !== true
-        || (event.turn !== undefined && resumedTurns.has(event.turn)))) {
+      && event.afterInterrupt !== true) {
       const finish: FinishOccurrence = { index, event };
       finishByIndex.set(index, finish);
       const key = occurrenceKey(event.id, event.turn, event.step);
@@ -327,8 +322,7 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
         break;
       }
       case 'action.finished': {
-        if (event.afterInterrupt === true
-          && (event.turn === undefined || !resumedTurns.has(event.turn))) break;
+        if (event.afterInterrupt === true) break;
         // Delivered as the action's own tool result unless the pair is
         // unresolved or the result arrived late; a late or orphaned result
         // stays an <action-result> record.

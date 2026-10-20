@@ -500,9 +500,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
    * or a PID that remains live keeps the execution and its linked task active
    * and protected, and a structured failure is surfaced instead of swallowed.
    * Returns the surfaced failures (empty when every stale process was verified
-   * absent). Queued operation runs are re-driven through the normal launch path;
-   * the remaining processless rows (queued non-operation runs, or pid-less
-   * starting/running) use the idempotent compare-and-set terminalizer.
+   * absent). Every queued, starting or running row is terminalized as
+   * interrupted; nothing is relaunched on startup.
    */
   async markInterruptedOnStartup(): Promise<ExecutionTerminationFailure[]> {
     const timestamp = nowIso()
@@ -519,11 +518,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     const liveRows: typeof staleRows = []
     const processlessRows: typeof staleRows = []
     const failedTaskIds = new Set<string>()
-    const resumedTaskIds = new Set<string>()
 
     for (const row of staleRows) {
-      // No recorded process to protect; a queued operation run may resume below,
-      // everything else uses the idempotent CAS terminalizer.
+      // No recorded process to protect; terminalize through the CAS path below.
       if (row.pid === null || row.pid === undefined) {
         processlessRows.push(row)
         continue
@@ -572,61 +569,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       }
     }
 
-    // A queued operation run waits on a host resource rather than on a process of
-    // its own: re-drive it through prepare (readiness, then the FIFO lane) and the
-    // queued->starting claim instead of interrupting it. A failed resume falls
-    // back to the same interruption the sweep would have applied.
     for (const stale of processlessRows) {
-      const row = this.get<ExecutionRecordWithFeatures>(
-        `SELECT id, task_id, profile, cwd, prompt, status,
-          native_session_id, client_family, pid, pgid, output, raw_result, error, exit_code,
-          kill_reason, timeout_ms, requested_agent_runtime, resolved_profile, features
-        FROM executions
-        WHERE id = ?`,
-        stale.id,
-      )
-      let resumable = false
-      if (row?.status === 'queued') {
-        const features = parsePersistedFeatures(row.features)
-        if (features) {
-          try {
-            const operationIds = toOperationIds(features)
-            resumable = operationIds.includes('desktop') || operationIds.includes('browser')
-          } catch {
-            resumable = false
-          }
-        }
-      }
-      if (!row || !resumable) {
-        interruptible.push({ id: stale.id, taskId: stale.task_id })
-        continue
-      }
-      try {
-        const entryOpts: StartExecutionOpts = {
-          taskId: row.task_id ?? undefined,
-          profile: row.profile,
-          cwd: row.cwd,
-          prompt: row.prompt,
-          resume: row.native_session_id ?? undefined,
-          timeoutMs: row.timeout_ms ?? undefined,
-          clientFamily: row.client_family ?? undefined,
-          features: parsePersistedFeatures(row.features),
-        }
-        const entry = this.createRegistryEntry(row.id, entryOpts, false, this.maxSeq(row.id))
-        this.registry.set(row.id, entry)
-        entry.wasQueued = true
-        await this.launchExecution(entry, optsFromRow(row, entry), true, { skipAdmissionCheck: true })
-        if (row.task_id) resumedTaskIds.add(row.task_id)
-      } catch (error: unknown) {
-        this.log('warn', `[foreman] Failed to resume queued execution ${stale.id} on startup`, {
-          executionId: stale.id,
-          action: 'resume',
-          phase: 'startup-resume',
-          result: 'failed',
-          error: errorMessage(error),
-        })
-        interruptible.push({ id: stale.id, taskId: stale.task_id })
-      }
+      interruptible.push({ id: stale.id, taskId: stale.task_id })
     }
 
     for (const failure of failures) {
@@ -669,7 +613,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     // remaining processless queued/running tasks are interrupted.
     for (const task of this.query<{ id: string }>(`SELECT id FROM tasks WHERE status IN ('queued', 'running')`)) {
       if (failedTaskIds.has(task.id)) continue
-      if (resumedTaskIds.has(task.id)) continue
       this.taskRuns().markTerminal({
         taskRunId: task.id,
         status: 'interrupted',
