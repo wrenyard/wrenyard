@@ -2482,7 +2482,7 @@ function sharedRouteFaultState(
   }
   const shared = gateway.routeStatus(`${provider}/${parsed.model}`)
   if (shared === undefined || shared.phase === 'closed') return undefined
-  if (shared.state === 'quota_exhausted' || shared.state === 'rate_limited') return shared.state
+  if (shared.state === 'quota_exhausted' || shared.state === 'rate_limited' || shared.state === 'model_unavailable' || shared.state === 'access_denied') return shared.state
   return 'other'
 }
 

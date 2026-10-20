@@ -129,16 +129,19 @@ export function classifyRouteOutcome(
   nowMs: number,
 ): RouteFailureOutcome | undefined {
   const generic = genericFailure(status, headers, body, nowMs);
-  // A caller-caused failure is final: a supplier rule can never turn a bad
-  // request into a route fault.
-  if (generic !== undefined && !isPoisoning(generic)) return generic;
-  const specific = provider.classifyUpstreamError?.({ modelId, status, headers, body, nowMs });
-  if (!specific) return generic;
+  const specificRaw = provider.classifyUpstreamError?.({ modelId, status, headers, body, nowMs });
+  if (!specificRaw) return generic;
+  const specific: ClassifiedRouteFailure = {
+    ...specificRaw,
+    faultKind: specificRaw.state,
+  };
+  if (generic !== undefined && !isPoisoning(generic) && !isPoisoning(specific)) return generic;
+  if (generic !== undefined && !isPoisoning(generic)) return specific;
   const base = generic as ClassifiedRouteFailure | undefined;
   const merged: ClassifiedRouteFailure = {
     ...base,
     ...specific,
-    faultKind: (specific as { faultKind?: RouteFaultKind }).faultKind ?? base?.faultKind ?? specific.state,
+    faultKind: specific.faultKind ?? base?.faultKind ?? specific.state,
   };
   return merged;
 }

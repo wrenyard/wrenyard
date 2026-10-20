@@ -718,7 +718,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         const retryable = options.taskSettingsResolver !== undefined
           && identity !== undefined
           && structuredSummary === undefined
-          && (faultKind === 'quota_exhausted' || faultKind === 'rate_limited')
+          && (faultKind === 'quota_exhausted' || faultKind === 'rate_limited' || faultKind === 'model_unavailable' || faultKind === 'access_denied')
           && routeAttempt < MAX_ROUTE_ATTEMPTS
         if (!retryable) throw error
         attemptError = error

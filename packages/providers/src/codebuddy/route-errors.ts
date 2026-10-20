@@ -5,9 +5,15 @@ export function codeBuddyRouteFailure(input: UpstreamRouteErrorInput): UpstreamR
   const root = object(input.body);
   const error = object(root.error);
   const row = Object.keys(error).length ? error : root;
+  const message = first(row, 'message', 'msg', 'error_message');
   const code = first(row, 'reason_code', 'code', 'type');
   const until = time(first(row, 'resets_at', 'reset_at', 'reset_time'));
   const quotaPoolId = first(row, 'quota_pool_id', 'quotaPoolId');
+  if (typeof message === 'string' && (
+    /service info not found/i.test(message)
+    || /not in (?:the )?supported models/i.test(message)
+    || (/model/i.test(message) && /not found/i.test(message))
+  )) return { state: 'model_unavailable', scope: 'route' };
   if (code === 'quota_exhausted' || code === 'insufficient_quota') {
     return { state: 'quota_exhausted', scope: 'pool', ...(typeof quotaPoolId === 'string' ? { quotaPoolId } : {}), ...(until ? { until } : {}) };
   }

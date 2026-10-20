@@ -11,7 +11,7 @@ import type {
  * other open circuit state. `other` covers auth/model/delivery faults, which
  * must not trigger a retry.
  */
-export type TaskRouteFaultState = 'quota_exhausted' | 'rate_limited' | 'other'
+export type TaskRouteFaultState = 'quota_exhausted' | 'rate_limited' | 'model_unavailable' | 'access_denied' | 'other'
 
 /**
  * Optional daemon-owned native-task route-state port. The daemon binds it to
