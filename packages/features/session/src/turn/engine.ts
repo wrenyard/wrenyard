@@ -625,10 +625,11 @@ class Engine implements Session, SessionCallHost {
     const admitted = registeredModel === input.model.model
       ? input
       : { ...input, model: { ...input.model, model: registeredModel } };
-    // Bot provenance: an explicit sender, or a host that binds this session to a
-    // bot tool port. The model of such a turn came from automatic routing and
-    // may be replaced within the turn when its route becomes unusable.
-    const automatic = admitted.sender !== undefined || this.host.agentTools?.(sessionId) !== undefined;
+    // A bot's own session (a host that binds it to a bot tool port) runs on an
+    // automatically selected model that may be replaced within the turn. A
+    // work session's model is chosen by its caller, a person or a bot sending
+    // to it, and never switches inside a running turn.
+    const automatic = this.host.agentTools?.(sessionId) !== undefined;
     const modelInput = automatic
       ? { ...admitted, model: { ...admitted.model, automatic: true } }
       : admitted;

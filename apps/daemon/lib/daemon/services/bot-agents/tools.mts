@@ -65,6 +65,8 @@ export interface AgentToolContext {
   removeWatches(sessionId: string): void
   /** The ranked model routes this bot may run on, best first. */
   selectModels(): Promise<readonly AgentModelRoute[]>
+  /** True when a session model's route may be called now. */
+  isModelUsable(provider: string, model: string): boolean
 }
 
 /** What one tool call returns: a JSON payload, or the failure text. */
@@ -484,10 +486,11 @@ async function stopSession(
 }
 
 /**
- * The model one send runs on. A session that already has a current model keeps
- * that model and its effort, so later sends stay on the session's model.
- * Otherwise the first route of the automatic ladder supplies both the model and
- * its effort; with no route the send fails.
+ * The model one send runs on. A session keeps its current model and effort
+ * while that model is usable. A session without one, or whose model is now
+ * excluded, exhausted or blocked, gets the first route of the system's
+ * automatic selection, exactly as if a person switched the model before
+ * sending; with no route the send fails. A running turn never switches model.
  */
 async function resolveSessionModel(
   sessions: Session,
@@ -495,7 +498,7 @@ async function resolveSessionModel(
   ctx: AgentToolContext,
 ): Promise<AgentModelRoute> {
   const current = currentSessionModel(sessions, sessionId)
-  if (current !== undefined) {
+  if (current !== undefined && ctx.isModelUsable(current.provider, current.model)) {
     return {
       provider: current.provider,
       model: current.model,

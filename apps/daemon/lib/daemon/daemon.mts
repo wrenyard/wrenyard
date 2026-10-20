@@ -1191,6 +1191,16 @@ async function createForemanDaemonResources(
         }
       })
     }
+    const isRouteExcluded = (model: string): boolean => {
+      const settings = readAuxiliaryRoutingSettings(authoritativeConfigPath)
+      const separator = model.indexOf('/')
+      if (separator <= 0) return false
+      const provider = model.slice(0, separator)
+      const modelId = model.slice(separator + 1)
+      if ((settings?.exclude?.providers ?? []).includes(provider)) return true
+      const excludedModels = settings?.exclude?.models ?? []
+      return excludedModelIdsFor(catalog.provider(provider), excludedModels).has(modelId)
+    }
     const daemonSessionHost = createDaemonSessionHost({
       workspaceRoot,
       stateRoot: sessionStateRoot,
@@ -1211,16 +1221,7 @@ async function createForemanDaemonResources(
       // selects from, and an open wait must observe routing.exclude even when
       // the Gateway has no fault state for the route.
       selectBotRoutes: async () => selectModels(),
-      isRouteExcluded: (model: string) => {
-        const settings = readAuxiliaryRoutingSettings(authoritativeConfigPath)
-        const separator = model.indexOf('/')
-        if (separator <= 0) return false
-        const provider = model.slice(0, separator)
-        const modelId = model.slice(separator + 1)
-        if ((settings?.exclude?.providers ?? []).includes(provider)) return true
-        const excludedModels = settings?.exclude?.models ?? []
-        return excludedModelIdsFor(catalog.provider(provider), excludedModels).has(modelId)
-      },
+      isRouteExcluded,
       // The session's main inference validates against the same product-wired
       // catalog already injected into the gateway/provider.list surface, so a
       // CodeBuddy model is only offered after the daemon read the real install.
@@ -1269,6 +1270,12 @@ async function createForemanDaemonResources(
       sessions: session,
       todos: workspaceTodoService,
       selectModels,
+      // A route is usable unless it is excluded or its shared state is open
+      // (quota exhausted or blocked by backoff).
+      isModelUsable: (provider, model) => {
+        const id = `${provider}/${model}`
+        return !isRouteExcluded(id) && gateway.routeStatus(id)?.phase !== 'open'
+      },
       log: (level, message) => writeDaemonLog(level, message),
     })
     return {

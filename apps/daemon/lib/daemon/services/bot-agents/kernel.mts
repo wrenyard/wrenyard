@@ -260,6 +260,8 @@ export interface CreateBotAgentKernelOptions {
   todos: WorkspaceTodoService
   /** The ladder-ranked routes a bot may run on, best first. */
   selectModels(): Promise<readonly AgentModelRoute[]>
+  /** True when a session model's route may be called now. */
+  isModelUsable(provider: string, model: string): boolean
   log(level: 'info' | 'warn' | 'error', message: string): void
 }
 
@@ -811,6 +813,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       message: (to, text) => sendMessage(botId, to, text),
       removeWatches: sessionId => removeWatches(sessionId),
       selectModels: () => options.selectModels(),
+      isModelUsable: (provider, model) => options.isModelUsable(provider, model),
     }
   }
 
