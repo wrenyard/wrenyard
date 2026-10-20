@@ -391,7 +391,15 @@ function buildTurn(
       ...(attachments.length === 0 ? {} : { attachments }),
       ...(started?.sender === undefined ? {} : { sender: started.sender }),
     },
-    model: started?.model ?? { provider: '', model: '' },
+    model: (() => {
+      let actual = started === undefined ? undefined : `${started.model.provider}/${started.model.model}`
+      for (const event of events) {
+        if (event.type === 'span.finished' && event.kind === 'reasoning' && event.requestModel !== undefined) actual = event.requestModel
+      }
+      if (actual === undefined) return { provider: '', model: '' }
+      const [provider, ...parts] = actual.split('/')
+      return { ...(started?.model ?? {}), provider: provider!, model: parts.join('/') }
+    })(),
     status,
     ...(status === 'running' ? { phase: inferPhase(events, calls, actions) } : {}),
     cycle,

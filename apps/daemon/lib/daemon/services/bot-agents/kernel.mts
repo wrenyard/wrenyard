@@ -1416,6 +1416,18 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       const turns = activeTurns.get(botId)
       turns?.delete(turn)
       if (turns?.size === 0) activeTurns.delete(botId)
+      const settledEvents = contextSession().readLedger(sessionId)
+      const settledTurn = [...settledEvents].reverse().find(event => event.type === 'turn.started')
+      let actualModel: string | undefined
+      if (settledTurn?.type === 'turn.started') {
+        for (const event of settledEvents) {
+          if (event.turn === settledTurn.turn && event.type === 'span.finished' && event.kind === 'reasoning' && event.requestModel !== undefined) actualModel = event.requestModel
+        }
+      }
+      if (actualModel !== undefined) {
+        const [provider, ...parts] = actualModel.split('/')
+        holdModel(botId, { provider: provider!, model: parts.join('/'), reasoningEffort: settledTurn?.type === 'turn.started' ? settledTurn.model.reasoningEffort ?? 'default' : 'default' })
+      }
       for (const handler of tracked.handlers) handler(outcome)
     }
     tracked.unsubscribe = contextSession().subscribe(sessionId, event => {

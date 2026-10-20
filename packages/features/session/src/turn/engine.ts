@@ -1905,11 +1905,17 @@ function declaresFast(provider: ProviderDefinition | undefined, modelId: string)
 
 /** The main model (`provider/model`) of the latest turn before `turn`, if any. */
 function lastTurnModel(events: readonly LedgerEvent[], turn: number): string | undefined {
+  let started: Extract<LedgerEvent, { type: 'turn.started' }> | undefined;
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]!;
-    if (event.type === 'turn.started' && event.turn !== turn) return `${event.model.provider}/${event.model.model}`;
+    if (event.type === 'turn.started' && event.turn !== turn) { started = event; break; }
   }
-  return undefined;
+  if (started === undefined) return undefined;
+  let model: string | undefined
+  for (const event of events) {
+    if (event.turn === started.turn && event.type === 'span.finished' && event.kind === 'reasoning' && event.requestModel !== undefined) model = event.requestModel
+  }
+  return model ?? `${started.model.provider}/${started.model.model}`;
 }
 
 /**

@@ -22,6 +22,7 @@ import {
   abortError,
   isContextOverflowError,
   RouteReselectError,
+  isModelError,
   type ModelContentPart,
   type ModelErrorKind,
   type ModelAttempt,
@@ -1280,11 +1281,23 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
               onEvent,
             }), controller.signal);
           } catch (error) {
-            // Only the held route being unusable lets an automatic turn move on;
-            // every other failure stays terminal for the turn.
-            if (!automatic || !(error instanceof RouteReselectError)) throw error;
-            earliestRetry = earliest(earliestRetry, error.retryAt);
+            // Automatically selected routes can move on after either a
+            // preflight refusal or an upstream quota/rate-limit exhaustion.
+            // The transport records upstream failures in route health before
+            // this catch, so the ladder preflight will skip the failed route.
+            if (!automatic) throw error;
+            const preflightReselect = error instanceof RouteReselectError;
+            if (preflightReselect) {
+              earliestRetry = earliest(earliestRetry, error.retryAt);
+            } else if (!isModelError(error)
+              || (error.kind !== 'quota_exhausted' && error.kind !== 'rate_limited')) {
+              throw error;
+            }
+            const previousLength = candidates.length;
             await addLadder();
+            // Keep the upstream failure as the terminal result when routing
+            // has no alternative to try. User-pinned sends never reach here.
+            if (!preflightReselect && index + 1 >= candidates.length) throw error;
           }
         }
 

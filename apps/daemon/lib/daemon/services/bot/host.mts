@@ -1977,16 +1977,15 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
 
   /** The latest `turn.started` model of one session, or undefined. */
   function latestSessionModel(sessionId: string): BotModel | undefined {
-    let found: BotModel | undefined
-    for (const event of session.readLedger(sessionId)) {
-      if (event.type !== 'turn.started') continue
-      found = {
-        provider: event.model.provider,
-        model: event.model.model,
-        reasoningEffort: (event.model.reasoningEffort ?? 'default') as BotModel['reasoningEffort'],
-      }
+    const events = session.readLedger(sessionId)
+    const latest = [...events].reverse().find(event => event.type === 'turn.started')
+    if (latest?.type !== 'turn.started') return undefined
+    let actual = `${latest.model.provider}/${latest.model.model}`
+    for (const event of events) {
+      if (event.turn === latest.turn && event.type === 'span.finished' && event.kind === 'reasoning' && event.requestModel !== undefined) actual = event.requestModel
     }
-    return found
+    const [provider, ...parts] = actual.split('/')
+    return { provider: provider!, model: parts.join('/'), reasoningEffort: (latest.model.reasoningEffort ?? 'default') as BotModel['reasoningEffort'] }
   }
 
   /**

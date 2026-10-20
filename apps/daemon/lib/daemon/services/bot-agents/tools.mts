@@ -510,16 +510,19 @@ async function resolveSessionModel(
 
 /** The model a session's newest started turn ran on, as `turn.started` recorded it. */
 function currentSessionModel(sessions: Session, sessionId: string): TurnModel | undefined {
-  let newestTurn: number | undefined
-  let newest: TurnModel | undefined
-  for (const event of sessions.readLedger(sessionId)) {
-    if (event.type !== 'turn.started' || event.turn === undefined) continue
-    if (newestTurn === undefined || event.turn > newestTurn) {
-      newestTurn = event.turn
-      newest = event.model
-    }
+  const events = sessions.readLedger(sessionId)
+  const started = [...events].reverse().find(event => event.type === 'turn.started')
+  if (started?.type !== 'turn.started') return undefined
+  let model = `${started.model.provider}/${started.model.model}`
+  for (const event of events) {
+    if (event.turn === started.turn && event.type === 'span.finished' && event.kind === 'reasoning' && event.requestModel !== undefined) model = event.requestModel
   }
-  return newest
+  const [provider, ...parts] = model.split('/')
+  return {
+    ...started.model,
+    provider: provider!,
+    model: parts.join('/'),
+  }
 }
 
 // ─── todo tool ─────────────────────────────────────────────────────────────
