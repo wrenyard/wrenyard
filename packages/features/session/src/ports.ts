@@ -194,8 +194,6 @@ export interface AgentToolPort {
   system: string;
   /** Native tools offered to the model; empty means text replies only. */
   tools: readonly ToolSpec[];
-  /** Per-turn tool-call cap; default 24. */
-  maxToolCalls?: number;
   /**
    * Kernel facts appended verbatim to the context after a compaction (watches,
    * routines with last run, bot roster); undefined when the host has none.

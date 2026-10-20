@@ -59,11 +59,6 @@ export interface TurnRuntime {
   actionsThisStep: number;
   /** Completed wy_action tool calls seen this step. */
   toolCallsThisStep: number;
-  /**
-   * Agent-tool-port tool calls started in this turn, across every step. The
-   * port's own per-turn cap reads it, so the cap holds across steps.
-   */
-  portToolCallsThisTurn: number;
   /** Natural-language questions collected from this step's tool calls. */
   asksThisStep: string[];
   /** Tool calls being parsed/started; separate from the executions they spawn. */

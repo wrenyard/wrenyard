@@ -66,8 +66,6 @@ import {
 
 export type { AgentModelRoute } from './tools.mts'
 
-/** How many tool calls one bot turn may make before the port refuses more. */
-const MAX_TOOL_CALLS = 24
 /** How long one bot turn may run before it is interrupted. */
 const TURN_TIMEOUT_MS = 20 * 60_000
 /** How long an interrupted turn may take to settle before the wake gives up. */
@@ -784,7 +782,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     return {
       system: botSystemPrompt(entry, entries.values()),
       tools: agentToolSpecs(entry.config.tools),
-      maxToolCalls: MAX_TOOL_CALLS,
       kernelFacts: () => kernelFactsFor(entry),
       auxiliaryTools: { workspace: 'vcs' },
       run: (call) => runTools(call, toolContext(botId)),
