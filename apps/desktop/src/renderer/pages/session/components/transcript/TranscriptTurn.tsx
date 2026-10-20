@@ -15,6 +15,7 @@ import { formatTokenCount } from '@/renderer/lib/format';
 import {
   DISPATCH_TERMINAL_LABEL,
   HIDDEN_CALL_ROLES,
+  HIDDEN_CONTEXT_SOURCES,
   dispatchTerminal,
   runningStepName,
   thinkingVerb,
@@ -23,12 +24,12 @@ import {
   waitingStatusText,
 } from '../../model/describe.js';
 import type { TurnWaitingState } from '../../model/describe.js';
-import type { ActionModel, CallModel, ContextItem, ErrorItem, ModelEntry, ReplyModel, TurnModel } from '../../model/types.js';
+import type { ActionModel, ActivityItem, CallModel, ContextItem, ErrorItem, ModelEntry, ReplyModel, TurnModel } from '../../model/types.js';
 import { MediaAttachments, fromSessionFile } from '../MediaAttachments.js';
 import { splitReplyQuote } from '../conversation/UserMessage.js';
 import { Ellipsis, WorkingDots } from '../live-indicators.js';
 import { MorphText } from '../morph-text.js';
-import { ActivityGroup, groupId, type ActivityItem } from './ActivityGroup.js';
+import { ActivityGroup, groupId, type GroupActivityItem } from './ActivityGroup.js';
 
 export interface TranscriptTurnProps {
   /** The folded turn to render. */
@@ -121,20 +122,51 @@ function ErrorRow({ error }: { error: ErrorItem }) {
 
 /** One body block: a folded activity group, a prose reply or an error line. */
 type BodyBlock =
-  | { kind: 'group'; items: ActivityItem[] }
+  | { kind: 'group'; items: GroupActivityItem[] }
   | { kind: 'reply'; reply: ReplyModel }
   | { kind: 'error'; error: ErrorItem };
 
 type TranscriptEntry =
-  | { kind: 'activity'; item: ActivityItem }
+  | { kind: 'activity'; item: GroupActivityItem }
   | { kind: 'reply'; reply: ReplyModel }
   | { kind: 'error'; error: ErrorItem };
+
+function transcriptActivityItem(item: ActivityItem, system = false): GroupActivityItem {
+  return system ? { ...item, system: true } : item;
+}
+
+function markActivityItem(item: ActivityItem): GroupActivityItem {
+  switch (item.kind) {
+    case 'call':
+      return transcriptActivityItem(item, isSystemCall(item.call));
+    case 'context':
+      return transcriptActivityItem(item, isSystemContext(item.item));
+    default:
+      return item;
+  }
+}
+
+function isSystemCall(call: CallModel): boolean {
+  return HIDDEN_CALL_ROLES.has(call.role);
+}
+
+function isSystemContext(context: ContextItem): boolean {
+  return HIDDEN_CONTEXT_SOURCES.has(context.source);
+}
+
+/** Cycle errors that only reflect failed engine auxiliaries stay in the trace view. */
+function omitTranscriptError(turn: TurnModel, error: ErrorItem): boolean {
+  const cycle = error.cycle;
+  if (cycle === undefined) return false;
+  const failedCalls = turn.calls.filter((call) => call.cycle === cycle && call.status === 'failed');
+  if (failedCalls.length === 0) return false;
+  return failedCalls.every((call) => HIDDEN_CALL_ROLES.has(call.role));
+}
 
 /** Chronological entries of a turn: activity items, prose replies and errors. */
 function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
-  const visibleCalls = turn.calls.filter((call) => !HIDDEN_CALL_ROLES.has(call.role));
-  const turnCalls = visibleCalls.filter(
+  const turnCalls = turn.calls.filter(
     (call) => (call.cycle === undefined || call.cycle === 0)
       && call.role !== 'reason'
       && !attachedToAction(call, turn.actions),
@@ -143,22 +175,22 @@ function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
   const beforeFirstCycle = (call: CallModel): boolean => firstCycleStart === undefined
     || parseStamp(call.startedAt) < parseStamp(firstCycleStart);
   for (const call of turnCalls.filter(beforeFirstCycle)) {
-    entries.push({ kind: 'activity', item: { kind: 'call', call } });
+    entries.push({ kind: 'activity', item: markActivityItem({ kind: 'call', call }) });
   }
 
   for (const cycle of turn.cycles) {
     for (const item of cycle.context.filter((context) => context.actionId === undefined)) {
-      entries.push({ kind: 'activity', item: { kind: 'context', item } });
+      entries.push({ kind: 'activity', item: markActivityItem({ kind: 'context', item }) });
     }
     const inCycle: { at: string; item: ActivityItem }[] = [];
-    const reasoning = visibleCalls.find((call) => call.role === 'reason' && call.cycle === cycle.index);
+    const reasoning = turn.calls.find((call) => call.role === 'reason' && call.cycle === cycle.index);
     if (reasoning !== undefined) {
       inCycle.push({
         at: reasoning.startedAt,
         item: { kind: 'reason', call: reasoning, reasoning: cycle.reasoning },
       });
     }
-    const standalone = visibleCalls.filter(
+    const standalone = turn.calls.filter(
       (call) => call.cycle === cycle.index && call.role !== 'reason' && !attachedToAction(call, turn.actions),
     );
     for (const call of standalone) {
@@ -168,21 +200,24 @@ function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
       .map((id) => turn.actions.find((action) => action.id === id))
       .filter((action): action is ActionModel => action !== undefined);
     for (const action of actions) {
-      const calls = visibleCalls.filter(
-        (call) => call.parent === action.id || call.id.startsWith(`${action.id}.`),
+      const calls = turn.calls.filter(
+        (call) => (call.parent === action.id || call.id.startsWith(`${action.id}.`))
+          && !HIDDEN_CALL_ROLES.has(call.role),
       );
       inCycle.push({ at: action.startedAt, item: { kind: 'action', action, calls } });
     }
     inCycle.sort((a, b) => parseStamp(a.at) - parseStamp(b.at));
-    for (const entry of inCycle) entries.push({ kind: 'activity', item: entry.item });
-    for (const error of cycle.errors) entries.push({ kind: 'error', error });
+    for (const entry of inCycle) entries.push({ kind: 'activity', item: markActivityItem(entry.item) });
+    for (const error of cycle.errors) {
+      if (!omitTranscriptError(turn, error)) entries.push({ kind: 'error', error });
+    }
     for (const reply of turn.replies.filter((reply) => reply.cycle === cycle.index)) {
       entries.push({ kind: 'reply', reply });
     }
   }
 
   for (const call of turnCalls.filter((call) => !beforeFirstCycle(call))) {
-    entries.push({ kind: 'activity', item: { kind: 'call', call } });
+    entries.push({ kind: 'activity', item: markActivityItem({ kind: 'call', call }) });
   }
   const cycleIndices = new Set(turn.cycles.map((cycle) => cycle.index));
   for (const reply of turn.replies.filter((reply) => reply.cycle === undefined || !cycleIndices.has(reply.cycle))) {
@@ -263,7 +298,7 @@ export function TranscriptTurn({ turn, sessionId, models, botNames, onCancelTask
 
   // A maximal run of consecutive activity items becomes one summary group.
   const body: BodyBlock[] = [];
-  let run: ActivityItem[] = [];
+  let run: GroupActivityItem[] = [];
   const flush = (): void => {
     if (run.length === 0) return;
     body.push({ kind: 'group', items: run });

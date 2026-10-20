@@ -63,7 +63,19 @@ export const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
  * System auxiliary roles kept out of the transcript: they run for every turn
  * and say nothing about the work. Their spans stay in the ledger and the trace.
  */
-export const HIDDEN_CALL_ROLES: ReadonlySet<CallModel['role']> = new Set(['status', 'title', 'suggestion', 'reply']);
+export const HIDDEN_CALL_ROLES: ReadonlySet<CallModel['role']> = new Set([
+  'status',
+  'title',
+  'suggestion',
+  'reply',
+  'memory-search',
+]);
+
+/** Context loaded by the engine, not chosen by the model in the transcript. */
+export const HIDDEN_CONTEXT_SOURCES: ReadonlySet<ContextItem['source']> = new Set([
+  'memory-search',
+  'project-instructions',
+]);
 
 /** Row verb of every action kind. */
 export const ACTION_KIND_LABEL: Record<ActionModel['kind'], string> = {
@@ -216,7 +228,9 @@ export function turnStatusText(turn: TurnModel): string {
 export function runningStepName(turn: TurnModel): string | undefined {
   const action = turn.actions.find((item) => item.status === 'running');
   if (action !== undefined) return action.title === '' ? '运行中' : action.title;
-  const call = turn.calls.find((item) => item.status === 'running' && item.role !== 'reason');
+  const call = turn.calls.find(
+    (item) => item.status === 'running' && item.role !== 'reason' && !HIDDEN_CALL_ROLES.has(item.role),
+  );
   if (call !== undefined) return `正在${CALL_ROLE_LABEL[call.role] ?? call.role}`;
   return undefined;
 }
