@@ -74,35 +74,14 @@ export class JsonForemanConfigStore implements ForemanConfigStore {
 
     const relocated = migrateGlobalRoutingExclusions(migratedRecord ?? (parsed as ConfigRecord))
     if (relocated.changed) {
-      const record = relocated.record as ConfigRecord
-      if (this.persistMigration(configPath, record)) {
-        console.error('config: migrated global model/provider exclusions to routing.exclude')
-      }
-      return record
+      return relocated.record as ConfigRecord
     }
 
     if (migratedRecord !== null) {
-      this.persistMigration(configPath, migratedRecord)
       return migratedRecord
     }
 
     return parsed as ConfigRecord
-  }
-
-  /**
-   * Persist a migration found while reading. The migrated record is valid on
-   * its own, so a failed write (for example a file another process holds open,
-   * which blocks the replace on Windows) is logged and the read still succeeds;
-   * the migration is written again on the next read or config change.
-   */
-  private persistMigration(configPath: string, record: ConfigRecord): boolean {
-    try {
-      this.write(configPath, record)
-      return true
-    } catch (error) {
-      console.error(`config: could not write the migrated config yet: ${error instanceof Error ? error.message : String(error)}`)
-      return false
-    }
   }
 
   write(configPath: string, data: ConfigRecord): void {
