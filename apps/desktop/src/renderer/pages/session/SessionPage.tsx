@@ -20,6 +20,7 @@ import { openMiniCard, restoreMain, setCurrentSession, useMiniMode } from '@/ren
 import { markSessionSeen } from '@/renderer/lib/session-seen';
 import { setActiveSession, useNavLocation } from '@/renderer/lib/navigation';
 import { sessionListQueryKey } from '@/renderer/lib/queries';
+import { useAgentsQuery } from '../agents/queries.js';
 import { getSessionApi } from './api.js';
 import { Composer } from './components/Composer.js';
 import { EmptySession } from './components/EmptySession.js';
@@ -91,6 +92,11 @@ function RunningDispatchTasks({ api, turns, setTasks }: {
 
 /** The session page: the agent transcript of the session ledger. */
 export function SessionPage() {
+  const agents = useAgentsQuery();
+  const botNames = useMemo(
+    () => new Map((agents.data?.bots ?? []).map((bot) => [bot.id, bot.name])),
+    [agents.data],
+  );
   const api = getSessionApi();
   const mini = useMiniMode();
   const page = useShellPage();
@@ -363,6 +369,7 @@ export function SessionPage() {
                       <TranscriptView
                         turns={model.turns}
                         pending={state.pending}
+                        botNames={botNames}
                         sessionId={state.selectedId}
                         models={state.models}
                         onCancelTask={cancelTask}

@@ -19,6 +19,7 @@ import {
   runningStepName,
   thinkingVerb,
   turnTokenTotal,
+  userSpeakerLabel,
   waitingStatusText,
 } from '../../model/describe.js';
 import type { TurnWaitingState } from '../../model/describe.js';
@@ -36,6 +37,8 @@ export interface TranscriptTurnProps {
   sessionId?: string;
   /** Model catalog, used to show a reply's model display name. */
   models?: readonly ModelEntry[];
+  /** Bot display names, keyed by immutable bot id. */
+  botNames?: ReadonlyMap<string, string>;
   /** Cancel one dispatched task run; rejects when the daemon refuses. */
   onCancelTask: (taskRunId: string) => Promise<void>;
   /** Live recovery waiting state of this turn, when it has one. */
@@ -255,7 +258,7 @@ function LiveLine({ turn, sessionId, waiting }: { turn: TurnModel; sessionId?: s
 }
 
 /** One turn as a chronological transcript. */
-export function TranscriptTurn({ turn, sessionId, models, onCancelTask, waiting }: TranscriptTurnProps) {
+export function TranscriptTurn({ turn, sessionId, models, botNames, onCancelTask, waiting }: TranscriptTurnProps) {
   const attachments = (turn.user.attachments ?? []).map(fromSessionFile);
   // Terminal states are told apart only for a turn that dispatched: a compile
   // that never opened a task run reads as 编译失败, not as a running task.
@@ -297,6 +300,7 @@ export function TranscriptTurn({ turn, sessionId, models, onCancelTask, waiting 
   return (
     <div className="relative flex flex-col gap-3" data-lightbox-root>
       <div className="group/msg flex flex-col items-end gap-1.5">
+        <span className="self-end px-1 text-xs text-muted-foreground">{userSpeakerLabel(turn.user.sender, botNames)}</span>
         <div className="max-w-[85%] rounded-2xl bg-muted px-4 py-2.5 text-sm whitespace-pre-wrap break-words">
           {turn.user.text}
           {attachments.length > 0 && (
@@ -321,7 +325,7 @@ export function TranscriptTurn({ turn, sessionId, models, onCancelTask, waiting 
         if (block.kind === 'reply') {
           // The turn's terminal state belongs to its last reply, and stays
           // visible even while the footer fades.
-          const tail = index === lastReplyIndex;
+          const tail = index === lastReplyIndex && turn.status !== 'running';
           return (
             <ReplyBlock
               key={`${block.reply.at}:${block.reply.cycle ?? 0}`}

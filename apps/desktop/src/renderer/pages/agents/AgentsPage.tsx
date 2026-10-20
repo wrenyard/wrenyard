@@ -938,7 +938,7 @@ function RosterButton(props: {
 }
 
 /** Private mode: one bot's own context ledger, folded as before. */
-function PrivateConversation(props: { id: string }) {
+function PrivateConversation(props: { id: string; botNames: ReadonlyMap<string, string> }) {
   const events = useAgentEvents(props.id);
   const model = useMemo(() => fold(events, [], {}, {}), [events]);
   const timeline = useMemo(() => buildMessageTimeline(model.turns, []), [model.turns]);
@@ -963,6 +963,7 @@ function PrivateConversation(props: { id: string }) {
             <MessageTimeline
               timeline={timeline}
               turns={model.turns}
+              botNames={props.botNames}
               freshMessageKeys={freshKeys}
               onRetry={() => {}}
               onRemove={() => {}}
@@ -1018,6 +1019,7 @@ function PrivateComposer(props: {
 /** Private mode: the selected bot's header, history and composer. */
 function PrivateView(props: {
   bot: AgentBot;
+  botNames: ReadonlyMap<string, string>;
   draft: string;
   onDraftChange: (value: string) => void;
 }) {
@@ -1050,7 +1052,7 @@ function PrivateView(props: {
         )}
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <PrivateConversation id={props.bot.id} />
+        <PrivateConversation id={props.bot.id} botNames={props.botNames} />
       </div>
       <div className="shrink-0 border-t bg-background px-4 py-3">
         <PrivateComposer
@@ -1082,6 +1084,10 @@ export function AgentsPage() {
   const groupInsertRef = useRef<((bot: AgentBot) => void) | null>(null);
 
   const bots = useMemo(() => sortBots(agents.data?.bots ?? []), [agents.data]);
+  const botNames = useMemo(
+    () => new Map((agents.data?.bots ?? []).map((bot) => [bot.id, bot.name])),
+    [agents.data],
+  );
 
   // Keep a valid private selection as the polled list changes.
   useEffect(() => {
@@ -1176,6 +1182,7 @@ export function AgentsPage() {
         ) : (
           <PrivateView
             bot={selected}
+            botNames={botNames}
             draft={privateDrafts[selected.id] ?? ''}
             onDraftChange={(value) => setPrivateDrafts((previous) => ({ ...previous, [selected.id]: value }))}
           />

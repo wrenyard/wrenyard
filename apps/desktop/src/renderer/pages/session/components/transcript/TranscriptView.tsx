@@ -23,6 +23,8 @@ export interface TranscriptViewProps {
   sessionId?: string;
   /** Model catalog, forwarded so replies can show a display name. */
   models?: readonly ModelEntry[];
+  /** Bot display names, keyed by immutable bot id. */
+  botNames?: ReadonlyMap<string, string>;
   /** Cancel one dispatched task run. */
   onCancelTask: (taskRunId: string) => Promise<void>;
   /** Retry one pending send that failed. */
@@ -39,6 +41,7 @@ export const TranscriptView = memo(function TranscriptView({
   pending,
   sessionId,
   models,
+  botNames,
   onCancelTask,
   onRetry,
   onRemove,
@@ -57,6 +60,7 @@ export const TranscriptView = memo(function TranscriptView({
             turn={turn}
             sessionId={sessionId}
             models={models}
+            botNames={botNames}
             onCancelTask={onCancelTask}
             waiting={waiting?.get(turn.id)}
           />
