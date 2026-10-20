@@ -44,7 +44,14 @@ function activityLevel(value: number): ActivityLevel {
  * leading and trailing placeholders, a short month label at the week where the
  * month starts, and a fixed 0-5 token-intensity level per day.
  */
-export function buildActivityHeatmap(daily: StatsDailySnapshot[]): ActivityHeatmapModel {
+function startOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+export function buildActivityHeatmap(
+  daily: StatsDailySnapshot[],
+  options?: { endAt?: Date },
+): ActivityHeatmapModel {
   const parsed = daily
     .map((day) => ({ day, date: parseLocalDayKey(day.dayKey) }))
     .filter((item): item is { day: StatsDailySnapshot; date: Date } => item.date !== null)
@@ -61,7 +68,7 @@ export function buildActivityHeatmap(daily: StatsDailySnapshot[]): ActivityHeatm
     const weekIndex = Math.floor(slots.length / 7);
     if (monthKey !== previousMonth) {
       const month = {
-        label: new Intl.DateTimeFormat('en-US', { month: 'short' }).format(date),
+        label: `${date.getMonth() + 1}月`,
         weekIndex,
       };
       if (months.at(-1)?.weekIndex === weekIndex) months[months.length - 1] = month;
@@ -69,6 +76,26 @@ export function buildActivityHeatmap(daily: StatsDailySnapshot[]): ActivityHeatm
       previousMonth = monthKey;
     }
     slots.push({ day, level: activityLevel(day.totalTokens) });
+  }
+
+  if (options?.endAt) {
+    const endAt = startOfLocalDay(options.endAt);
+    let lastDate: Date | null = null;
+    for (let i = slots.length - 1; i >= 0; i--) {
+      const dayKey = slots[i].day?.dayKey;
+      if (dayKey) {
+        lastDate = parseLocalDayKey(dayKey);
+        if (lastDate) break;
+      }
+    }
+    if (lastDate) {
+      const cursor = startOfLocalDay(lastDate);
+      cursor.setDate(cursor.getDate() + 1);
+      while (cursor.getTime() <= endAt.getTime()) {
+        slots.push({ day: null, level: 0 });
+        cursor.setDate(cursor.getDate() + 1);
+      }
+    }
   }
 
   const trailing = (7 - (slots.length % 7)) % 7;
