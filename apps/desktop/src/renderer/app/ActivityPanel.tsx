@@ -14,6 +14,8 @@ import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
 import { Item } from '@/renderer/components/ui/item';
 import { Separator } from '@/renderer/components/ui/separator';
+import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
+import { PanelFooterAction } from '@/renderer/components/panel-footer-action';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { TaskTranscript, type TaskRunEventsLoader } from '@/renderer/components/task-transcript';
 import { executeCommand } from '@/renderer/lib/commands';
@@ -23,7 +25,7 @@ import { useAppearance } from '@/renderer/lib/theme';
 import { closeActivityPanel, setActivityPanelTab, useActivityPanelState, type ActivityPanelTab } from '@/renderer/lib/activity-panel';
 import { UsagePanel } from '@/renderer/app/UsagePanel';
 import { useActiveSession } from '@/renderer/lib/navigation';
-import { PHASE_LABEL, TASK_RUN_PHASE_LABEL, runningTaskAction } from '@/renderer/pages/session/model/describe';
+import { TASK_RUN_PHASE_LABEL, runningTaskAction } from '@/renderer/pages/session/model/describe';
 import { isRunningTask } from '@/renderer/pages/session/model/fold';
 import type { ActionKindModel } from '@/renderer/pages/session/model/types';
 import type { ActivityStatusTask, ActivityStatusTaskGraph } from '@/shell-contract';
@@ -44,6 +46,12 @@ const ACTION_LABEL: Record<ActionKindModel, string> = {
 
 /** A finished run stays listed this long for a result preview. */
 const FINISHED_RETENTION_MS = 10 * 60 * 1000;
+const TURN_PHASE_LABEL: Record<'preparing' | 'reasoning' | 'acting' | 'replying', string> = {
+  preparing: '准备中',
+  reasoning: '推理中',
+  acting: '行动中',
+  replying: '回复中',
+};
 
 /** One task run shown in the list: live from the snapshot or recently finished. */
 interface ListedTask extends ActivityStatusTask {
@@ -246,38 +254,34 @@ export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
     <div className="flex min-h-0 flex-1 flex-col bg-background">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
         {/* 活动 / 用量 tabs; the selected tab is persisted by the store. */}
-        <div className="flex items-center rounded-md border p-0.5 text-xs">
-          {(['activity', 'usage'] as const).map((value: ActivityPanelTab) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setActivityPanelTab(value)}
-              className={cn(
-                'rounded-sm px-2 py-0.5',
-                tab === value ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {value === 'activity' ? '活动' : '用量'}
-            </button>
-          ))}
-        </div>
+        <ToggleGroup
+          aria-label="右侧面板内容"
+          value={[tab]}
+          onValueChange={(values) => {
+            const value = values.find((item): item is ActivityPanelTab => item === 'activity' || item === 'usage');
+            if (value !== undefined) setActivityPanelTab(value);
+          }}
+          size="sm"
+          variant="outline"
+        >
+          <ToggleGroupItem value="activity">活动</ToggleGroupItem>
+          <ToggleGroupItem value="usage">用量</ToggleGroupItem>
+        </ToggleGroup>
         <div className="flex items-center gap-1">
           {tab === 'activity' && sessionOpen && (
-            <div className="flex items-center rounded-md border p-0.5 text-xs">
-              {(['session', 'all'] as const).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setScope(value)}
-                  className={cn(
-                    'rounded-sm px-2 py-0.5',
-                    scope === value ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {value === 'session' ? '本会话' : '全部'}
-                </button>
-              ))}
-            </div>
+            <ToggleGroup
+              aria-label="活动范围"
+              value={[scope]}
+              onValueChange={(values) => {
+                const value = values.find((item): item is 'session' | 'all' => item === 'session' || item === 'all');
+                if (value !== undefined) setScope(value);
+              }}
+              size="sm"
+              variant="outline"
+            >
+              <ToggleGroupItem value="session">本会话</ToggleGroupItem>
+              <ToggleGroupItem value="all">全部</ToggleGroupItem>
+            </ToggleGroup>
           )}
           <Button variant="ghost" size="icon-sm" aria-label="关闭" onClick={closeActivityPanel}>
             <X />
@@ -304,12 +308,12 @@ export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
               // from the turn, and never labelled as compiling.
               const taskRuns = turn.actions.filter(isRunningTask);
               const taskRun = runningTaskAction(turn);
-              const phase = taskRun === undefined ? PHASE_LABEL[turn.phase ?? 'preparing'] : TASK_RUN_PHASE_LABEL;
+              const phase = taskRun === undefined ? TURN_PHASE_LABEL[turn.phase ?? 'preparing'] : TASK_RUN_PHASE_LABEL;
               return (
                 <div key={turn.id} className="ml-3 border-l border-border pl-2">
                   <ActivityRow
                     icon={Activity}
-                    title={'第 ' + turn.id + ' 轮 · ' + phase + '中'}
+                    title={'第 ' + turn.id + ' 轮 · ' + phase}
                     detail={turn.user.text}
                     startedAt={turn.startedAt}
                     onClick={() => openSession(session.sessionId)}
@@ -337,21 +341,16 @@ export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
           </section>
         ) : null)}
         {visibleStandalone.length > 0 ? <>
-          <p className="px-2.5 pt-1 text-xs text-muted-foreground">智能体任务</p>
+          <p className="px-2.5 pt-1 text-xs text-muted-foreground">独立运行的任务</p>
           {visibleStandalone.map(renderTask)}
         </> : null}
         {scopedFinished.length > 0 ? <>
-          <p className="px-2.5 pt-1 text-xs text-muted-foreground">智能体任务</p>
+          <p className="px-2.5 pt-1 text-xs text-muted-foreground">已结束的任务</p>
           {scopedFinished.map(renderTask)}
         </> : null}
         {empty ? <p className="px-2 py-6 text-center text-xs text-muted-foreground">
           {sessions.isPending ? '正在读取活动…' : stale ? '暂时无法读取活动' : '暂无进行中的会话或任务'}
         </p> : null}
-        <div className="p-2">
-          <Button type="button" variant="ghost" size="sm" className="w-full" onClick={() => executeCommand('tasks.open')}>
-            打开任务页
-          </Button>
-        </div>
       </div>
 
       {selectedTaskRunId !== null && (
@@ -395,6 +394,8 @@ export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
           </div>
         </>
       )}
+      <Separator />
+      <PanelFooterAction label="打开任务页" onClick={() => executeCommand('tasks.open')} />
       </>
       )}
     </div>
