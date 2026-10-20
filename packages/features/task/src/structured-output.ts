@@ -323,6 +323,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
   let resume: string | undefined
   let lastExecutionId: string | undefined
   let resolvedProfile: string | undefined
+  let lastSessionOutput: string | undefined
 
   // ── Main attempt loop: dispatch injected agent runner, parse delivery output ──
   //
@@ -413,7 +414,12 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
       ? totalBudgetMs - reservedWarningMs
       : STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS
     const attemptTimeoutMs = Math.min(attemptCapMs, remainingTotalMs)
-    const terminal = await runStructuredAttempt(
+    // A correction that fails to launch (for example a lost resume snapshot)
+    // must not discard what the run already produced: that output rides on
+    // the failure.
+    let terminal: Awaited<ReturnType<typeof runStructuredAttempt>>
+    try {
+      terminal = await runStructuredAttempt(
         opts.runAgent,
         attemptProfile,
         attemptPrompt,
@@ -430,6 +436,12 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
           codeBuddyExecution: opts.codeBuddyExecution,
         },
       )
+    } catch (error) {
+      if (lastSessionOutput !== undefined && error instanceof Error) {
+        error.message = `${error.message}\n\nOutput the run produced before this failure:\n${lastSessionOutput}`
+      }
+      throw error
+    }
     // The budget is execution time: waiting for a write lock never consumes it.
     deadlineMs += terminal.queueWaitMs ?? 0
     lastExecutionId = terminal.executionId ?? lastExecutionId
@@ -455,6 +467,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
           assertResolvedProfileForRetry(opts.profile, resolvedProfile),
           deadlineMs,
           lastExecutionId,
+          terminal.output,
         )
         opts.onDelivery?.({
           summary: prependTimeLimitMarker(truncated.summary),
@@ -506,6 +519,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
     lastValidationErrors = parsed.validationErrors
     const sessionOutput = terminal.output
     if (sessionOutput) {
+      lastSessionOutput = sessionOutput
       lastActivity = sessionOutput.slice(0, 200)
       if (!lastOutputExcerpt) {
         lastOutputExcerpt = sessionOutput.slice(0, 2000)
@@ -613,7 +627,12 @@ async function runTimeLimitWarningResume(
   warningProfile: string,
   deadlineMs: number,
   lastExecutionId: string | undefined,
+  workOutput?: string,
 ): Promise<{ data: unknown; summary?: string }> {
+  // A warning turn that still ends abnormally reports the whole process: the
+  // stopped work phase's output followed by the warning turn's own.
+  const processOutput = (output?: string): string | undefined =>
+    [workOutput, output].filter((part): part is string => part !== undefined && part !== '').join('\n') || undefined
   const warningTimeoutMs = Math.min(TIME_LIMIT_WARNING_LEAD_MS, deadlineMs - Date.now())
   if (warningTimeoutMs <= 0) {
     throw agentTimeoutError(
@@ -646,7 +665,7 @@ async function runTimeLimitWarningResume(
       terminal.executionId ?? lastExecutionId ?? 'unknown',
       1,
       warningTimeoutMs,
-      terminal.output ?? 'agent execution still running at the time-limit warning deadline',
+      processOutput(terminal.output) ?? 'agent execution still running at the time-limit warning deadline',
     )
   }
   if (terminal.status === 'cancelled' || terminal.status === 'interrupted') {
@@ -680,7 +699,7 @@ async function runTimeLimitWarningResume(
     terminal.executionId ?? lastExecutionId ?? 'unknown',
     1,
     warningTimeoutMs,
-    terminal.output ?? 'time-limit warning resume returned no valid structured output',
+    processOutput(terminal.output) ?? 'time-limit warning resume returned no valid structured output',
   )
 }
 

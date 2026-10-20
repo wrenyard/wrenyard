@@ -684,6 +684,8 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     // Bounded route retry: an automatic submission whose just-used route/pool is
     // still circuit-open with a quota/rate-limit fault and which produced no
     // structured output advances to the next eligible route, up to the cap.
+    // A timeout never advances: the route did work, and the failed run returns
+    // that work to the caller, who decides how to continue.
     // Every other outcome — any other fault state, cancellation,
     // an unresolvable or unchanged re-resolution, an exhausted budget — keeps
     // today's terminal behavior and surfaces the attempt's own error.
@@ -725,7 +727,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         const retryable = options.taskSettingsResolver !== undefined
           && identity !== undefined
           && structuredSummary === undefined
-          && (faultKind === 'quota_exhausted' || faultKind === 'rate_limited' || timedOut)
+          && (faultKind === 'quota_exhausted' || faultKind === 'rate_limited')
           && routeAttempt < MAX_ROUTE_ATTEMPTS
         if (!retryable) throw error
         attemptError = error
