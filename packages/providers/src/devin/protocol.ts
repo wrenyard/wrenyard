@@ -234,7 +234,9 @@ async function* decodeEvents(response: Response, signal: AbortSignal): AsyncGene
   const reader = response.body.getReader();
   let buffer: Uint8Array = new Uint8Array(), toolIndex = -1, stop = 0, ended = false;
   const toolIds = new Map<string, number>();
+  let inputTokens: number | undefined;
   let outputTokens: number | undefined;
+  let cachedInputTokens: number | undefined;
   const abort = () => { void reader.cancel(signal.reason).catch(() => {}); };
   signal.addEventListener('abort', abort, { once: true });
   try {
@@ -282,8 +284,9 @@ async function* decodeEvents(response: Response, signal: AbortSignal): AsyncGene
           } else if (field.num === 5 && field.wire === 0) stop = field.n ?? 0;
           else if (field.num === 7 && field.wire === 2 && field.data) {
             for (const f of parseFields(field.data)) if (f.wire === 0 && f.n !== undefined) {
-              // Preserve actual fields; absent counters remain unknown, including zero.
-              if (f.num === 3) outputTokens = f.n;
+              if (f.num === 2) inputTokens = f.n;
+              else if (f.num === 3) outputTokens = f.n;
+              else if (f.num === 5) cachedInputTokens = f.n;
             }
           }
         }
@@ -295,10 +298,26 @@ async function* decodeEvents(response: Response, signal: AbortSignal): AsyncGene
       if (buffer.length + result.value.length > MAX_FRAME * 2) throw new Error('Devin stream buffer exceeds limit');
       buffer = concat(buffer, result.value);
     }
-    // Cache counters have not been independently verified as disjoint. Publish
-    // only unambiguous output usage until input/cache semantics are established.
+    // Nested 7.2 is input tokens, 7.3 output tokens, and 7.5 cached input tokens,
+    // matching the labelled field-28 Token Usage block where cached input exceeds
+    // uncached input on cached responses, so the counters are disjoint; the gateway
+    // convention counts total input including cached input, so prompt_tokens is
+    // their sum and the cached part is also exposed as
+    // prompt_tokens_details.cached_tokens; subfield 7.6 remains unlabelled and unmapped.
+    const usage =
+      inputTokens === undefined && outputTokens === undefined && cachedInputTokens === undefined
+        ? undefined
+        : {
+            ...(inputTokens !== undefined || cachedInputTokens !== undefined
+              ? { prompt_tokens: (inputTokens ?? 0) + (cachedInputTokens ?? 0) }
+              : {}),
+            ...(outputTokens !== undefined ? { completion_tokens: outputTokens } : {}),
+            ...(cachedInputTokens !== undefined
+              ? { prompt_tokens_details: { cached_tokens: cachedInputTokens } }
+              : {}),
+          };
     yield { stop: toolIndex >= 0 || stop === 10 ? 'tool_calls' : stop === 3 ? 'length' : 'stop',
-      ...(outputTokens === undefined ? {} : { usage: { completion_tokens: outputTokens } }) };
+      ...(usage === undefined ? {} : { usage }) };
   } catch (error) {
     signal.throwIfAborted();
     yield { error: { status: 502, code: 'invalid_stream', message: error instanceof Error ? error.message : 'Devin response parsing failed', upstreamStatus: response.status } };
