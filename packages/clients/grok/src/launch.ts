@@ -150,10 +150,10 @@ async function findGrokRunHomeWithSession(env: NodeJS.ProcessEnv, sessionId: str
  * Preflight the gateway `/models` listing for the requested route. This check
  * fails open: any fetch, timeout, parse, or non-JSON error means "unknown",
  * not "rejected". The launch is rejected only when every matching model
- * entry carries a defined, non-available `route_state`, which tells us the
- * local gateway circuit would refuse the run before it starts.
+ * entry carries a `route_phase` of `open`, which tells us the local gateway
+ * circuit would refuse the run before it starts.
  */
-async function assertGatewayModelAvailable(gateway: string, request: AgentRequest, env: NodeJS.ProcessEnv): Promise<void> {
+async function assertGatewayRouteNotCircuitOpen(gateway: string, request: AgentRequest, env: NodeJS.ProcessEnv): Promise<void> {
     let response: Response;
     try {
         const headers: Record<string, string> = {};
@@ -185,11 +185,16 @@ async function assertGatewayModelAvailable(gateway: string, request: AgentReques
     const target = request.canonicalModel?.trim() ?? request.model;
     const matching = data.filter((entry): entry is Record<string, unknown> =>
         entry !== null && typeof entry === 'object' &&
-        (entry as Record<string, unknown>).id === target);
+        (entry as Record<string, unknown>).id === target &&
+        (request.provider === undefined || (entry as Record<string, unknown>).owned_by === request.provider));
     if (matching.length === 0)
         return;
-    if (matching.every((entry) => typeof entry.route_state === 'string' && entry.route_state !== 'available'))
-        throw new Error(`grok: gateway model ${JSON.stringify(target)} is not available (route_state ${JSON.stringify(matching[0]!.route_state)})`);
+    if (matching.every((entry) => entry.route_phase === 'open')) {
+        const first = matching[0]!;
+        const fault = typeof first.fault_kind === 'string' ? first.fault_kind : first.route_state;
+        const until = typeof first.route_until === 'string' ? `; retry after ${first.route_until}` : '';
+        throw new Error(`Route ${target} is unavailable (fault ${fault}, circuit open)${until}`);
+    }
 }
 
 export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv): Promise<ProcessSpec> {
@@ -236,7 +241,7 @@ export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv):
     const promptPath = join(home, 'prompt.txt');
     const gateway = env.WRENYARD_GATEWAY_OPENAI_CHAT_URL?.replace(/\/chat\/completions$/u, '');
     if (request.mode === 'gateway' && gateway)
-        await assertGatewayModelAvailable(gateway, request, env);
+        await assertGatewayRouteNotCircuitOpen(gateway, request, env);
     const modelId = request.mode === 'gateway' && request.provider
         ? `wrenyard-${request.provider}--${request.model.replace(/[^A-Za-z0-9_]/gu, '-')}`
         : request.model;
