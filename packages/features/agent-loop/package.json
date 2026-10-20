@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@wrenyard/auto-routing": "workspace:*",
-    "@wrenyard/protocol": "workspace:*"
+    "@wrenyard/protocol": "workspace:*",
+    "ajv": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

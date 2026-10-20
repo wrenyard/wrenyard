@@ -17,6 +17,7 @@ export * from './targets/git-commit.ts';
 export * from './targets/markdown.ts';
 export * from './task-timeouts.ts';
 export * from './schema-validation.ts';
+export * from './output-facts.ts';
 export * from './task-settings.ts';
 export * from './run-record.ts';
 /**

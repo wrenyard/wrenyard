@@ -65,6 +65,14 @@ export type {
   AuxiliaryDefinitionId,
   DefinitionPorts,
 } from './definitions.ts';
+export {
+  runTaskOutputCompile,
+  TASK_OUTPUT_COMPILE_MAX_ROUNDS,
+} from './task-output-compile.ts';
+export type {
+  TaskOutputCompileOptions,
+  TaskOutputCompileResult,
+} from './task-output-compile.ts';
 export { SpanRecorder } from './span.ts';
 export type {
   ModelSpanDraft,

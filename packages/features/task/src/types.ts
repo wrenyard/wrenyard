@@ -1,5 +1,7 @@
 import type { ZodType } from 'zod'
 
+import type { TaskOutputFactsMapper } from './output-facts.ts'
+
 /**
  * Schema accepted for task input and output definitions.
  *
@@ -65,6 +67,9 @@ export interface TaskConfigBase {
   instructions?: Array<string | ((input?: unknown) => string | Promise<string>)>
   input: TaskSchemaInput
   output: TaskSchemaInput
+  /** Maps daemon-collected run facts onto output fields the compile step
+   *  enforces after submit and before output-schema validation. */
+  outputFacts?: TaskOutputFactsMapper
   prompt: (input: unknown) => string | Promise<string>
   gates?: {
     pre?: TaskGate[]
