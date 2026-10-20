@@ -1,6 +1,6 @@
 import type { SupplyAssessment, CandidateScore } from './types.ts';
 import { type CandidateInput, type ScoreWeights } from './types.ts';
-import { FIRST_TOKEN_SATURATION_MS, SPEED_SATURATION_BASE_TPS } from './constants.ts';
+import { SPEED_SATURATION_BASE_TPS } from './constants.ts';
 import { clamp01, interpolatePriceFactor, isFiniteNumber } from './numeric.ts';
 /** Computes normalized factors from an admitted candidate and validated evidence. */
 export class CandidateScorer {
@@ -24,12 +24,7 @@ export class CandidateScorer {
     // proportionally less and one above it keeps gaining until saturation, so the
     // same absolute TPS is worth less to a task that expects a fast model.
     const speedSaturationTps = SPEED_SATURATION_BASE_TPS + (isFiniteNumber(expectedTps) ? expectedTps : 0);
-    // Measured first-token latency discounts throughput only when evidence
-    // exists; the saturated penalty leaves TPS-only scoring untouched otherwise.
-    const firstTokenPenalty = isFiniteNumber(candidate.firstTokenMs)
-      ? FIRST_TOKEN_SATURATION_MS / (FIRST_TOKEN_SATURATION_MS + candidate.firstTokenMs)
-      : 1;
-    const speedFactor = clamp01(candidate.effectiveTps / speedSaturationTps) * firstTokenPenalty;
+    const speedFactor = clamp01(candidate.effectiveTps / speedSaturationTps);
     // Normalized intelligence factor I in [0, 1]. When an expected rank is
     // supplied (already validated as an integer at or above the minimum), I
     // rewards matching or exceeding it and penalizes deviation: d = model -

@@ -9,7 +9,7 @@ export interface ModelRoutingEntry {
     provider: string; model: string; client: string; exactAgentRuntime: string;
     intelligence: string;
     reference_pricing: { output_usd_per_million?: number | null };
-    speed: { effective_tps: number; firstTokenMs?: number };
+    speed: { effective_tps: number };
   };
   availability?: {
     providerCredential: string; available: boolean;
@@ -200,7 +200,6 @@ export function toAutomaticCandidateInput(
     timeoutMs: context.timeoutMs,
     minimumTps: context.minimumTps,
     effectiveTps: choice.speed.effective_tps,
-    ...(choice.speed.firstTokenMs === undefined ? {} : { firstTokenMs: choice.speed.firstTokenMs }),
     expectedTps: context.expectedTps,
     intelligenceRank,
     intelligenceMinRank: context.intelligenceMinRank,

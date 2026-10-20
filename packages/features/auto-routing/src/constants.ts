@@ -41,13 +41,6 @@ export const PRICE_FACTOR_ANCHORS: ReadonlyArray<readonly [
  */
 export const SPEED_SATURATION_BASE_TPS = 100;
 /**
- * First-token latency at which the measured-latency penalty halves the speed
- * factor. The penalty saturates smoothly: 10000 / (10000 + firstTokenMs), so
- * a 10 s first token halves it and longer waits shrink it further without
- * being treated as a hard admission gate.
- */
-export const FIRST_TOKEN_SATURATION_MS = 10000;
-/**
  * Zero headroom contributed by every unknown/missing/rejected constraint and
  * by every positive pay-as-you-go balance. Such evidence is an absence of
  * trusted headroom, never a neutral (or positive) quota quality.
