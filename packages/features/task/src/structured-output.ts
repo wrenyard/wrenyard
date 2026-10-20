@@ -63,15 +63,23 @@ const PLACEHOLDER_STRINGS = new Set([
  *  The warning turn is capped at this window, which always sits inside the
  *  total limit and is never added to it. */
 const TIME_LIMIT_WARNING_LEAD_MS = 60 * 1000
+/** Warning lead for a given total budget: the fixed lead, capped at one third
+ *  of the budget so the work phase always keeps at least two thirds. */
+function timeLimitWarningLeadMs(totalBudgetMs: number): number {
+  return Math.min(TIME_LIMIT_WARNING_LEAD_MS, Math.floor(totalBudgetMs / 3))
+}
 /** Minimum effective total limit (in ms) that leaves room for both a work phase
  *  and the warning window. Below this, the previous hard-stop behavior is kept. */
-const MIN_TIMEOUT_FOR_TIME_LIMIT_WARNING_MS = 2 * TIME_LIMIT_WARNING_LEAD_MS
+const MIN_TIMEOUT_FOR_TIME_LIMIT_WARNING_MS = 30 * 1000
 /** Warning message sent on the resumed native session, in the same language
  *  style as the existing structured-output correction prompts. */
-const TIME_LIMIT_WARNING_TEXT =
-  'Time limit reached. Stop the work now. Do not start new tool calls. ' +
-  'Summarize what you have found or completed so far and return the final structured output immediately. ' +
-  'You will be terminated in 60 seconds.'
+function timeLimitWarningText(seconds: number): string {
+  return (
+    'Time limit reached. Stop the work now. Do not start new tool calls. ' +
+    'Summarize what you have found or completed so far and return the final structured output immediately. ' +
+    `You will be terminated in ${seconds} seconds.`
+  )
+}
 /** Marker line prepended to the summary of a time-limit-truncated result. */
 const TIME_LIMIT_TRUNCATION_MARKER = '[truncated by time limit]'
 
@@ -340,16 +348,18 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
   // ── Time-limit warning resume ──
   // The task still has exactly one total deadline. When the resolved client can
   // resume a native session and the limit leaves room for the warning window,
-  // the running work phase is stopped 60 s before the limit and the same native
-  // session is resumed with a stop-and-summarize warning capped at 60 s. The
+  // the running work phase is stopped a proportional lead (at most 60 s, at
+  // most one third of the budget) before the limit and the same native session
+  // is resumed with a stop-and-summarize warning capped at that lead. The
   // resumed turn passes through the ordinary structured-output collection path:
   // a valid result marks the task as truncated by the time limit, while a
   // non-resumable client, a missing native session id, or an effective limit
-  // under 120 s keep the previous hard-stop-at-the-limit behavior. The warning
+  // under 30 s keep the previous hard-stop-at-the-limit behavior. The warning
   // window is always inside the total limit, never added to it.
   const timeLimitWarningEnabled =
     (opts.canResumeNativeSession ?? true) &&
     totalBudgetMs >= MIN_TIMEOUT_FOR_TIME_LIMIT_WARNING_MS
+  const warningLeadMs = timeLimitWarningEnabled ? timeLimitWarningLeadMs(totalBudgetMs) : 0
   let warningResumeIssued = false
   for (let attempt = 0; attempt <= maxResumeAttempts; attempt += 1) {
     await opts.beforeAttempt?.()
@@ -409,7 +419,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
       : resumePrompt(attempt, schema, lastValidationErrors)
     // Reserve the warning window from the initial work phase so the resumed
     // warning turn still fits inside the one total deadline.
-    const reservedWarningMs = timeLimitWarningEnabled && attempt === 0 ? TIME_LIMIT_WARNING_LEAD_MS : 0
+    const reservedWarningMs = timeLimitWarningEnabled && attempt === 0 ? warningLeadMs : 0
     const attemptCapMs = attempt === 0
       ? totalBudgetMs - reservedWarningMs
       : STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS
@@ -454,6 +464,18 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
     // Task logic only classifies the terminal agent result it receives.
     if (terminal.status === 'timeout') {
       lastActivity = terminal.output ?? 'agent execution still running at deadline'
+      // Salvage: the run may already have produced a complete structured output
+      // by the time the deadline fired (e.g. a client that flushes stdout only
+      // at process end). Deliver it as a truncated result instead of failing.
+      const salvaged = await parseStructuredFinalOutput(terminal.output, schema, opts.preSchemaTransform)
+      if (salvaged.success) {
+        opts.onDelivery?.({
+          summary: prependTimeLimitMarker(salvaged.summary),
+          data: salvaged.data,
+          truncatedByTimeLimit: true,
+        })
+        return salvaged.data
+      }
       // The initial work phase was stopped lead-ms before the limit: resume the
       // same native session once with the warning so it can return a truncated
       // but valid structured output inside the remaining window. Without a
@@ -466,6 +488,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
           resume,
           assertResolvedProfileForRetry(opts.profile, resolvedProfile),
           deadlineMs,
+          warningLeadMs,
           lastExecutionId,
           terminal.output,
         )
@@ -626,6 +649,7 @@ async function runTimeLimitWarningResume(
   nativeSessionId: string,
   warningProfile: string,
   deadlineMs: number,
+  warningLeadMs: number,
   lastExecutionId: string | undefined,
   workOutput?: string,
 ): Promise<{ data: unknown; summary?: string }> {
@@ -633,12 +657,12 @@ async function runTimeLimitWarningResume(
   // stopped work phase's output followed by the warning turn's own.
   const processOutput = (output?: string): string | undefined =>
     [workOutput, output].filter((part): part is string => part !== undefined && part !== '').join('\n') || undefined
-  const warningTimeoutMs = Math.min(TIME_LIMIT_WARNING_LEAD_MS, deadlineMs - Date.now())
+  const warningTimeoutMs = Math.min(warningLeadMs, deadlineMs - Date.now())
   if (warningTimeoutMs <= 0) {
     throw agentTimeoutError(
       lastExecutionId ?? 'unknown',
       1,
-      TIME_LIMIT_WARNING_LEAD_MS,
+      warningLeadMs,
       'no remaining budget for the time-limit warning resume',
     )
   }
@@ -646,7 +670,7 @@ async function runTimeLimitWarningResume(
   const terminal = await runStructuredAttempt(
     opts.runAgent,
     warningProfile,
-    timeLimitWarningPrompt(schema),
+    timeLimitWarningPrompt(schema, Math.ceil(warningLeadMs / 1000)),
     {
       workingDirectory: opts.workingDirectory,
       timeoutMs: warningTimeoutMs,
@@ -714,9 +738,9 @@ function prependTimeLimitMarker(summary: string | undefined): string {
  * Stop-and-summarize warning, followed by the standard structured-output
  * contract so the resumed session can return the final structured output.
  */
-function timeLimitWarningPrompt(schema: CompiledSchema): string {
+function timeLimitWarningPrompt(schema: CompiledSchema, seconds: number): string {
   return [
-    TIME_LIMIT_WARNING_TEXT,
+    timeLimitWarningText(seconds),
     '',
     outputContract(schema),
   ].join('\n')
