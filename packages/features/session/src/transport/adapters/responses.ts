@@ -278,10 +278,28 @@ function consumeFrame(frame: string, state: ResponsesStreamState, emit: AdapterE
       emit.complete();
       return;
     }
-    case 'response.failed':
+    case 'response.failed': {
+      const failed = record(event.response);
+      applyUsage(failed?.usage, state, emit);
+      const identity = upstreamErrorIdentity(failed);
+      emit.fail();
+      throw streamError({
+        kind: classifyOfficialError(identity.type, identity.code),
+        message: describeFailedResponse(failed, 'Model request failed'),
+        upstream: identity,
+        headers: state.headers,
+      });
+    }
     case 'response.incomplete': {
       const failed = record(event.response);
       applyUsage(failed?.usage, state, emit);
+      // `incomplete` after a delivered tool call is recoverable: adopt the call.
+      if (state.calls.length > 0) {
+        state.finishReason = finishReasonOf(record(failed?.incomplete_details), state.calls.length);
+        state.completed = true;
+        emit.complete();
+        return;
+      }
       const identity = upstreamErrorIdentity(failed);
       emit.fail();
       throw streamError({
