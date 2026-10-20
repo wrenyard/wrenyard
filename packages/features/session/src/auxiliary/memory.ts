@@ -1,9 +1,9 @@
 /**
- * The memory auxiliary task before every reason request: a BM25 lexical pass
- * over INDEX lines may recall memories without a model call; otherwise one
- * memory-search call selects at most three root memory files from the index
- * and publishes each changed one as a `memory.recalled` event with source
- * `memory-search`.
+ * The memory auxiliary task once per turn: a cached BM25 lexical pass over index
+ * metadata and memory bodies may recall without a model call; when candidates
+ * stay ambiguous, one memory-search call selects at most three root memory files
+ * from a bounded BM25 shortlist and publishes each changed one as a
+ * `memory.recalled` event with source `memory-search`.
  */
 
 import { contentVersion } from '../documents.ts';
@@ -122,27 +122,285 @@ function buildMemorySearch(input: MemorySearchViewInput, correction?: string): B
 
 // ─── Lexical memory recall ──────────────────────────────────────────────────
 
-/** Minimum indexed memories before the lexical pass may skip the LLM selector. */
-const LEXICAL_MIN_DOCS = 4;
-/** Top BM25 score must beat the runner-up by this factor to be a clear winner. */
-const LEXICAL_CLEAR_RATIO = 2;
+/** At most this many eligible BM25 paths are offered to the LLM selector. */
+const LEXICAL_SHORTLIST_MAX = 8;
+/** Eligible BM25 scores must be at least this floor. */
+const LEXICAL_SCORE_FLOOR = 1;
+/** Eligible scores must be at least this fraction of the top score. */
+const LEXICAL_RELATIVE_CUTOFF = 0.5;
+/** Direct top-three recall when the third score beats the fourth by this factor. */
+const LEXICAL_TOP3_CLEAR_RATIO = 1.5;
+/** Max plain-text body excerpt per shortlist candidate in the selector index. */
+const SHORTLIST_BODY_EXCERPT = 240;
 const BM25_K1 = 1.2;
 const BM25_B = 0.75;
 
 interface LexicalMemoryDoc {
   path: string;
-  tokens: string[];
+  termFreq: Map<string, number>;
+  tokenCount: number;
+  title: string;
+  description: string;
+  body: string;
+  /** Raw file content fingerprint; unchanged recalls are skipped before selection. */
+  contentVersion: string;
+  /** Tokens from the index line plus parsed name and description only. */
+  metadataTokens: Set<string>;
 }
 
-/** One lexical document per index-listed path; the first index line for each path wins. */
-function lexicalMemoryDocs(memoryIndex: string): LexicalMemoryDoc[] {
+interface LexicalCorpus {
+  docs: LexicalMemoryDoc[];
+  n: number;
+  avgLen: number;
+  df: Map<string, number>;
+}
+
+interface LexicalCacheEntry extends LexicalCorpus {
+  fingerprint: string;
+}
+
+/** Per memory port (bot isolation) or per session files snapshot when there is no port. */
+const lexicalCacheForPort = new WeakMap<WorkspaceMemoryPort, LexicalCacheEntry>();
+const lexicalCacheForFiles = new WeakMap<SessionRuntime['files'], LexicalCacheEntry>();
+
+const MEMORY_FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)([\s\S]*)$/u;
+
+type LexicalRecall =
+  | { kind: 'direct'; picks: { path: string; reason: string }[] }
+  | { kind: 'empty' }
+  | { kind: 'llm'; shortlist: string[] };
+
+/** The first index line for each canonical path in the frozen index. */
+function indexLineByPath(memoryIndex: string): Map<string, string> {
   const lineByPath = new Map<string, string>();
   for (const line of memoryIndex.split('\n')) {
     for (const path of canonicalMemoryTargets(line)) {
       if (!lineByPath.has(path)) lineByPath.set(path, line);
     }
   }
-  return [...lineByPath.entries()].map(([path, line]) => ({ path, tokens: recallTokens(line) }));
+  return lineByPath;
+}
+
+function frontmatterField(frontmatter: string, field: string): string {
+  const match = new RegExp(`^${field}:\\s*(.+)$`, 'mu').exec(frontmatter);
+  return match === null ? '' : match[1]!.trim();
+}
+
+function parsedMemoryFields(indexLine: string, fileContent: string): {
+  title: string;
+  description: string;
+  body: string;
+  lexicalText: string;
+} {
+  const match = fileContent.match(MEMORY_FRONTMATTER);
+  if (match === null) {
+    return {
+      title: '',
+      description: '',
+      body: fileContent,
+      lexicalText: `${indexLine}\n${fileContent}`,
+    };
+  }
+  const frontmatter = match[1]!;
+  const body = match[2] ?? '';
+  const title = frontmatterField(frontmatter, 'name');
+  const description = frontmatterField(frontmatter, 'description');
+  return {
+    title,
+    description,
+    body,
+    lexicalText: `${indexLine}\n${title}\n${description}\n${body}`,
+  };
+}
+
+function lexicalMemoryDoc(
+  path: string,
+  indexLine: string,
+  rawContent: string,
+  fields: { title: string; description: string; body: string; lexicalText: string },
+): LexicalMemoryDoc {
+  const termFreq = new Map<string, number>();
+  let tokenCount = 0;
+  for (const token of recallTokens(fields.lexicalText)) {
+    tokenCount += 1;
+    termFreq.set(token, (termFreq.get(token) ?? 0) + 1);
+  }
+  const metadataTokens = new Set(recallTokens(`${indexLine}\n${fields.title}\n${fields.description}`));
+  return {
+    path,
+    termFreq,
+    tokenCount,
+    title: fields.title,
+    description: fields.description,
+    body: fields.body,
+    contentVersion: contentVersion(rawContent),
+    metadataTokens,
+  };
+}
+
+function corpusDocumentFrequencies(docs: readonly LexicalMemoryDoc[]): { n: number; avgLen: number; df: Map<string, number> } {
+  const n = docs.length;
+  const avgLen = docs.reduce((sum, doc) => sum + doc.tokenCount, 0) / n || 1;
+  const df = new Map<string, number>();
+  for (const doc of docs) {
+    for (const token of doc.termFreq.keys()) {
+      df.set(token, (df.get(token) ?? 0) + 1);
+    }
+  }
+  return { n, avgLen, df };
+}
+
+function portCorpusFingerprint(
+  memoryIndex: string,
+  paths: readonly string[],
+  listByFilename: ReadonlyMap<string, { size: number; updatedAt: string }>,
+): string {
+  const stamps: string[] = [memoryIndex];
+  for (const path of [...paths].sort()) {
+    const filename = path.slice(path.indexOf('/') + 1);
+    const entry = listByFilename.get(filename);
+    stamps.push(`${path}\t${entry?.size ?? ''}\t${entry?.updatedAt ?? ''}`);
+  }
+  return stamps.join('\n');
+}
+
+/**
+ * Cached lexical documents for one recall corpus. Refreshes when the index or
+ * any indexed memory body changes; incomplete corpora are not cached.
+ */
+function lexicalCorpusForRecall(
+  memoryIndex: string,
+  paths: readonly string[],
+  memory: WorkspaceMemoryPort | undefined,
+  session: SessionRuntime,
+): LexicalCorpus {
+  const sortedPaths = [...paths].sort();
+  const lineByPath = indexLineByPath(memoryIndex);
+  if (memory !== undefined) {
+    let listByFilename: Map<string, { name: string; filename: string; size: number; updatedAt: string }>;
+    try {
+      listByFilename = new Map(memory.list().map((item) => [item.filename, item]));
+    } catch {
+      lexicalCacheForPort.delete(memory);
+      return { docs: [], n: 0, avgLen: 1, df: new Map() };
+    }
+    const fingerprint = portCorpusFingerprint(memoryIndex, sortedPaths, listByFilename);
+    const cache = lexicalCacheForPort.get(memory);
+    if (cache !== undefined && cache.fingerprint === fingerprint) {
+      return { docs: cache.docs, n: cache.n, avgLen: cache.avgLen, df: cache.df };
+    }
+    const docs: LexicalMemoryDoc[] = [];
+    let incomplete = false;
+    for (const path of sortedPaths) {
+      try {
+        const filename = path.slice(path.indexOf('/') + 1);
+        const entry = listByFilename.get(filename);
+        if (entry === undefined) {
+          incomplete = true;
+          continue;
+        }
+        const content = memory.read(entry.name).text;
+        const indexLine = lineByPath.get(path) ?? '';
+        const fields = parsedMemoryFields(indexLine, content);
+        docs.push(lexicalMemoryDoc(path, indexLine, content, fields));
+      } catch {
+        incomplete = true;
+      }
+    }
+    const stats = corpusDocumentFrequencies(docs);
+    const corpus: LexicalCorpus = { docs, ...stats };
+    if (!incomplete) lexicalCacheForPort.set(memory, { fingerprint, ...corpus });
+    return corpus;
+  }
+
+  const stamps: string[] = [memoryIndex];
+  const contentByPath = new Map<string, string>();
+  let incomplete = false;
+  for (const path of sortedPaths) {
+    try {
+      const file = session.files.read(path);
+      stamps.push(`${path}\t${file === undefined ? '' : contentVersion(file.content)}`);
+      if (file === undefined) {
+        incomplete = true;
+        continue;
+      }
+      contentByPath.set(path, file.content);
+    } catch {
+      incomplete = true;
+    }
+  }
+  const fingerprint = stamps.join('\n');
+  const cache = lexicalCacheForFiles.get(session.files);
+  if (!incomplete && cache !== undefined && cache.fingerprint === fingerprint) {
+    return { docs: cache.docs, n: cache.n, avgLen: cache.avgLen, df: cache.df };
+  }
+  const docs: LexicalMemoryDoc[] = [];
+  for (const path of sortedPaths) {
+    const content = contentByPath.get(path);
+    if (content === undefined) continue;
+    const indexLine = lineByPath.get(path) ?? '';
+    const fields = parsedMemoryFields(indexLine, content);
+    docs.push(lexicalMemoryDoc(path, indexLine, content, fields));
+  }
+  const stats = corpusDocumentFrequencies(docs);
+  const corpus: LexicalCorpus = { docs, ...stats };
+  if (!incomplete) lexicalCacheForFiles.set(session.files, { fingerprint, ...corpus });
+  return corpus;
+}
+
+/** Strip link targets, delimiters, and memory paths so shortlist text cannot admit extra picks. */
+function sanitizeShortlistText(text: string): string {
+  return text
+    .replace(/\[[^\]\n]*\]\(\s*<?[^()<>\s]+>?\s*\)/gu, ' ')
+    .replace(/memories\/[^/\s)]+\.md/giu, ' ')
+    .replace(/[[\]<>()]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+/** Safe shortlist link label: canonical filename stem only, not memory title text. */
+function shortlistLinkLabel(path: string): string {
+  const filename = path.split('/').pop() ?? path;
+  const stem = filename.endsWith('.md') ? filename.slice(0, -3) : filename;
+  const safe = sanitizeShortlistText(stem);
+  return safe === '' ? stem.replace(/[^\w.-]+/gu, '_') : safe;
+}
+
+function bodyExcerptNearQuery(body: string, query: readonly string[], maxLen: number): string {
+  const plain = sanitizeShortlistText(body);
+  if (plain === '') return '';
+  const lower = plain.toLowerCase();
+  let anchor = -1;
+  for (const term of query) {
+    const index = lower.indexOf(term.toLowerCase());
+    if (index >= 0) {
+      anchor = index;
+      break;
+    }
+  }
+  if (anchor < 0) return plain.slice(0, maxLen);
+  const half = Math.floor(maxLen / 2);
+  const start = Math.max(0, anchor - half);
+  return plain.slice(start, start + maxLen);
+}
+
+/** Synthetic index for the LLM selector: one link per shortlist path plus safe excerpts. */
+function buildShortlistMemoryIndex(
+  shortlist: readonly string[],
+  docs: readonly LexicalMemoryDoc[],
+  query: readonly string[],
+): string {
+  const docByPath = new Map(docs.map((doc) => [doc.path, doc]));
+  const lines: string[] = [];
+  for (const path of shortlist) {
+    const doc = docByPath.get(path);
+    const label = shortlistLinkLabel(path);
+    lines.push(`- [${label}](${path})`);
+    if (doc !== undefined && doc.description !== '') lines.push(sanitizeShortlistText(doc.description));
+    const excerpt = doc === undefined ? '' : bodyExcerptNearQuery(doc.body, query, SHORTLIST_BODY_EXCERPT);
+    if (excerpt !== '') lines.push(excerpt);
+  }
+  return lines.join('\n');
 }
 
 /** Lowercase Latin/digit/underscore tokens plus CJK unigrams or bigrams. */
@@ -161,25 +419,13 @@ function recallTokens(text: string): string[] {
   return tokens;
 }
 
-/** Standard BM25 scores for one query against the given lexical documents. */
-function bm25Scores(query: readonly string[], docs: readonly LexicalMemoryDoc[]): number[] {
-  const n = docs.length;
+/** Standard BM25 scores using precomputed corpus statistics from the lexical cache. */
+function bm25Scores(query: readonly string[], corpus: LexicalCorpus): number[] {
+  const { docs, n, avgLen, df } = corpus;
   if (n === 0) return [];
-  const avgLen = docs.reduce((sum, doc) => sum + doc.tokens.length, 0) / n || 1;
-  const df = new Map<string, number>();
-  for (const doc of docs) {
-    const seen = new Set<string>();
-    for (const token of doc.tokens) {
-      if (!seen.has(token)) {
-        seen.add(token);
-        df.set(token, (df.get(token) ?? 0) + 1);
-      }
-    }
-  }
   return docs.map((doc) => {
-    const len = doc.tokens.length;
-    const freq = new Map<string, number>();
-    for (const token of doc.tokens) freq.set(token, (freq.get(token) ?? 0) + 1);
+    const len = doc.tokenCount;
+    const freq = doc.termFreq;
     let score = 0;
     for (const term of query) {
       const f = freq.get(term) ?? 0;
@@ -192,33 +438,113 @@ function bm25Scores(query: readonly string[], docs: readonly LexicalMemoryDoc[])
   });
 }
 
-/**
- * BM25 picks from the current recall text, or `undefined` when the corpus is
- * too small, the query is empty, scores are non-positive, or the top hit is ambiguous.
- */
-function lexicalMemoryPicks(
-  input: MemorySearchViewInput,
-  memoryIndex: string,
-): { path: string; reason: string }[] | undefined {
-  const docs = lexicalMemoryDocs(memoryIndex);
-  if (docs.length < LEXICAL_MIN_DOCS) return undefined;
+function recallQueryTokens(input: MemorySearchViewInput): string[] {
   const queryText = [
     input.userText,
     input.lastReasonText,
     ...input.actionResults.map((result) => `${result.name} ${result.status} ${result.text}`),
   ].join('\n');
-  const query = recallTokens(queryText);
-  if (query.length === 0) return undefined;
-  const scores = bm25Scores(query, docs);
+  return [...new Set(recallTokens(queryText))];
+}
+
+/** Query terms that are not overly common in the full recall corpus. */
+function informativeQueryTerms(query: readonly string[], corpus: LexicalCorpus): Set<string> {
+  const maxDf = Math.max(1, Math.floor(corpus.n * 0.25));
+  const informative = new Set<string>();
+  for (const term of query) {
+    if ((corpus.df.get(term) ?? 0) <= maxDf) informative.add(term);
+  }
+  return informative;
+}
+
+function distinctInformativeDocMatches(doc: LexicalMemoryDoc, informative: ReadonlySet<string>): number {
+  let count = 0;
+  for (const term of informative) {
+    if ((doc.termFreq.get(term) ?? 0) > 0) count += 1;
+  }
+  return count;
+}
+
+function distinctInformativeMetadataMatches(doc: LexicalMemoryDoc, informative: ReadonlySet<string>): number {
+  let count = 0;
+  for (const term of informative) {
+    if (doc.metadataTokens.has(term)) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Heuristic direct-recall gate; precision and model-free share need external measurement.
+ * Strong when metadata carries two informative query terms or the body carries three.
+ */
+function hasStrongLexicalEvidence(doc: LexicalMemoryDoc, informative: ReadonlySet<string>): boolean {
+  if (distinctInformativeMetadataMatches(doc, informative) >= 2) return true;
+  return distinctInformativeDocMatches(doc, informative) >= 3;
+}
+
+/** Latest recalled content version per path from the session ledger. */
+function latestRecalledVersions(events: readonly LedgerEvent[]): Map<string, string> {
+  const versions = new Map<string, string>();
+  for (const event of events) {
+    if (event.type === 'memory.recalled') versions.set(event.path, event.version);
+  }
+  return versions;
+}
+
+/**
+ * Deterministic lexical outcome: direct recall, empty (skip model), or bounded shortlist LLM.
+ * BM25 uses the full corpus; candidates drop only when content is unchanged at recall time
+ * or lack informative term overlap. Confidence thresholds are explicit heuristics only.
+ */
+function evaluateLexicalRecall(
+  input: MemorySearchViewInput,
+  corpus: LexicalCorpus,
+  latestRecalledByPath: ReadonlyMap<string, string>,
+): LexicalRecall {
+  const query = recallQueryTokens(input);
+  if (query.length === 0) return { kind: 'empty' };
+  const docByPath = new Map(corpus.docs.map((doc) => [doc.path, doc]));
+  const scores = bm25Scores(query, corpus);
   const ranked = scores
-    .map((score, index) => ({ score, index }))
-    .sort((left, right) => right.score - left.score);
-  const first = ranked[0]?.score ?? 0;
-  const second = ranked[1]?.score ?? 0;
-  const best = ranked[0]?.index ?? 0;
-  if (first <= 0) return undefined;
-  if (second > 0 && first < LEXICAL_CLEAR_RATIO * second) return undefined;
-  return [{ path: docs[best]!.path, reason: `lexical match (score ${first.toFixed(2)})` }];
+    .map((score, index) => ({ score, path: corpus.docs[index]!.path }))
+    .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path));
+  const topScore = ranked[0]?.score ?? 0;
+  const threshold = Math.max(LEXICAL_SCORE_FLOOR, topScore * LEXICAL_RELATIVE_CUTOFF);
+  const scoreEligible = ranked.filter((entry) => entry.score >= threshold);
+  const informative = informativeQueryTerms(query, corpus);
+  const eligible = scoreEligible.filter((entry) => {
+    const doc = docByPath.get(entry.path);
+    if (doc === undefined) return false;
+    const latest = latestRecalledByPath.get(entry.path);
+    if (latest !== undefined && doc.contentVersion === latest) return false;
+    return distinctInformativeDocMatches(doc, informative) > 0;
+  });
+  if (eligible.length === 0) return { kind: 'empty' };
+  const directPick = (entry: { score: number; path: string }) => ({
+    path: entry.path,
+    reason: `lexical match (score ${entry.score.toFixed(2)})`,
+  });
+  const topDoc = docByPath.get(eligible[0]!.path);
+  if (topDoc !== undefined && hasStrongLexicalEvidence(topDoc, informative)) {
+    const picks: { path: string; reason: string }[] = [];
+    for (const entry of eligible) {
+      if (picks.length >= MEMORY_SELECTION.maxPicks) break;
+      const doc = docByPath.get(entry.path);
+      if (doc === undefined || !hasStrongLexicalEvidence(doc, informative)) continue;
+      picks.push(directPick(entry));
+    }
+    if (picks.length > 0) return { kind: 'direct', picks };
+  }
+  if (eligible.length <= MEMORY_SELECTION.maxPicks) {
+    return { kind: 'direct', picks: eligible.map(directPick) };
+  }
+  const score3 = eligible[2]!.score;
+  const score4 = eligible[3]!.score;
+  if (score3 >= LEXICAL_TOP3_CLEAR_RATIO * score4) {
+    return { kind: 'direct', picks: eligible.slice(0, MEMORY_SELECTION.maxPicks).map(directPick) };
+  }
+  const shortlist = eligible.slice(0, LEXICAL_SHORTLIST_MAX).map((entry) => entry.path);
+  return { kind: 'llm', shortlist };
 }
 
 // ─── Memory search ──────────────────────────────────────────────────────────
@@ -227,16 +553,17 @@ function lexicalMemoryPicks(
 export type MemorySearchHost = Pick<SessionCallHost, 'ledger' | 'invoke' | 'ports'>;
 
 /**
- * One memory search before every reasoning request: a system auxiliary task
- * owned by the turn and indexed by the step it prepares. A BM25 lexical pass
- * over INDEX lines may recall memories without invoking the selector model; when
- * it does not, the task selects at most three root memory files from the current
- * index and publishes each changed one as a `memory.recalled` event whose parent
- * is the search span. An unusable selection (no tool call, several calls,
- * unparsable arguments or a failed validation) is retried exactly once through
- * the same structured tool call, with the classified diagnostic embedded in the
- * correction request. A search that is still unusable is reported as a
- * `system.warning` and the reasoning request still runs.
+ * One memory search per turn: a system auxiliary task owned by the turn and
+ * indexed by the step it prepares. A cached BM25 lexical pass over index
+ * metadata and memory bodies may recall without invoking the selector model;
+ * when candidates stay ambiguous, the task selects at most three root memory
+ * files from a bounded shortlist and publishes each changed one as a
+ * `memory.recalled` event whose parent is the search span. An unusable selection
+ * (no tool call, several calls, unparsable arguments or a failed validation)
+ * is retried exactly once through the same structured tool call, with the
+ * classified diagnostic embedded in the correction request. A search that is
+ * still unusable is reported as a `system.warning` and the reasoning request
+ * still runs.
  */
 export async function runMemorySearch(
   host: MemorySearchHost,
@@ -259,13 +586,25 @@ export async function runMemorySearch(
     lastReasonText: latestReasonText(events),
     actionResults: turnActionResults(turn, events),
   };
-  const lexical = lexicalMemoryPicks(input, memoryIndex);
-  if (lexical !== undefined) {
-    await publishMemoryPicks(host, session, turn, step, events, memory, lexical, turnId(turn.turn));
+  const corpus = lexicalCorpusForRecall(memoryIndex, targets, memory, session);
+  const latestRecalledByPath = latestRecalledVersions(events);
+  const lexical = evaluateLexicalRecall(input, corpus, latestRecalledByPath);
+  if (lexical.kind === 'direct') {
+    await publishMemoryPicks(host, session, turn, step, events, memory, lexical.picks, turnId(turn.turn));
     return;
   }
+  if (lexical.kind === 'empty') return;
+
+  const llmTargets = lexical.shortlist;
+  const allowedTargets = new Set(llmTargets);
+  const query = recallQueryTokens(input);
+  const llmInput: MemorySearchViewInput = {
+    ...input,
+    memoryIndex: buildShortlistMemoryIndex(llmTargets, corpus.docs, query),
+    loadedPaths: input.loadedPaths.filter((path) => allowedTargets.has(path)),
+  };
   // The same tool declaration and forced tool choice on every attempt.
-  const tools = [selectMemoriesTool(targets)];
+  const tools = [selectMemoriesTool(llmTargets)];
   const toolChoice = { name: MEMORY_SELECTION.tool };
 
   // The shared auxiliary retry: a rejected selection is retried through the
@@ -281,12 +620,12 @@ export async function runMemorySearch(
         'Return the selection through the tool only, with no prose, no second JSON value and no trailing text.',
       ].join('\n')
       : undefined;
-    const outcome = await host.invoke(session, turn, 'memory-search', buildMemorySearch(input, correction), {
+    const outcome = await host.invoke(session, turn, 'memory-search', buildMemorySearch(llmInput, correction), {
       parent: turnId(turn.turn), step, tools, toolChoice,
     });
     // A failed call is a model/transport failure, never a parsing problem.
     if (!outcome.ok) return { ok: false, error: outcome.error ?? 'memory-search call failed', spanId: outcome.spanId };
-    const selection = memorySelectionFrom(outcome, memoryIndex);
+    const selection = memorySelectionFrom(outcome, allowedTargets);
     if (!selection.ok) return { ok: false, error: selection.reason, spanId: outcome.spanId, rejected: true };
     return { ok: true, value: { selection, spanId: outcome.spanId } };
   }, turn.abort.signal);
@@ -438,7 +777,7 @@ type MemorySelection =
  * Zero calls, several calls and every malformed payload are reported, never
  * repaired.
  */
-function memorySelectionFrom(outcome: InvokedCall, memoryIndex: string): MemorySelection {
+function memorySelectionFrom(outcome: InvokedCall, allowedTargets: ReadonlySet<string>): MemorySelection {
   const calls = outcome.toolCalls?.filter((call) => call.name === MEMORY_SELECTION.tool) ?? [];
   if (calls.length === 0) {
     return { ok: false, reason: `memory-search must call ${MEMORY_SELECTION.tool} exactly once: no ${MEMORY_SELECTION.tool} call` };
@@ -446,7 +785,7 @@ function memorySelectionFrom(outcome: InvokedCall, memoryIndex: string): MemoryS
   if (calls.length > 1) {
     return { ok: false, reason: `memory-search must call ${MEMORY_SELECTION.tool} exactly once: ${calls.length} calls` };
   }
-  return parseMemoryPicks(calls[0]!.arguments, memoryIndex);
+  return parseMemoryPicks(calls[0]!.arguments, allowedTargets);
 }
 
 /**
@@ -502,7 +841,7 @@ function hasTrailingJsonContent(text: string): boolean {
  * classified — invalid JSON, ambiguous trailing content, invalid shape or an
  * unknown target — and reported, never repaired.
  */
-function parseMemoryPicks(text: string, memoryIndex: string): MemorySelection {
+function parseMemoryPicks(text: string, allowedTargets: ReadonlySet<string>): MemorySelection {
   const trimmed = text.trim();
   let value: unknown;
   try {
@@ -528,7 +867,6 @@ function parseMemoryPicks(text: string, memoryIndex: string): MemorySelection {
   if (picks.length > MEMORY_SELECTION.maxPicks) {
     return { ok: false, reason: `memory-search output has more than ${MEMORY_SELECTION.maxPicks} picks` };
   }
-  const indexedTargets = canonicalMemoryTargets(memoryIndex);
   const result: { path: string; reason: string }[] = [];
   for (const raw of picks) {
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -554,7 +892,7 @@ function parseMemoryPicks(text: string, memoryIndex: string): MemorySelection {
     if (!MEMORY_SELECTION.pathPattern.test(path) || path.toLowerCase() === MEMORY_SELECTION.indexFile) {
       return { ok: false, reason: `memory-search path is not a root memory file: ${path}` };
     }
-    if (!indexedTargets.has(path)) {
+    if (!allowedTargets.has(path)) {
       return { ok: false, reason: `memory-search path is not in the memory index: ${path}` };
     }
     if (!result.some((pick) => pick.path === path)) result.push({ path, reason });
