@@ -46,6 +46,7 @@ import {
   SidebarMenuItem,
   SidebarMenuSkeleton,
 } from '@/renderer/components/ui/sidebar';
+import { Spinner } from '@/renderer/components/ui/spinner';
 import { useNow } from '@/renderer/hooks/use-now';
 import { compareDateGroups, dateGroupLabel, dateGroupOf, type DateGroup } from '@/renderer/lib/format';
 import { toast } from '@/renderer/lib/notify';
@@ -233,6 +234,9 @@ function SessionRow({
         >
           <SessionDot status={sessionStatusOf(session, seen)} />
           <span className="min-w-0 flex-1 [text-overflow:clip]! [mask-image:linear-gradient(to_right,#000_calc(100%_-_2rem),transparent)]">{session.title}</span>
+          {session.running === true && (
+            <Spinner className="size-3 shrink-0 text-muted-foreground group-has-data-[sidebar=menu-action]/menu-item:group-hover/menu-item:hidden group-has-data-[sidebar=menu-action]/menu-item:group-focus-within/menu-item:hidden" />
+          )}
         </SidebarMenuButton>
       )}
       {!editing && (
