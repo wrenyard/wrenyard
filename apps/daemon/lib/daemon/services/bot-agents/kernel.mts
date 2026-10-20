@@ -2042,7 +2042,13 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       }
       const awakened: string[] = []
       const wakes: Wake[] = []
-      for (const target of published.targets) {
+      // No explicit mention addresses the effective runnable primary.
+      let targets: readonly string[] = published.targets
+      if (targets.length === 0) {
+        const primary = [...entries.values()].find(entry => entry.primary && isRunnable(entry))
+        if (primary !== undefined) targets = [primary.id]
+      }
+      for (const target of targets) {
         try {
           requireBot(target)
           const wake = enqueue(target, { source: 'user', text: `[wake:user] ${text}` })

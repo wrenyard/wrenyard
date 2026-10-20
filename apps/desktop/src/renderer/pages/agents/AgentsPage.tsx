@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { cn } from 'cn';
@@ -28,6 +29,7 @@ import {
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { useRemoteConnection } from '@/renderer/lib/desktop';
 import { navigate } from '@/renderer/lib/navigation';
+import { preferencesQuery } from '@/renderer/lib/queries';
 import type { AgentBot, AgentBotLocation, AgentStatus, GroupMessage } from '@/shell-contract';
 import { fold } from '../session/model/fold.js';
 import { MessageTimeline, buildMessageTimeline } from '../session/components/conversation/MessageTimeline.js';
@@ -229,28 +231,6 @@ function insertMentionAt(
 }
 
 /**
- * Build the muted wake-feedback line for one send result: who woke and which
- * @tokens named no enabled bot. Returns null when nothing should be shown.
- */
-function wakeFeedbackText(text: string, awakened: readonly string[], bots: readonly AgentBot[]): string | null {
-  const parts: string[] = [];
-  if (awakened.length > 0) {
-    const names = awakened.map((id) => {
-      const name = bots.find((bot) => bot.id === id)?.name;
-      return name !== undefined && name !== id ? `${name}（${id}）` : id;
-    });
-    parts.push(`已唤醒 ${names.join('、')}`);
-  }
-  const unknown = unrecognizedMentions(text, bots);
-  if (unknown.length > 0) {
-    parts.push(`${unknown.map((token) => `@${token}`).join('、')} 不是可唤醒的机器人`);
-  }
-  if (parts.length === 0) return null;
-  if (awakened.length === 0) parts.push('没有唤醒任何机器人');
-  return parts.join('；');
-}
-
-/**
  * Why the typed id cannot be created. The daemon keeps the authoritative,
  * race-safe check on `agent.create`; this only keeps the form honest before a
  * submit and explains the clash the daemon reports.
@@ -396,7 +376,7 @@ function ModeSwitch(props: { mode: ConversationMode; onChange: (mode: Conversati
 }
 
 /** One group entry, in the same shape as a session transcript message. */
-function GroupMessageView(props: { message: GroupMessage; feedback?: string }) {
+function GroupMessageView(props: { message: GroupMessage }) {
   const message = props.message;
   const fromUser = message.author === 'user';
   const botId = message.botId;
@@ -417,10 +397,6 @@ function GroupMessageView(props: { message: GroupMessage; feedback?: string }) {
             <AppMarkdown>{message.text}</AppMarkdown>
           </BubbleContent>
         </Bubble>
-        {/* Wake result of this send; only messages sent in this window have one. */}
-        {props.feedback !== undefined && (
-          <div className="text-xs text-muted-foreground">{props.feedback}</div>
-        )}
         <MessageFooter align={fromUser ? 'right' : 'left'} at={message.at} text={message.text} />
       </MessageContent>
     </Message>
@@ -432,8 +408,8 @@ function GroupTranscriptView(props: {
   transcript: GroupTranscript;
   /** Whether the loaded bot list is empty, so the empty state can offer to create one. */
   noBots: boolean;
-  /** Muted wake lines keyed by the user's sent message seq; history shows none. */
-  feedback: ReadonlyMap<number, string>;
+  /** Bots woken by a send in this window that are still working. */
+  working: ReadonlyArray<{ id: string; name: string }>;
 }) {
   const { messages, error, ready } = props.transcript;
 
@@ -496,11 +472,23 @@ function GroupTranscriptView(props: {
           <MessageScrollerViewport className="scroll-fade-y">
             <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-5 px-4 py-4">
               {messages.map((message) => (
-                <GroupMessageView
-                  key={message.seq}
-                  message={message}
-                  feedback={props.feedback.get(message.seq)}
-                />
+                <GroupMessageView key={message.seq} message={message} />
+              ))}
+              {props.working.map((bot) => (
+                <div
+                  key={bot.id}
+                  role="status"
+                  aria-label={`${bot.name} 正在输入…`}
+                  className="flex items-center gap-2 text-xs text-muted-foreground"
+                >
+                  <span className="font-medium">{bot.name}</span>
+                  <span>正在输入…</span>
+                  <span className="flex items-center gap-1" aria-hidden>
+                    <span className="motion-typing-dot size-2 rounded-full bg-muted-foreground" style={{ animationDelay: '0ms' }} />
+                    <span className="motion-typing-dot size-2 rounded-full bg-muted-foreground" style={{ animationDelay: '160ms' }} />
+                    <span className="motion-typing-dot size-2 rounded-full bg-muted-foreground" style={{ animationDelay: '320ms' }} />
+                  </span>
+                </div>
               ))}
             </MessageScrollerContent>
           </MessageScrollerViewport>
@@ -510,39 +498,6 @@ function GroupTranscriptView(props: {
     </div>
   );
 }
-
-/**
- * Aliases in the draft that name no enabled bot. The daemon resolves mentions
- * itself; this list only lets the composer say plainly that an unknown or
- * disabled alias woke nobody.
- */
-function unrecognizedMentions(text: string, bots: readonly AgentBot[]): string[] {
-  const enabled = bots.filter((bot) => bot.enabled);
-  const nameCounts = new Map<string, number>();
-  for (const bot of enabled) {
-    const key = bot.name.trim().toLowerCase();
-    if (key === '') continue;
-    nameCounts.set(key, (nameCounts.get(key) ?? 0) + 1);
-  }
-  const aliases = new Set<string>();
-  for (const bot of enabled) aliases.add(bot.id.toLowerCase());
-  for (const bot of enabled) {
-    const key = bot.name.trim().toLowerCase();
-    if (key !== '' && nameCounts.get(key) === 1) aliases.add(key);
-  }
-  const unknown: string[] = [];
-  const seen = new Set<string>();
-  for (const match of text.matchAll(/@([\p{L}\p{N}_-]+)/gu)) {
-    const token = match[1]!;
-    const key = token.toLowerCase();
-    if (aliases.has(key) || seen.has(key)) continue;
-    seen.add(key);
-    unknown.push(token);
-  }
-  return unknown;
-}
-
-
 
 /**
  * The @ mention picker: a non-modal popover anchored to the composer, listing
@@ -740,15 +695,14 @@ function GroupComposer(props: {
   onDraftChange: (value: string) => void;
   /** Imperative insert target shared with the header roster's @ action. */
   insertRef: React.RefObject<((bot: AgentBot) => void) | null>;
-  /** Records the muted wake line under the sent message's transcript seq. */
-  onSent: (seq: number, feedback: string | null) => void;
+  /** Records the bots woken by the send and its transcript seq. */
+  onAwakened: (ids: readonly string[], seq: number) => void;
 }) {
   const connection = useRemoteConnection();
   const connected = connection.state === 'local' || connection.state === 'remote';
+  const preferences = useQuery(preferencesQuery);
   const send = useGroupSendMutation();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const botsRef = useRef(props.bots);
-  botsRef.current = props.bots;
 
   // Shared insert helper: the roster's @ action uses the same caret path.
   props.insertRef.current = (bot: AgentBot): void => {
@@ -765,7 +719,7 @@ function GroupComposer(props: {
       onSuccess: (result) => {
         // Only a confirmed daemon post clears the draft; a failure keeps it.
         props.onDraftChange('');
-        props.onSent(result.message.seq, wakeFeedbackText(text, result.awakened, botsRef.current));
+        props.onAwakened(result.awakened, result.message.seq);
         // Read the canonical transcript now instead of waiting for the tick.
         props.transcript.refresh();
       },
@@ -784,7 +738,7 @@ function GroupComposer(props: {
           value={props.draft}
           onValueChange={props.onDraftChange}
           onSubmit={submit}
-          sendKey="mod-enter"
+          sendKey={preferences.data?.session.sendKey ?? 'enter'}
           submitDisabled={send.isPending || !connected}
           placeholder="发消息，输入 @ 唤醒机器人"
           textareaRef={textareaRef}
@@ -817,19 +771,64 @@ function GroupView(props: {
   insertRef: React.RefObject<((bot: AgentBot) => void) | null>;
 }) {
   const transcript = useGroupEvents();
-  // Muted wake lines keyed by the sent message's seq; entries sent in this
-  // window only, so messages loaded from history never show one.
-  const [feedback, setFeedback] = useState<ReadonlyMap<number, string>>(new Map());
-  const recordFeedback = (seq: number, line: string | null): void => {
-    if (line === null) return;
-    setFeedback((previous) => new Map(previous).set(seq, line));
+  // Woken bots still working, in wake order; `since` excludes earlier replies.
+  const [working, setWorking] = useState<ReadonlyArray<{ id: string; since: number }>>([]);
+  // Bots seen running or queued since their send; an idle poll only clears one
+  // that actually started, never a wake the daemon has not admitted yet.
+  const seenActive = useRef(new Set<string>());
+
+  const onAwakened = (ids: readonly string[], seq: number): void => {
+    setWorking((previous) => {
+      const next = [...previous];
+      for (const id of ids) {
+        const index = next.findIndex((entry) => entry.id === id);
+        if (index === -1) next.push({ id, since: seq });
+        else next[index] = { id, since: seq };
+        seenActive.current.delete(id);
+      }
+      return next;
+    });
   };
+
+  useEffect(() => {
+    setWorking((previous) => {
+      if (previous.length === 0) return previous;
+      const bots = props.agents.data?.bots ?? [];
+      const next = previous.filter((entry) => {
+        const replied = transcript.messages.some(
+          (message) => message.seq > entry.since && message.author === 'bot' && message.botId === entry.id,
+        );
+        if (replied) {
+          seenActive.current.delete(entry.id);
+          return false;
+        }
+        const bot = bots.find((candidate) => candidate.id === entry.id);
+        if (bot === undefined) return true;
+        if (bot.status === 'running' || bot.queued > 0) {
+          seenActive.current.add(entry.id);
+          return true;
+        }
+        if (seenActive.current.has(entry.id)) {
+          seenActive.current.delete(entry.id);
+          return false;
+        }
+        return true;
+      });
+      return next.length === previous.length ? previous : next;
+    });
+  }, [transcript.messages, props.agents.data]);
+
+  const workingBots = working.map((entry) => ({
+    id: entry.id,
+    name: props.bots.find((bot) => bot.id === entry.id)?.name ?? entry.id,
+  }));
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <GroupTranscriptView
         transcript={transcript}
         noBots={!props.agents.isPending && !props.agents.isError && props.bots.length === 0}
-        feedback={feedback}
+        working={workingBots}
       />
       <div className="shrink-0 border-t bg-background px-4 py-3">
         <GroupComposer
@@ -839,7 +838,7 @@ function GroupView(props: {
           draft={props.draft}
           onDraftChange={props.onDraftChange}
           insertRef={props.insertRef}
-          onSent={recordFeedback}
+          onAwakened={onAwakened}
         />
       </div>
     </div>
@@ -986,6 +985,8 @@ function PrivateComposer(props: {
   onDraftChange: (value: string) => void;
 }) {
   const wake = useWakeMutation();
+  const preferences = useQuery(preferencesQuery);
+  const sendKey = preferences.data?.session.sendKey ?? 'enter';
   const send = (): void => {
     const text = props.draft.trim();
     if (text === '' || !props.enabled || wake.isPending) return;
@@ -1000,11 +1001,11 @@ function PrivateComposer(props: {
         value={props.draft}
         onValueChange={props.onDraftChange}
         onSubmit={send}
-        sendKey="mod-enter"
+        sendKey={sendKey}
         disabled={!props.enabled}
         submitDisabled={wake.isPending}
         placeholder={props.enabled
-          ? '给这个机器人发私信（Cmd/Ctrl+Enter 发送）'
+          ? `给这个机器人发私信（${sendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'} 发送）`
           : '机器人已停用，私聊历史仅可查看'}
       />
       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs" aria-live="polite">
