@@ -3,7 +3,7 @@ import { InputGroupButton } from '@/renderer/components/ui/input-group';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { UsageRing } from '@/renderer/components/usage/UsageRing';
 import { paceView, quotaLevel, quotaPoolLevel, resetView } from '@/renderer/components/usage/QuotaBar';
-import { openUsagePanel } from '@/renderer/lib/activity-panel';
+import { openSessionInspector } from '@/renderer/lib/session-inspector';
 import { useQuotaQuery } from '@/renderer/lib/queries';
 import { getCurrentSession, restoreMain, useMiniMode } from '@/renderer/lib/mini';
 import { selectTightestQuotaWindow } from '@/renderer/lib/quota-focus';
@@ -87,7 +87,7 @@ export function QuotaRingButton() {
       restoreMain(getCurrentSession(), { id: 'quota.showPanel' });
       return;
     }
-    openUsagePanel(providerId);
+    openSessionInspector(providerId);
   };
 
   if (providerId === undefined) return null;

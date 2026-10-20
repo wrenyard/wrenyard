@@ -31,6 +31,7 @@ import { buildMessageTimeline } from './components/conversation/MessageTimeline.
 import { fold } from './model/fold.js';
 import type { TurnWaitingState } from './model/describe.js';
 import type { ActionModel, DraftAttachment, SessionBridgeTaskBrief } from './model/types.js';
+import { SessionInspector, SessionInspectorToggle } from './components/usage/SessionInspector.js';
 import { SessionUsageProvider } from './state/session-usage.js';
 import { useSessionController } from './state/use-session-controller.js';
 import { useTaskStatus } from './state/use-task-status.js';
@@ -351,57 +352,61 @@ export function SessionPage() {
           tasks={state.tasks}
           setTasks={setTasks}
         />
-        <div className="relative flex min-h-0 flex-1 flex-col">
-          {empty ? (
-            <EmptySession>
-              {errorAlert}
-              {composer}
-            </EmptySession>
-          ) : (
-            <>
-              <MessageScrollerProvider key={sessionKey} autoScroll>
-                <MessageScroller className={cn('min-h-0 flex-1', conversationEnter && 'motion-conversation-enter')}>
-                  {/* The scroller owns follow-bottom, so browser scroll anchoring must not compete during streaming. */}
-                  <MessageScrollerViewport className="scroll-fade-y [overflow-anchor:none] overflow-x-hidden">
-                    <MessageScrollerContent className={cn('w-full pt-(--header-height) pb-4 gap-8', mini ? 'px-3' : 'mx-auto max-w-3xl px-4')}>
-                      {hydrating && (
-                        <div role="status" className="py-8 text-center text-sm text-muted-foreground">
-                          正在载入对话…
-                        </div>
-                      )}
-                      {loadFailed && (
-                        <div role="status" className="flex flex-col items-center gap-3 py-8 text-center">
-                          <p className="text-sm text-muted-foreground">对话载入失败，请重试。</p>
-                          <Button variant="outline" size="sm" onClick={retryLedger}>重试</Button>
-                        </div>
-                      )}
-                      <TranscriptView
-                        turns={model.turns}
-                        pending={state.pending}
-                        botNames={botNames}
-                        sessionId={state.selectedId}
-                        models={state.models}
-                        onCancelTask={cancelTask}
-                        onRetry={(text, attachments) => setRetry({ text, attachments, nonce: Date.now() })}
-                        onRemove={removePending}
-                        waiting={new Map(model.turns.flatMap((turn) => {
-                          const waiting = waitingStateOf(turn.id, state.events);
-                          return waiting === undefined ? [] : [[turn.id, waiting] as const];
-                        }))}
-                      />
-                    </MessageScrollerContent>
-                  </MessageScrollerViewport>
-                  <FollowSentMessage pendingId={state.pending.at(-1)?.localId} />
-                  <MessageScrollerButton />
-                </MessageScroller>
-              </MessageScrollerProvider>
-              <div className={cn('w-full', mini ? 'px-4 pt-2 pb-5' : 'mx-auto max-w-3xl px-4 pb-4')}>
+        <div className="relative flex min-h-0 flex-1">
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            {empty ? (
+              <EmptySession>
                 {errorAlert}
                 {composer}
-              </div>
-            </>
-          )}
+              </EmptySession>
+            ) : (
+              <>
+                <MessageScrollerProvider key={sessionKey} autoScroll>
+                  <MessageScroller className={cn('min-h-0 flex-1', conversationEnter && 'motion-conversation-enter')}>
+                    {/* The scroller owns follow-bottom, so browser scroll anchoring must not compete during streaming. */}
+                    <MessageScrollerViewport className="scroll-fade-y [overflow-anchor:none] overflow-x-hidden">
+                      <MessageScrollerContent className={cn('w-full pt-(--header-height) pb-4 gap-8', mini ? 'px-3' : 'mx-auto max-w-3xl px-4')}>
+                        {hydrating && (
+                          <div role="status" className="py-8 text-center text-sm text-muted-foreground">
+                            正在载入对话…
+                          </div>
+                        )}
+                        {loadFailed && (
+                          <div role="status" className="flex flex-col items-center gap-3 py-8 text-center">
+                            <p className="text-sm text-muted-foreground">对话载入失败，请重试。</p>
+                            <Button variant="outline" size="sm" onClick={retryLedger}>重试</Button>
+                          </div>
+                        )}
+                        <TranscriptView
+                          turns={model.turns}
+                          pending={state.pending}
+                          botNames={botNames}
+                          sessionId={state.selectedId}
+                          models={state.models}
+                          onCancelTask={cancelTask}
+                          onRetry={(text, attachments) => setRetry({ text, attachments, nonce: Date.now() })}
+                          onRemove={removePending}
+                          waiting={new Map(model.turns.flatMap((turn) => {
+                            const waiting = waitingStateOf(turn.id, state.events);
+                            return waiting === undefined ? [] : [[turn.id, waiting] as const];
+                          }))}
+                        />
+                      </MessageScrollerContent>
+                    </MessageScrollerViewport>
+                    <FollowSentMessage pendingId={state.pending.at(-1)?.localId} />
+                    <MessageScrollerButton />
+                  </MessageScroller>
+                </MessageScrollerProvider>
+                <div className={cn('w-full', mini ? 'px-4 pt-2 pb-5' : 'mx-auto max-w-3xl px-4 pb-4')}>
+                  {errorAlert}
+                  {composer}
+                </div>
+              </>
+            )}
+          </div>
+          {!mini && <SessionInspector draft={draft} />}
         </div>
+        {!mini && <SessionInspectorToggle />}
         <SessionSearch
           open={searchOpen}
           onOpenChange={setSearchOpen}

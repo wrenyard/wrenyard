@@ -14,7 +14,8 @@ import type { ShellPage } from '@/shell-contract';
 import { isShellPage } from '@/shell-contract';
 import { onCommandAction, onViewChanged, shell } from '@/renderer/lib/desktop';
 import { back, forward, toggleSecondarySidebar } from '@/renderer/lib/navigation';
-import { openActivityPanel, toggleActivityPanel, type ActivityPanelTab } from '@/renderer/lib/activity-panel';
+import { toggleActivityPanel } from '@/renderer/lib/activity-panel';
+import { openSessionInspector } from '@/renderer/lib/session-inspector';
 
 export interface CommandDefinition {
   id: string;
@@ -44,18 +45,16 @@ function runNavPage(args: unknown): void {
   if (page) void shell.navigate(page);
 }
 
-/** Optional `{tab, provider, sessionId}` args for the activity-panel commands. */
-interface ActivityPanelArgs {
-  tab?: ActivityPanelTab;
+/** Optional `{provider, sessionId}` args for panel-related commands. */
+interface PanelCommandArgs {
   provider?: string;
   sessionId?: string;
 }
 
-function activityPanelArgs(args: unknown): ActivityPanelArgs {
+function panelCommandArgs(args: unknown): PanelCommandArgs {
   if (args === null || typeof args !== 'object') return {};
   const raw = args as Record<string, unknown>;
   return {
-    ...(raw.tab === 'activity' || raw.tab === 'usage' ? { tab: raw.tab } : {}),
     ...(typeof raw.provider === 'string' ? { provider: raw.provider } : {}),
     ...(typeof raw.sessionId === 'string' ? { sessionId: raw.sessionId } : {}),
   };
@@ -95,19 +94,17 @@ export const GLOBAL_COMMANDS: readonly CommandDefinition[] = [
     id: 'quota.showPanel',
     title: '查看额度',
     run: (args) => {
-      const { provider } = activityPanelArgs(args);
-      openActivityPanel(undefined, { tab: 'usage', ...(provider === undefined ? {} : { provider }) });
+      const { provider } = panelCommandArgs(args);
+      void shell.navigate('session');
+      openSessionInspector(provider);
     },
   },
   {
     id: 'activity.toggle',
     title: '活动面板',
     run: (args) => {
-      const { tab, provider, sessionId } = activityPanelArgs(args);
-      toggleActivityPanel(sessionId, {
-        ...(tab === undefined ? {} : { tab }),
-        ...(provider === undefined ? {} : { provider }),
-      });
+      const { sessionId } = panelCommandArgs(args);
+      toggleActivityPanel(sessionId);
     },
   },
 ];

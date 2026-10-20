@@ -6,7 +6,7 @@
  * and their task graph link — plus finished task runs kept for ten minutes.
  * Selecting a task run previews its live transcript in the lower part through
  * the shared `TaskTranscript` view. One instance serves the whole app; later
- * tabs (用量) extend this same surface.
+ * background tasks for the app shell.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Bot, MessageSquare, X, Zap, type LucideIcon } from 'lucide-react';
@@ -22,8 +22,7 @@ import { executeCommand } from '@/renderer/lib/commands';
 import { shell, useActivityStatus } from '@/renderer/lib/desktop';
 import { getSessionBridge } from '@/renderer/lib/session';
 import { useAppearance } from '@/renderer/lib/theme';
-import { closeActivityPanel, setActivityPanelTab, useActivityPanelState, type ActivityPanelTab } from '@/renderer/lib/activity-panel';
-import { UsagePanel } from '@/renderer/app/UsagePanel';
+import { closeActivityPanel } from '@/renderer/lib/activity-panel';
 import { useActiveSession } from '@/renderer/lib/navigation';
 import { TASK_RUN_PHASE_LABEL, runningTaskAction } from '@/renderer/pages/session/model/describe';
 import { isRunningTask } from '@/renderer/pages/session/model/fold';
@@ -90,7 +89,6 @@ const transcriptLoader: TaskRunEventsLoader = {
 };
 
 export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
-  const { tab } = useActivityPanelState();
   const snapshot = useActivityStatus();
   const sessions = useSessionActivity();
   const activeSession = useActiveSession();
@@ -253,44 +251,28 @@ export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
-        {/* 活动 / 用量 tabs; the selected tab is persisted by the store. */}
-        <ToggleGroup
-          aria-label="右侧面板内容"
-          value={[tab]}
-          onValueChange={(values) => {
-            const value = values.find((item): item is ActivityPanelTab => item === 'activity' || item === 'usage');
-            if (value !== undefined) setActivityPanelTab(value);
-          }}
-          size="sm"
-          variant="outline"
-        >
-          <ToggleGroupItem value="activity">活动</ToggleGroupItem>
-          <ToggleGroupItem value="usage">用量</ToggleGroupItem>
-        </ToggleGroup>
-        <div className="flex items-center gap-1">
-          {tab === 'activity' && sessionOpen && (
-            <ToggleGroup
-              aria-label="活动范围"
-              value={[scope]}
-              onValueChange={(values) => {
-                const value = values.find((item): item is 'session' | 'all' => item === 'session' || item === 'all');
-                if (value !== undefined) setScope(value);
-              }}
-              size="sm"
-              variant="outline"
-            >
-              <ToggleGroupItem value="session">本会话</ToggleGroupItem>
-              <ToggleGroupItem value="all">全部</ToggleGroupItem>
-            </ToggleGroup>
-          )}
-          <Button variant="ghost" size="icon-sm" aria-label="关闭" onClick={closeActivityPanel}>
-            <X />
-          </Button>
-        </div>
+        {sessionOpen ? (
+          <ToggleGroup
+            aria-label="活动范围"
+            value={[scope]}
+            onValueChange={(values) => {
+              const value = values.find((item): item is 'session' | 'all' => item === 'session' || item === 'all');
+              if (value !== undefined) setScope(value);
+            }}
+            size="sm"
+            variant="outline"
+          >
+            <ToggleGroupItem value="session">本会话</ToggleGroupItem>
+            <ToggleGroupItem value="all">全部</ToggleGroupItem>
+          </ToggleGroup>
+        ) : (
+          <span className="text-sm font-medium">活动</span>
+        )}
+        <Button variant="ghost" size="icon-sm" aria-label="关闭" onClick={closeActivityPanel}>
+          <X />
+        </Button>
       </div>
 
-      {tab === 'usage' ? <UsagePanel /> : (
-      <>
       <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
         {stale ? <p className="px-2 py-1 text-xs text-warning">活动数据暂未更新</p> : null}
         {visibleGroups.map((session) => session.turns.length > 0 ? (
@@ -396,8 +378,6 @@ export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
       )}
       <Separator />
       <PanelFooterAction label="打开任务页" onClick={() => executeCommand('tasks.open')} />
-      </>
-      )}
     </div>
   );
 }
