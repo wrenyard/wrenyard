@@ -28,6 +28,7 @@ import { gunzipSync } from 'node:zlib';
 
 export const CHAT_RPC = '/exa.api_server_pb.ApiServerService/GetChatMessage';
 const MAX_FRAME = 16 * 1024 * 1024;
+const UPSTREAM_DRAIN_BUDGET_MS = 1_000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -203,6 +204,31 @@ function connectError(data: Uint8Array, httpStatus = 200): Failure | undefined {
   return { status, code, upstreamStatus: httpStatus, message: error?.message || 'Devin upstream request failed' };
 }
 
+// After the Connect trailer the message is complete, but cancelling the body
+// mid-stream tears down keep-alive and can poison the connection pool for the
+// next request on this socket. Bodies that end promptly are drained to EOF so
+// the socket stays reusable; a bounded budget falls back to cancellation when
+// the server keeps the stream open.
+async function drainUpstreamBody(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+  const deadline = Date.now() + UPSTREAM_DRAIN_BUDGET_MS;
+  for (;;) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('drain budget expired')), remaining); }),
+      ]);
+      if (result.done) return;
+    } catch {
+      return;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
 async function* decodeEvents(response: Response, signal: AbortSignal): AsyncGenerator<Event> {
   if (!response.body) throw new Error('Devin returned an empty response stream');
   const reader = response.body.getReader();
@@ -278,6 +304,7 @@ async function* decodeEvents(response: Response, signal: AbortSignal): AsyncGene
     yield { error: { status: 502, code: 'invalid_stream', message: error instanceof Error ? error.message : 'Devin response parsing failed', upstreamStatus: response.status } };
   } finally {
     signal.removeEventListener('abort', abort);
+    if (ended && !signal.aborted) { await drainUpstreamBody(reader); }
     await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
