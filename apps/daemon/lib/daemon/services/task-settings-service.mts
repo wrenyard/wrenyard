@@ -2328,7 +2328,7 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
       const items = await getService().list(project)
       return Array.isArray(items)
         ? items.map((item) => {
-          // Definitions never pin a runtime: only timeout/dispatch/prompt
+          // Definitions never pin a runtime: only dispatch/prompt
           // metadata is projected; no agentRuntime/profile is derived.
           const target = resolveTaskTarget(item.name, workspaceRoot, project)
           const config = target?.definition.config
@@ -2336,7 +2336,6 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
             project?: unknown
             source?: unknown
             description?: unknown
-            timeoutMs?: unknown
             dispatch?: unknown
             promptTemplate?: unknown
             inheritanceChain?: unknown
