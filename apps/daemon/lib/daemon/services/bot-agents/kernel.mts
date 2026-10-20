@@ -1512,12 +1512,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       pendingWake(botId, wake)
       await persistChain
       if (stopped) return
-      subscribeGroupReplies(botId, sessionId)
-      holdModel(botId, route)
-      const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route, sender: { botId } })
-      removePendingWake(botId, wake.id)
-      persist()
-      trackTurn(botId, sessionId, turn, outcome => finishWakeTurn(botId, wake, sessionId, outcome))
+      await sendWake(botId, wake, sessionId, route)
     } catch (error) {
       removePendingWake(botId, wake.id)
       finishWakeTurn(botId, wake, sessionId, { turn: failedTurn, status: 'failed', error: errorText(error) })
