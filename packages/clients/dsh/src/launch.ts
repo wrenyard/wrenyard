@@ -1,11 +1,11 @@
-import type { ChildProcess } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { findExecutable, type AgentRequest } from '@wrenyard/agent-client';
+import type { AgentRequest } from '@wrenyard/agent-client';
 import { resolveMcpServers, type ResolvedMcpServer } from '@wrenyard/agent-client/mcp';
 import { assertLaunch, stringEnv } from '@wrenyard/agent-client/native';
-import { spawnProcess, type ProcessSpec } from '@wrenyard/execution';
+import { type ProcessSpec } from '@wrenyard/execution';
+import { inspectDsh } from './installation.ts';
 import { DSH_PROVIDER_ENV, writeLoaderPatch, type DshMcpServer, type DshModelRoute } from './patch.ts';
 import { DSH_REASONING_EFFORT_ENV, DSH_REASONING_EFFORT_URL_ENV } from './reasoning-effort-asset.ts';
 
@@ -40,17 +40,14 @@ const GATEWAY_TOKEN_ENV = 'WRENYARD_GATEWAY_TOKEN';
 /**
  * Minimum supported external DSH executable version. Upstream `0.2.0-rc.2`
  * changed the session event stream and the native model ids, so an older
- * runtime cannot be driven correctly; the launch probes `--version` and fails
+ * runtime cannot be driven correctly; the launch checks the bounded shared
+ * `--version` result and fails
  * fast below this.
  */
 const DSH_MINIMUM_VERSION = '0.2.0-rc.2';
 
 /** The one upgrade command named in the minimum-version error. */
 const DSH_UPGRADE_COMMAND = 'npm install -g @deepseek-ai/dsh@0.2.0-rc.2';
-
-/** Bound the version probe: a short wall-clock budget and a small output cap. */
-const DSH_VERSION_TIMEOUT_MS = 5_000;
-const DSH_VERSION_MAX_BYTES = 4_096;
 
 export interface DshLaunch {
   /** Fully resolved process spec for @wrenyard/execution. */
@@ -125,15 +122,14 @@ export async function prepareDshLaunch(
   const configured = explicitExecutable?.trim() || env.WRENYARD_DSH_BIN?.trim();
   if (configured && !isAbsolute(configured))
     throw new Error('dsh: configured executable must be an absolute path');
-  const status = await findExecutable(['dsh'], configured ? { env, executable: configured } : { env });
+  const scrubbed = scrubInheritedEnv(env);
+  const status = await inspectDsh(configured ? { env: scrubbed, executable: configured } : { env: scrubbed });
   if (status.installation.state !== 'installed')
     throw new Error('dsh is not installed');
 
-  // Enforce the minimum external DSH version before any side effect. The probe
-  // reuses the scrubbed environment the child will inherit, so the resolved
-  // executable is measured exactly as it will be launched.
-  const scrubbed = scrubInheritedEnv(env);
-  await assertDshVersion(status.installation.executable, scrubbed);
+  // Enforce the minimum external DSH version before any side effect, using the
+  // bounded shared probe run in the scrubbed child environment.
+  assertDshVersion(status.installation.version);
 
   const home = await mkdtemp(join(tmpdir(), 'wrenyard-dsh-agent-'));
   const cleanup = async (): Promise<void> => {
@@ -277,54 +273,18 @@ interface DshSemver {
 const DSH_SEMVER_PATTERN = /(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?/;
 
 /**
- * Probe the resolved DSH executable and reject any version below the supported
- * minimum. One bounded `--version` subprocess runs with no shell, under the
- * same scrubbed environment the child will inherit. Raw output is never
- * surfaced: an old, unparseable or unprobeable version becomes a single
+ * Reject any version below the supported minimum. The bounded shared
+ * `--version` probe uses no shell and runs under the same scrubbed environment
+ * the child will inherit. Raw output is never surfaced: an old, unparseable or unprobeable version becomes a single
  * sanitized error naming the minimum version and the upgrade command.
  */
-async function assertDshVersion(executable: string, env: NodeJS.ProcessEnv): Promise<void> {
+function assertDshVersion(version: string | undefined): void {
   const minimum = parseDshSemver(DSH_MINIMUM_VERSION);
-  const reported = await probeDshVersion(executable, env);
-  const found = reported === undefined ? undefined : parseDshSemver(reported);
+  const found = version === undefined ? undefined : parseDshSemver(version);
   if (minimum === undefined || found === undefined || compareDshSemver(found, minimum) < 0) {
     const seen = found === undefined ? 'unknown' : formatDshSemver(found);
     throw new Error(`dsh: unsupported DSH version (${seen}); Wrenyard requires @deepseek-ai/dsh >= ${DSH_MINIMUM_VERSION}. Upgrade with: ${DSH_UPGRADE_COMMAND}`);
   }
-}
-
-/** Run one bounded `--version` probe; resolve with stdout, or undefined on any failure. */
-async function probeDshVersion(executable: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
-  return await new Promise((resolve) => {
-    let child: ChildProcess;
-    try {
-      child = spawnProcess(executable, ['--version'], { env, stdio: ['ignore', 'pipe', 'ignore'] });
-    }
-    catch {
-      resolve(undefined);
-      return;
-    }
-    let output = '';
-    let done = false;
-    const finish = (value: string | undefined): void => {
-      if (done)
-        return;
-      done = true;
-      clearTimeout(timer);
-      resolve(value);
-    };
-    const timer = setTimeout(() => {
-      child.kill();
-      finish(undefined);
-    }, DSH_VERSION_TIMEOUT_MS);
-    child.stdout?.on('data', (chunk: Buffer) => {
-      if (output.length >= DSH_VERSION_MAX_BYTES)
-        return;
-      output += chunk.toString('utf8').slice(0, DSH_VERSION_MAX_BYTES - output.length);
-    });
-    child.on('error', () => finish(undefined));
-    child.on('close', (code) => finish(code === 0 ? output : undefined));
-  });
 }
 
 /** Parse the first SemVer token in a `--version` banner, or undefined. */

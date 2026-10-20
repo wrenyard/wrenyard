@@ -1,4 +1,4 @@
-import { findExecutable, type ClientStatus, type InspectOptions } from '@wrenyard/agent-client';
+import { findExecutable, withVersion, type ClientStatus, type InspectOptions } from '@wrenyard/agent-client';
 import { isAbsolute } from 'node:path';
 
 /** Native DSH executable name on PATH. */
@@ -16,12 +16,12 @@ const DSH_BIN_ENV = 'WRENYARD_DSH_BIN';
  * not absolute is passed through unchanged so `findExecutable` reports it
  * unambiguously instead of resolving a same-named PATH entry.
  */
-export function inspectDsh(options?: InspectOptions): Promise<ClientStatus> {
+export async function inspectDsh(options?: InspectOptions): Promise<ClientStatus> {
     const env = options?.env ?? process.env;
     const configured = options?.executable?.trim() || env[DSH_BIN_ENV]?.trim();
     if (!configured)
-        return findExecutable([DSH_EXECUTABLE], options);
+        return withVersion(await findExecutable([DSH_EXECUTABLE], options), options);
     if (isAbsolute(configured))
-        return findExecutable([DSH_EXECUTABLE], { ...options, env, executable: configured });
-    return Promise.resolve({ installation: { state: 'unknown', reason: 'configured executable is not absolute' }, authentication: 'unknown' });
+        return withVersion(await findExecutable([DSH_EXECUTABLE], { ...options, env, executable: configured }), { ...options, env, executable: configured });
+    return { installation: { state: 'unknown', reason: 'configured executable is not absolute' }, authentication: 'unknown' };
 }
