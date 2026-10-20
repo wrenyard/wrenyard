@@ -285,6 +285,14 @@ function boundCompileEvents(
 
 // ─── Dispatch action ────────────────────────────────────────────────────────
 
+/**
+ * A dispatch that ends before its task run exists. The result says so in its
+ * first words, so the session never reads it as work in progress.
+ */
+function notDispatched(reason: string): ActionExecutionOutcome {
+  return fail(`Not dispatched; no task run was created. ${reason}`);
+}
+
 /** Start one dispatch action for a parsed intent. */
 export async function runDispatchAction(
   deps: ActionWorkflowDeps,
@@ -298,7 +306,7 @@ export async function runDispatchAction(
       contract = await deps.host.describeTask(task.id, task.project);
     } catch (error) {
       if (isObject(error) && error.code === 'task_not_found') continue;
-      return fail(`describeTask failed: ${messageOf(error)}`);
+      return notDispatched(`describeTask failed: ${messageOf(error)}`);
     }
     contracts.push({
       ...task,
@@ -363,7 +371,7 @@ export async function runDispatchAction(
       ],
     };
   }
-  if (compiled === undefined) return fail(compileError);
+  if (compiled === undefined) return notDispatched(compileError);
 
   const { parsed, project, taskId, worktree, effectiveInput, fast } = compiled;
 
@@ -375,7 +383,7 @@ export async function runDispatchAction(
   const unsupported = (resolvedContract?.requiredCapabilities ?? [])
     .filter((capability) => capability !== 'text' && capability !== 'image');
   if (unsupported.length > 0) {
-    return fail(`cannot dispatch task '${taskId}': no execution environment provides required capabilities: ${unsupported.join(', ')}`);
+    return notDispatched(`cannot dispatch task '${taskId}': no execution environment provides required capabilities: ${unsupported.join(', ')}`);
   }
 
   // Execution-environment tool gate: the gate requires only the execution tools
@@ -388,7 +396,7 @@ export async function runDispatchAction(
     try {
       requiredTools = await deps.host.mountedTaskTools(taskId, project.id, effectiveInput);
     } catch (error) {
-      return fail(messageOf(error));
+      return notDispatched(messageOf(error));
     }
   }
   if (requiredTools.length > 0) {
@@ -396,13 +404,13 @@ export async function runDispatchAction(
     try {
       available = deps.host.environmentTools === undefined ? [] : await deps.host.environmentTools();
     } catch (error) {
-      return fail(messageOf(error));
+      return notDispatched(messageOf(error));
     }
     const missing = requiredTools
       .map((tool) => TOOL_ID_ALIASES[tool] ?? tool)
       .filter((tool) => !available.includes(tool));
     if (missing.length > 0) {
-      return fail(
+      return notDispatched(
         `cannot dispatch task '${taskId}': this execution environment does not provide the required tools: ${missing.join(', ')} (available: ${available.length === 0 ? 'none' : available.join(', ')})`,
       );
     }
@@ -418,7 +426,7 @@ export async function runDispatchAction(
   try {
     taskCtx = buildTaskContext(ctx.currentEvents(), ctx.actionId, project);
   } catch (error) {
-    return fail(messageOf(error));
+    return notDispatched(messageOf(error));
   }
 
   try {
@@ -451,7 +459,7 @@ export async function runDispatchAction(
     const run = await deps.host.createTaskRun(createParams);
     taskRunId = run.taskRunId;
   } catch (error) {
-    return fail(`createTaskRun failed: ${messageOf(error)}`);
+    return notDispatched(`createTaskRun failed: ${messageOf(error)}`);
   }
 
   // The task run is recorded as its own observational span, opened as soon as
