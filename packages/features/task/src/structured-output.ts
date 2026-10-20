@@ -113,6 +113,8 @@ export interface TaskUpstreamError {
   status?: number
   errorType?: string
   message?: string
+  /** An explicitly stated reset instant, as an ISO timestamp. */
+  resetsAt?: string
 }
 
 /**

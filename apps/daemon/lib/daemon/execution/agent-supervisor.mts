@@ -1154,7 +1154,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     // The upstream identity the client reported, when its captured diagnostics
     // state one. It is carried beside the failure diagnostic so the downstream
     // gateway classification can decide the fault; this layer never classifies.
-    const upstreamError = status === 'failed' ? extractUpstreamError(failureDiagnostic) : undefined
+    const upstreamError = status === 'failed' ? extractUpstreamError(output) : undefined
 
     this.terminalizeRunning(entry, {
       status,
@@ -2374,6 +2374,8 @@ interface UpstreamError {
   status?: number
   errorType?: string
   message?: string
+  /** An explicitly stated reset instant, as an ISO timestamp. */
+  resetsAt?: string
 }
 
 /** An explicit HTTP status: `HTTP 403`, `HTTP/1.1 403`, or a labeled status field. */
@@ -2387,24 +2389,39 @@ const UPSTREAM_JSON_ERROR_TYPE_PATTERN = /"error"\s*:\s*\{[^{}]{0,200}?"type"\s*
 const UPSTREAM_ERROR_TYPE_FIELD_PATTERN = /"error_?type"\s*:\s*"([^"]+)"/iu
 /** The message that follows the upstream status/identity, up to the line end. */
 const UPSTREAM_ERROR_MESSAGE_PATTERN = /\bHTTP\s+(?:4\d{2}|5\d{2})\s+(?:[A-Za-z_][\w.-]*(?:Error|Exception))?\s*:\s*([^\r\n]+)/u
+/**
+ * A native client failure whose output begins with a bare status line, e.g.
+ * CodeBuddy's `429 <message>`. Only the very first line counts, so agent text
+ * that merely mentions a status later can never be read as one.
+ */
+const UPSTREAM_STATUS_LINE_PATTERN = /^(4\d{2}|5\d{2})\s+(\S[^\r\n]*)/u
+/** An explicit reset instant on a line that says it resets, e.g. `2026-01-02 03:04:05 UTC+8 重置`. */
+const UPSTREAM_RESET_PATTERN = /(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s*UTC([+-])(\d{1,2})(?::?(\d{2}))?[^\r\n]*?(?:重置|reset)/iu
 /** A JSON error message, unescaped after capture. */
 const UPSTREAM_JSON_MESSAGE_PATTERN = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/u
 
 function extractUpstreamError(text: string | null): UpstreamError | undefined {
   if (text === null || text === '') return undefined
-  const statusText = UPSTREAM_HTTP_STATUS_PATTERN.exec(text)?.[1] ?? UPSTREAM_STATUS_FIELD_PATTERN.exec(text)?.[1]
+  const statusLine = UPSTREAM_STATUS_LINE_PATTERN.exec(text)
+  const statusText = UPSTREAM_HTTP_STATUS_PATTERN.exec(text)?.[1] ?? UPSTREAM_STATUS_FIELD_PATTERN.exec(text)?.[1] ?? statusLine?.[1]
   const status = statusText === undefined ? undefined : Number(statusText)
   const errorType = UPSTREAM_ERROR_TYPE_PATTERN.exec(text)?.[1]
     ?? UPSTREAM_JSON_ERROR_TYPE_PATTERN.exec(text)?.[1]
     ?? UPSTREAM_ERROR_TYPE_FIELD_PATTERN.exec(text)?.[1]
   const rawMessage = UPSTREAM_ERROR_MESSAGE_PATTERN.exec(text)?.[1]
     ?? UPSTREAM_JSON_MESSAGE_PATTERN.exec(text)?.[1]
+    ?? statusLine?.[2]
   const message = rawMessage === undefined ? undefined : unescapeJsonString(rawMessage)
+  const reset = UPSTREAM_RESET_PATTERN.exec(text)
+  const resetsAt = reset === null
+    ? undefined
+    : `${reset[1]}T${reset[2]}${reset[3]}${reset[4]!.padStart(2, '0')}:${reset[5] ?? '00'}`
   if (status === undefined && errorType === undefined && message === undefined) return undefined
   return {
     ...(status === undefined ? {} : { status }),
     ...(errorType === undefined ? {} : { errorType }),
     ...(message === undefined ? {} : { message }),
+    ...(resetsAt === undefined || Number.isNaN(Date.parse(resetsAt)) ? {} : { resetsAt }),
   }
 }
 

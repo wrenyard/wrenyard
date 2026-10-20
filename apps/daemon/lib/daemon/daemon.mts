@@ -1077,13 +1077,14 @@ async function createForemanDaemonResources(
       const providerDefinition = catalog.provider(provider)
       if (providerDefinition === undefined) return undefined
       // The provider hook reads the error identity exactly as it would from a
-      // real upstream body (`{ error: { type, message } }`).
-      const body = fault.errorType === undefined && fault.message === undefined
+      // real upstream body (`{ error: { type, message, resets_at } }`).
+      const body = fault.errorType === undefined && fault.message === undefined && fault.resetsAt === undefined
         ? undefined
         : {
             error: {
               ...(fault.errorType === undefined ? {} : { type: fault.errorType }),
               ...(fault.message === undefined ? {} : { message: fault.message }),
+              ...(fault.resetsAt === undefined ? {} : { resets_at: fault.resetsAt }),
             },
           }
       const failure = classifyRouteFailure(providerDefinition, bareModel, fault.status, new Headers(), body, Date.now())
