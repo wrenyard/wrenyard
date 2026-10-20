@@ -243,6 +243,7 @@ export class TurnRunner {
     const previous = this.engine.ledger.read(session.sessionId);
     const lastInputTokens = lastReasonInputTokens(previous);
     const stepKey = stepId(turn.turn, step);
+    const steersSeen = turn.steers ?? 0;
     await this.engine.ledger.append(session.sessionId, {
       type: 'step.started',
       id: stepKey,
@@ -509,7 +510,10 @@ export class TurnRunner {
     if (turn.finished) return { ok: false, error: 'interrupted' };
 
     const workerOutput = buildWorkerOutput(outcome.text, workerLines);
-    const terminal = this.isTerminalStep(turn, outcome.text);
+    // A message steered in after this step's context was read keeps the turn
+    // running, so the next step carries it to the model.
+    const terminal = this.isTerminalStep(turn, outcome.text) && (turn.steers ?? 0) === steersSeen;
+    if (terminal) turn.closing = true;
     await this.engine.ledger.append(session.sessionId, {
       type: 'reasoning.completed',
       turn: turn.turn,

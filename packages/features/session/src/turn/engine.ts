@@ -575,7 +575,10 @@ class Engine implements Session, SessionCallHost {
     const running = [...session.turns.entries()].find(([, turn]) => !turn.durableTerminal);
     if (running === undefined) return undefined;
     const [turnNumber, turn] = running;
-    if (turn.durableTerminal) return undefined;
+    if (turn.durableTerminal || turn.finished || turn.closing) return undefined;
+    // Counted in the same tick as the append is queued, so a step that reads
+    // this count before its own step.started also sees the event.
+    turn.steers = (turn.steers ?? 0) + 1;
     await this.ports.ledger.append(sessionId, {
       type: 'turn.steered',
       turn: turnNumber,

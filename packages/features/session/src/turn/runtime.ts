@@ -77,6 +77,10 @@ export interface TurnRuntime {
   emptyReasonRetried: boolean;
   /** The visible text of the last successful reason output. */
   currentReasonText: string;
+  /** Steered messages accepted into this turn so far. */
+  steers?: number;
+  /** Set once a step decided to end the turn; later steers start a new turn. */
+  closing?: boolean;
 }
 
 export interface SessionRuntime {
