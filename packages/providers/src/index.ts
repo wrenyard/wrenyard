@@ -1,5 +1,7 @@
 export type { Provider, ProviderContext } from './base/index.ts';
 export { createCodeBuddy } from './codebuddy/index.ts';
+export { createWorkBuddyProviders } from './workbuddy/index.ts';
+export type { WorkBuddyProvider, WorkBuddyOptions } from './workbuddy/index.ts';
 export { createDevin } from './devin/index.ts';
 export { readDevinCredentials } from './devin/credentials.ts';
 export type { DevinProvider, DevinOptions } from './devin/index.ts';

@@ -124,3 +124,14 @@ export interface ProviderQuotaResult {
   /** Epoch milliseconds the snapshot set was produced. */
   fetchedAt: number
 }
+
+/** Params of `provider.signIn`. */
+export interface ProviderSignInParams {
+  provider: 'workbuddy' | 'workbuddy-ai'
+}
+
+/** Result of `provider.signIn`. */
+export interface ProviderSignInResult {
+  authUrl: string
+  alreadySignedIn: boolean
+}

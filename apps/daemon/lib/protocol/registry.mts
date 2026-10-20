@@ -185,14 +185,18 @@ import {
   providerListResultSchema,
   providerQuotaParamsSchema,
   providerQuotaResultSchema,
+  providerSignInParamsSchema,
+  providerSignInResultSchema,
   type ProviderConfigureParams,
   type ProviderConfigureResult,
   type ProviderListParams,
   type ProviderListResult,
   type ProviderQuotaParams,
   type ProviderQuotaResult,
+  type ProviderSignInParams,
+  type ProviderSignInResult,
 } from './methods/provider.mts'
-export type { ProviderConfigureParams, ProviderConfigureResult, ProviderListParams, ProviderListResult, ProviderQuotaParams, ProviderQuotaResult } from './methods/provider.mts'
+export type { ProviderConfigureParams, ProviderConfigureResult, ProviderListParams, ProviderListResult, ProviderQuotaParams, ProviderQuotaResult, ProviderSignInParams, ProviderSignInResult } from './methods/provider.mts'
 import {
   projectCommitParamsSchema,
   projectCommitResultSchema,
@@ -838,6 +842,7 @@ export interface ForemanMethodParams {
   'provider.list': ProviderListParams
   'provider.configure': ProviderConfigureParams
   'provider.quota': ProviderQuotaParams
+  'provider.signIn': ProviderSignInParams
   'event.list': EventListParams
   'stats.today': StatsTodayParams
   'stats.summary': StatsSummaryParams
@@ -950,6 +955,7 @@ export interface ForemanMethodResults {
   'provider.list': ProviderListResult
   'provider.configure': ProviderConfigureResult
   'provider.quota': ProviderQuotaResult
+  'provider.signIn': ProviderSignInResult
   'event.list': EventListResult
   'stats.today': StatsTodayResult
   'stats.summary': StatsSummaryResult
@@ -1099,6 +1105,10 @@ export const methodRegistry: {
   'provider.quota': {
     params: providerQuotaParamsSchema,
     result: providerQuotaResultSchema,
+  },
+  'provider.signIn': {
+    params: providerSignInParamsSchema,
+    result: providerSignInResultSchema,
   },
   'event.list': {
     params: eventListParamsSchema,

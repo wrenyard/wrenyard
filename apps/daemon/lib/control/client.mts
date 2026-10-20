@@ -1,4 +1,4 @@
-import type { ProviderQuotaParams, ProviderQuotaResult, ProviderConfigureParams, ProviderConfigureResult } from '@wrenyard/protocol/provider'
+import type { ProviderQuotaParams, ProviderQuotaResult, ProviderConfigureParams, ProviderConfigureResult, ProviderSignInParams, ProviderSignInResult } from '@wrenyard/protocol/provider'
 import type {
   ActivitySnapshotParams,
   ActivitySnapshotV1,
@@ -227,6 +227,9 @@ export class ForemanClient {
     },
     quota: (params: ProviderQuotaParams = {}): Promise<ProviderQuotaResult> => {
       return this.rpc.request<ProviderQuotaResult>('provider.quota', params, { timeoutMs: 45_000 })
+    },
+    signIn: (params: ProviderSignInParams): Promise<ProviderSignInResult> => {
+      return this.rpc.request<ProviderSignInResult>('provider.signIn', params)
     },
   }
 

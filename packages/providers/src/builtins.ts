@@ -22,16 +22,20 @@ import type { Provider, ProviderDefinition } from './base/index.ts';
 import type { ProviderQuota } from './base/provider-quota.ts';
 import { createCodeBuddy } from './codebuddy/index.ts';
 import { createDevin } from './devin/index.ts';
+import { createWorkBuddyProviders } from './workbuddy/index.ts';
 import { createOpenCodeZen } from './opencode-zen/provider.ts';
 import { modelsDevProviders } from './models-dev.ts';
 
 // The composition root owns default discovery. Leaf modules perform no I/O on import.
 export const codeBuddy = createCodeBuddy();
 export const devinProvider = createDevin();
+export const [workBuddyProvider, workBuddyAiProvider] = createWorkBuddyProviders();
 export const opencodeZenProvider = createOpenCodeZen();
 export const providerImplementations: ReadonlyMap<string, Provider> = new Map<string, Provider>([
   [codeBuddy.id, codeBuddy],
   [devinProvider.id, devinProvider],
+  [workBuddyProvider.id, workBuddyProvider],
+  [workBuddyAiProvider.id, workBuddyAiProvider],
   [opencodeZenProvider.id, opencodeZenProvider],
 ]);
 
@@ -62,6 +66,8 @@ const builtins: readonly BuiltinModule[] = [
   openrouter,
   opencodeGo,
   devinProvider,
+  workBuddyProvider,
+  workBuddyAiProvider,
   // Generic models.dev-derived mainstream providers: the 15 curated rows in
   // models-dev-catalog.generated.ts, managed-API-key definitions only, no
   // quota source. Appended so the existing declarations stay untouched.

@@ -1,4 +1,5 @@
 import { WrenyardIpcClient, type WrenyardProviderStatus } from '@wrenyard/control';
+import type { ProviderSignInParams, ProviderSignInResult } from '@wrenyard/protocol/provider';
 import { StaleGenerationError } from './main/remote/context.js';
 import type { ProviderAuthStatus } from './shell-contract.js';
 
@@ -8,6 +9,7 @@ const MAX_KEY_LENGTH = 4096;
 export interface ProviderControlClient {
   providerList(): Promise<{ providers: WrenyardProviderStatus[] }>;
   providerConfigure(providerId: string, key: string): Promise<{ ok: true }>;
+  providerSignIn(provider: ProviderSignInParams['provider']): Promise<ProviderSignInResult>;
   close(): void;
 }
 
@@ -77,6 +79,19 @@ export class ProviderService {
           ...(model.pricing === undefined ? {} : { pricing: model.pricing }),
         })),
       }));
+    } finally {
+      client.close();
+    }
+  }
+
+  async signIn(provider: ProviderSignInParams['provider']): Promise<ProviderSignInResult> {
+    if (this.options.canConnect?.() === false) throw new Error('daemon 不可用');
+    const generation = this.options.getGeneration?.();
+    const client = this.clientFactory(this.options.ipcPath);
+    try {
+      const result = await client.providerSignIn(provider);
+      this.assertCurrentGeneration(generation);
+      return result;
     } finally {
       client.close();
     }

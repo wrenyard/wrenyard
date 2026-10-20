@@ -10,6 +10,8 @@ import type {
   ProviderQuotaParams,
   ProviderQuotaResult,
   ProviderQuotaSnapshot,
+  ProviderSignInParams,
+  ProviderSignInResult,
 } from '@wrenyard/protocol/provider'
 
 // Wire DTOs are declared once in @wrenyard/protocol/provider and re-exported
@@ -25,6 +27,8 @@ export type {
   ProviderQuotaParams,
   ProviderQuotaResult,
   ProviderQuotaSnapshot,
+  ProviderSignInParams,
+  ProviderSignInResult,
 }
 
 export const providerListParamsSchema = {
@@ -88,6 +92,19 @@ export const providerConfigureResultSchema = {
 export const providerQuotaParamsSchema = {
   type: 'object', properties: {
     forceRefresh: { type: 'boolean' },
+  }, additionalProperties: false,
+} as const satisfies JsonSchema
+
+export const providerSignInParamsSchema = {
+  type: 'object', required: ['provider'], properties: {
+    provider: { type: 'string', enum: ['workbuddy', 'workbuddy-ai'] },
+  }, additionalProperties: false,
+} as const satisfies JsonSchema
+
+export const providerSignInResultSchema = {
+  type: 'object', required: ['authUrl', 'alreadySignedIn'], properties: {
+    authUrl: { type: 'string', maxLength: 4096 },
+    alreadySignedIn: { type: 'boolean' },
   }, additionalProperties: false,
 } as const satisfies JsonSchema
 

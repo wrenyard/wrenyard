@@ -42,7 +42,10 @@ import {
   providerAuthGuidance,
   providerDialogTitle,
 } from '../model/describe.js';
-import { useConfigureProviderKey } from '../queries.js';
+import { useConfigureProviderKey, useQuotaRefresh } from '../queries.js';
+
+const WORKBUDDY_PROVIDER_IDS = new Set(['workbuddy', 'workbuddy-ai']);
+const WORKBUDDY_SIGN_IN_LABEL = '登录';
 
 const DISCARD_TITLE = '放弃未保存的密钥？';
 const DISCARD_KEEP_LABEL = '继续编辑';
@@ -71,6 +74,7 @@ export function ProviderDialog({ entry, snapshot, displayCurrency, onClose, onSa
   const [openingPage, setOpeningPage] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const configure = useConfigureProviderKey();
+  const quotaRefresh = useQuotaRefresh();
 
   const open = entry !== null;
 
@@ -105,6 +109,7 @@ export function ProviderDialog({ entry, snapshot, displayCurrency, onClose, onSa
   }
 
   const apiKeyMode = entry.authMode === 'api-key';
+  const workBuddySignInMode = WORKBUDDY_PROVIDER_IDS.has(entry.id) && entry.authMode === 'native' && !entry.configured;
   const name = entry.label || entry.id;
   const keyPageAvailable = providerKeyPageUrl(entry.id) !== null;
   const pending = configure.isPending || openingPage;
@@ -135,6 +140,28 @@ export function ProviderDialog({ entry, snapshot, displayCurrency, onClose, onSa
     void shell.openProviderKeyPage(entry.id)
       .catch((cause: unknown) => setError(errorMessage(cause) || KEY_PAGE_ERROR))
       .finally(() => setOpeningPage(false));
+  };
+
+  const handleWorkBuddySignIn = (): void => {
+    setError('');
+    setOpeningPage(true);
+    void (async () => {
+      try {
+        const bridge = shell as typeof shell & {
+          signInProvider?: (providerId: string) => Promise<{ authUrl: string; alreadySignedIn: boolean }>;
+        };
+        if (bridge.signInProvider === undefined) throw new Error('登录不可用');
+        const result = await bridge.signInProvider(entry.id);
+        if (!result.alreadySignedIn && result.authUrl.length > 0) {
+          await shell.openExternal(result.authUrl);
+        }
+        void quotaRefresh.mutate();
+      } catch (cause: unknown) {
+        setError(errorMessage(cause) || KEY_PAGE_ERROR);
+      } finally {
+        setOpeningPage(false);
+      }
+    })();
   };
 
   const requestClose = (): void => {
@@ -204,6 +231,18 @@ export function ProviderDialog({ entry, snapshot, displayCurrency, onClose, onSa
             </Button>
           )}
 
+          {workBuddySignInMode && (
+            <Button
+              type="button"
+              variant="link"
+              className="self-start"
+              disabled={pending}
+              onClick={handleWorkBuddySignIn}
+            >
+              {WORKBUDDY_SIGN_IN_LABEL}
+            </Button>
+          )}
+
           {error !== '' && (
             <Alert variant="destructive">
               <AlertDescription>{error}</AlertDescription>
@@ -261,6 +300,11 @@ export function ProviderDialog({ entry, snapshot, displayCurrency, onClose, onSa
                   {configure.isPending
                     ? KEY_SAVING_LABEL
                     : entry.configured ? DIALOG_UPDATE_LABEL : DIALOG_SAVE_LABEL}
+                </Button>
+              )}
+              {workBuddySignInMode && (
+                <Button type="button" disabled={pending} onClick={handleWorkBuddySignIn}>
+                  {WORKBUDDY_SIGN_IN_LABEL}
                 </Button>
               )}
             </>

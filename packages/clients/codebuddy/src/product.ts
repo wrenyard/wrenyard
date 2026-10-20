@@ -304,7 +304,7 @@ async function readConfigModels(
  * caller reports an unavailable snapshot instead of silently showing an empty
  * catalog.
  */
-function configModelEntries(payload: unknown): CodeBuddyProductModelEntry[] | undefined {
+export function configModelEntries(payload: unknown): CodeBuddyProductModelEntry[] | undefined {
     if (!isRecord(payload))
         return undefined;
     if (payload.code !== 0)
@@ -314,7 +314,7 @@ function configModelEntries(payload: unknown): CodeBuddyProductModelEntry[] | un
         return undefined;
     return parseModels({ models: cliAgentRows(data) });
 }
-function cliAgentRows(data: Record<string, unknown>): unknown[] {
+export function cliAgentRows(data: Record<string, unknown>): unknown[] {
     const agents = (Array.isArray(data.agents) ? data.agents : []).filter(isRecord);
     // The session's models come from the agent the product identifies as its CLI
     // agent; the default-tagged agent is the same one it falls back to.
@@ -402,7 +402,7 @@ function domainMatches(pattern: string, domain: string): boolean {
     const expression = pattern.replace(/\./gu, '\\.').replace(/\*/gu, '[^.]*');
     return new RegExp(`^${expression}$`, 'u').test(domain);
 }
-function parseModels(value: Record<string, unknown>): CodeBuddyProductModelEntry[] {
+export function parseModels(value: Record<string, unknown>): CodeBuddyProductModelEntry[] {
     const models = value.models;
     if (!Array.isArray(models))
         return [];

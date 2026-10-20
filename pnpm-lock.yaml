@@ -883,6 +883,9 @@ importers:
 
   packages/providers:
     dependencies:
+      '@wrenyard/client-codebuddy':
+        specifier: workspace:*
+        version: link:../clients/codebuddy
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../models

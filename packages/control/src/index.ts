@@ -1,4 +1,4 @@
-import type { ProviderListResult, ProviderQuotaResult } from '@wrenyard/protocol/provider';
+import type { ProviderListResult, ProviderQuotaResult, ProviderSignInParams, ProviderSignInResult } from '@wrenyard/protocol/provider';
 import type {
   GatewayConnection as WrenyardGatewayConnection,
   GatewaySettings as WrenyardGatewaySettings,
@@ -231,6 +231,14 @@ export class WrenyardIpcClient {
   /** Store a managed provider API key through the daemon's local IPC channel. */
   providerConfigure(providerId: string, key: string, options?: WrenyardIpcRequestOptions): Promise<{ ok: true }> {
     return this.request('provider.configure', { providerId, key }, options);
+  }
+
+  /** Start or resume WorkBuddy browser sign-in through the daemon-owned provider auth flow. */
+  providerSignIn(
+    provider: ProviderSignInParams['provider'],
+    options?: WrenyardIpcRequestOptions,
+  ): Promise<ProviderSignInResult> {
+    return this.request<ProviderSignInResult>('provider.signIn', { provider }, options);
   }
 
   /**

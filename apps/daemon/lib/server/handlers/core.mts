@@ -202,6 +202,7 @@ export interface CoreRpcHandlerOptions {
   providerList?: () => Promise<import('../../protocol/methods/provider.mts').ProviderListResult>
   providerConfigure?: (params: import('../../protocol/methods/provider.mts').ProviderConfigureParams) => Promise<import('../../protocol/methods/provider.mts').ProviderConfigureResult>
   providerQuota?: (params: import('../../protocol/methods/provider.mts').ProviderQuotaParams) => Promise<import('../../protocol/methods/provider.mts').ProviderQuotaResult>
+  providerSignIn?: (params: import('../../protocol/methods/provider.mts').ProviderSignInParams) => Promise<import('../../protocol/methods/provider.mts').ProviderSignInResult>
 }
 
 export type CoreRpcTransport = 'ipc'
@@ -328,6 +329,18 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         )
       }
       return options.providerQuota!(params)
+    })
+  }
+  if (options.providerSignIn) {
+    router.register('provider.signIn', async (params, _message, context) => {
+      const rpcContext = coreRpcContextFromUnknown(context)
+      if (rpcContext.transport !== 'ipc') {
+        throw new ProtocolError(
+          { code: INVALID_PARAMS.code, message: 'provider.signIn is only available over IPC' },
+          { code: 'provider_sign_in_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+        )
+      }
+      return options.providerSignIn!(params)
     })
   }
   router.register('event.list', (params) => {

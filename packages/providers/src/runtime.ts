@@ -383,6 +383,16 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
       return execute(context);
     },
     async refreshCredential(provider, credential, signal) {
+      if (provider.credentialResolver === 'workbuddy') {
+        const implementation = implementations.get(provider.id);
+        if (!implementation || !('refreshCredential' in implementation) || typeof implementation.refreshCredential !== 'function') {
+          throw new Error(`provider ${provider.id} does not support credential refresh`);
+        }
+        const refreshed = await implementation.refreshCredential(credential, signal);
+        credentialProviders.set(refreshed, implementation);
+        lastCredentials.set(provider.id, refreshed);
+        return refreshed;
+      }
       // Only the ChatGPT/Codex gateway credential is refreshable, and only
       // through the injected client adapter: no credential material or refresh
       // transport is authored here.

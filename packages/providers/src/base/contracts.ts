@@ -279,7 +279,8 @@ export type CredentialResolver =
   | 'claude'
   | 'grok-oauth'
   | 'cursor'
-  | 'devin';
+  | 'devin'
+  | 'workbuddy';
 
 // A concrete runtime materialization for one reasoning effort: an optional
 // upstream-model substitution and/or an optional wire effort alias. This is the

@@ -4,6 +4,7 @@ import type { CodeBuddyAccountContext, CodeBuddyEnvironment } from './account.ts
 import { decodeCodeBuddy } from './events.ts';
 import { launchCodeBuddy } from './launch.ts';
 import { readCodeBuddyAccount, readCodeBuddyInstall, type CodeBuddyProductSnapshot } from './product.ts';
+export { cliAgentRows, configModelEntries, parseModels } from './product.ts';
 export type { CodeBuddyAccountContext, CodeBuddyProductSnapshot };
 export class CodeBuddyClient implements AgentClient {
     readonly id = 'codebuddy';

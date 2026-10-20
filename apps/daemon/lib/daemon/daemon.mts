@@ -74,7 +74,15 @@ import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../ev
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { WorkspaceTodoService, todoIndexPath } from './services/workspace-todo-service.mts'
 import { classifyRouteFailure, createModelGateway, type ModelGateway, type RouteStatus } from '@wrenyard/gateway'
-import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin, createOpenCodeZen, resolveHistoricalOfferedModelId } from '@wrenyard/providers'
+import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin, createOpenCodeZen, createWorkBuddyProviders, resolveHistoricalOfferedModelId, type WorkBuddyProvider } from '@wrenyard/providers'
+import {
+  defaultProviderContext,
+  pollWorkBuddyBrowserToken,
+  resolveWorkBuddySession,
+  startWorkBuddyBrowserAuth,
+} from '../../../../packages/providers/src/workbuddy/credentials.ts'
+import { AUTH_POLL_TIMEOUT_MS } from '../../../../packages/providers/src/workbuddy/protocol.ts'
+import { WORKBUDDY_BUILDS, type WorkBuddyBuildId } from '../../../../packages/providers/src/workbuddy/definition.ts'
 import { REASONING_EFFORTS, parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { PROVIDER_DEFAULT_REASONING } from '@wrenyard/providers/base'
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '@wrenyard/task'
@@ -754,7 +762,10 @@ async function createForemanDaemonResources(
   // are constructed once in bootstrap (see bootstrapForemanDaemonRuntime) and
   // reused here so the gateway, RPC surface, and the running daemon all share
   // the identical resolver instance.
-  const { catalog, providerRuntime, dispatchPlans, taskDispatchResolver } = runtime
+  const { catalog, providerRuntime, dispatchPlans, taskDispatchResolver, workBuddyProviders } = runtime
+  const workBuddyProvidersById = new Map<WorkBuddyBuildId, WorkBuddyProvider>(
+    workBuddyProviders.map((provider) => [provider.id as WorkBuddyBuildId, provider]),
+  )
   // One private current-CodeBuddy-active-snapshot loader bound to the catalog
   // codebuddy provider definition and the existing provider runtime. Every
   // snapshot() request and every exact-codebuddy readiness probe resolves the
@@ -1642,6 +1653,35 @@ async function createForemanDaemonResources(
       }
       return providerService.quotaSnapshot(params)
     },
+    providerSignIn: async (params) => {
+      const providerId = params.provider
+      const provider = workBuddyProvidersById.get(providerId)
+      if (provider === undefined) throw new Error(`Unknown WorkBuddy provider '${providerId}'`)
+      const build = WORKBUDDY_BUILDS.find((entry) => entry.id === providerId)
+      if (build === undefined) throw new Error(`Unknown WorkBuddy provider '${providerId}'`)
+      const store = { context: defaultProviderContext(), build }
+      const existing = await resolveWorkBuddySession(store, AbortSignal.timeout(15_000))
+      if (existing !== undefined) {
+        return { authUrl: '', alreadySignedIn: true }
+      }
+      const { state, authUrl } = await startWorkBuddyBrowserAuth(store, AbortSignal.timeout(30_000))
+      void (async () => {
+        try {
+          const auth = await pollWorkBuddyBrowserToken(
+            store,
+            state,
+            AbortSignal.timeout(AUTH_POLL_TIMEOUT_MS + 5_000),
+          )
+          if (auth === undefined) return
+          await provider.refreshModels()
+          invalidateProviderReadiness()
+          providerService.invalidateList()
+        } catch {
+          // Browser sign-in polling ended without a credential; never log tokens.
+        }
+      })()
+      return { authUrl, alreadySignedIn: false }
+    },
     taskSettings: workspaceScoped.taskSettingsService,
     execService: runtime.execService,
     operationComponents: runtime.operationComponents,
@@ -2508,6 +2548,7 @@ interface ForemanDaemonRuntime {
   operationAdapter: OperationAdapter
   catalog: import('@wrenyard/providers/catalog').Catalog
   providerRuntime: import('@wrenyard/providers').ProviderRuntime
+  workBuddyProviders: readonly [WorkBuddyProvider, WorkBuddyProvider]
   /** Canonical task dispatch plans keyed by provider/model:client targets. */
   dispatchPlans: Readonly<Record<string, import('@wrenyard/providers/catalog').DispatchPlan>>
   taskDispatchResolver: TaskDispatchResolver
@@ -2559,6 +2600,12 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
   })
   const devin = createDevin()
   try { await devin.refreshModels() } catch { /* Missing auth or discovery must not stop daemon startup. */ }
+  const [workBuddy, workBuddyAi] = createWorkBuddyProviders()
+  for (const provider of [workBuddy, workBuddyAi]) {
+    try {
+      if (await provider.credential()) await provider.refreshModels()
+    } catch { /* Missing auth or discovery must not stop daemon startup. */ }
+  }
   const opencodeZen = createOpenCodeZen()
   try { await opencodeZen.refreshModels() } catch { /* catalog refresh must not stop startup */ }
   // Unregistered live free rows are diagnostics only; registration is owned by
@@ -2567,9 +2614,9 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
   if (unregisteredFreeIds.length > 0) {
     writeDaemonLog('info', `opencode-zen: unregistered free catalog rows kept for diagnostics only: ${unregisteredFreeIds.join(', ')}`)
   }
-  const catalog = createBuiltinCatalog([codeBuddy, devin, opencodeZen])
+  const catalog = createBuiltinCatalog([codeBuddy, devin, workBuddy, workBuddyAi, opencodeZen])
   const providerRuntime = createBuiltinProviderRuntime({
-    providers: [codeBuddy, devin, opencodeZen],
+    providers: [codeBuddy, devin, workBuddy, workBuddyAi, opencodeZen],
     // The ChatGPT subscription gateway credential is read and refreshed through
     // the existing Codex native auth path (honoring the native CODEX_HOME or the
     // user home); the providers package authors no login of its own.
@@ -2644,7 +2691,7 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
     setAgentExecutionSupervisor(supervisor)
     setTaskWorkflowRunner(runner)
 
-    return { db, repoWriteLocks, supervisor, runner, execService, operationComponents, operationAdapter, catalog, providerRuntime, dispatchPlans, taskDispatchResolver }
+    return { db, repoWriteLocks, supervisor, runner, execService, operationComponents, operationAdapter, catalog, providerRuntime, workBuddyProviders: [workBuddy, workBuddyAi], dispatchPlans, taskDispatchResolver }
   } catch (error) {
     releaseDaemonDb()
     throw error

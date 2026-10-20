@@ -18,6 +18,8 @@ export type {
   ProviderQuotaResult,
   ProviderQuotaSnapshot,
   ProviderQuotaWindow,
+  ProviderSignInParams,
+  ProviderSignInResult,
 } from './types.ts'
 
 export type { ProviderMethods } from './methods.ts'
