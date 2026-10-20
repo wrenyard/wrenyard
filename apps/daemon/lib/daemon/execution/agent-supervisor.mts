@@ -2345,7 +2345,7 @@ function detectNativeSession(event: StreamEventRecord): { nativeSessionId: strin
 }
 
 function isClientFamily(value: string | null | undefined): value is ClientFamily {
-  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'cursor' || value === 'grok' || value === 'dsh' || value === 'codebuddy'
+  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'cursor' || value === 'grok' || value === 'dsh' || value === 'codebuddy' || value === 'pi'
 }
 
 function detectResolvedProfile(event: StreamEventRecord): string | undefined {

@@ -23,8 +23,10 @@ import { OpenCodeClient } from '@wrenyard/client-opencode';
 export { OpenCodeClient } from '@wrenyard/client-opencode';
 import { DshClient } from '@wrenyard/client-dsh';
 export { DshClient } from '@wrenyard/client-dsh';
+import { PiClient } from '@wrenyard/client-pi';
+export { PiClient } from '@wrenyard/client-pi';
 export function createAgentClients(): ReadonlyMap<string, AgentClient> {
-    const clients: AgentClient[] = [new CodexClient(), new ClaudeClient(), new CursorClient(), new GrokClient(), new CodeBuddyClient(), new OpenCodeClient(), new DshClient()];
+    const clients: AgentClient[] = [new CodexClient(), new ClaudeClient(), new CursorClient(), new GrokClient(), new CodeBuddyClient(), new OpenCodeClient(), new DshClient(), new PiClient()];
     return new Map(clients.map(client => [client.id, client]));
 }
 export function requireClient(id: string): AgentClient {

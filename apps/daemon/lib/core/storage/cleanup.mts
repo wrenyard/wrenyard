@@ -47,7 +47,7 @@ const MANAGED_LOG_FILES: readonly string[] = [
 ]
 
 /** Client families that own per-run homes under `clients/<family>/runs/<id>`. */
-const RUN_HOME_FAMILIES = ['codebuddy', 'opencode'] as const
+const RUN_HOME_FAMILIES = ['codebuddy', 'opencode', 'pi'] as const
 
 /** Marker written inside an owned per-run client home. */
 const RUN_MARKER_FILE = '.wrenyard-run.json'
@@ -193,7 +193,7 @@ function describeLiveness(liveness: Liveness): string {
 /** `.wrenyard-run.json` as written by the owned run-home lifecycle (version 1). */
 interface RunMarker {
   version: 1
-  client_family: 'opencode' | 'codebuddy'
+  client_family: 'opencode' | 'codebuddy' | 'pi'
   run_id: string
   state: 'active' | 'done' | 'failed'
   created_at: string
@@ -215,7 +215,7 @@ function parseRunMarker(value: unknown): RunMarker | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   const marker = value as Record<string, unknown>
   if (marker.version !== 1) return undefined
-  if (marker.client_family !== 'opencode' && marker.client_family !== 'codebuddy') return undefined
+  if (marker.client_family !== 'opencode' && marker.client_family !== 'codebuddy' && marker.client_family !== 'pi') return undefined
   if (typeof marker.run_id !== 'string' || marker.run_id === '') return undefined
   if (marker.state !== 'active' && marker.state !== 'done' && marker.state !== 'failed') return undefined
   if (typeof marker.created_at !== 'string' || !Number.isFinite(Date.parse(marker.created_at))) return undefined

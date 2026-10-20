@@ -24,6 +24,7 @@ export const BUILTIN_CLIENTS: readonly ClientDefinition[] = [
     supportsNativeWebSearch: true,
   },
   { id: 'opencode', forwardsGatewayReasoningEffort: true, nativeProvider: 'opencode-zen', gatewayProtocols: ['openai_chat', 'anthropic_messages'], taskCapable: true },
+  { id: 'pi', forwardsGatewayReasoningEffort: true, gatewayProtocols: ['openai_chat'] },
 ];
 
 /**
