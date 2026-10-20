@@ -335,23 +335,17 @@ export async function runDispatchAction(
   };
   const view = buildCompile(compileInput);
   // A failed call or unusable output is a system fault, not a decision of
-  // the reasoning model. The compiler is asked again with its own output and
-  // the reason it was rejected, so each attempt corrects the previous one.
+  // the reasoning model. Both share one budget of COMPILE_ATTEMPTS, tried at
+  // once with no backoff: an unusable output is sent back with the reason it
+  // was rejected, and a failed call is retried on a fresh route selection
+  // (the transport already fails over across routes without same-route retry).
   let compiled: Extract<ReturnType<typeof checkCompiled>, { ok: true }> | undefined;
   let compileError = '';
   let attemptView = view;
-  // A call-level failure (timeout, server error) is not a correction the
-  // compiler can learn from, so it is counted separately and bounded on its
-  // own: after a bounded recovery pass there is no point burning the full
-  // attempt budget on repeated wipes. Schema-invalid output still gets the full
-  // COMPILE_ATTEMPTS corrections below.
-  let callFailures = 0;
   for (let attempt = 1; attempt <= COMPILE_ATTEMPTS && compiled === undefined && !ctx.signal.aborted; attempt += 1) {
     const outcome = await runCompileCall(deps, attemptView, ctx);
     if (!outcome.ok) {
       compileError = `compile call failed: ${outcome.error}`;
-      callFailures += 1;
-      if (callFailures >= COMPILE_CALL_FAILURES_MAX) break;
       continue;
     }
     const checked = checkCompiled(outcome.text, ctx, contracts);
@@ -749,9 +743,8 @@ type Waited = Awaited<ReturnType<ActionWorkflowDeps['host']['waitTaskRun']>>;
 /** The host's task contract, derived from the authoritative `SessionHost` type. */
 type TaskContract = Awaited<ReturnType<ActionWorkflowDeps['host']['describeTask']>>;
 
+/** Total compile attempts, failed calls and rejected outputs together. */
 const COMPILE_ATTEMPTS = 3;
-/** At most this many call-level failures (timeout/server error) before giving up. */
-const COMPILE_CALL_FAILURES_MAX = 2;
 
 type CompileContract = ActionTaskInfo & {
   inputSchema: unknown;
