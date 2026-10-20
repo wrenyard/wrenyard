@@ -146,6 +146,52 @@ async function findGrokRunHomeWithSession(env: NodeJS.ProcessEnv, sessionId: str
     return newest?.path;
 }
 
+/**
+ * Preflight the gateway `/models` listing for the requested route. This check
+ * fails open: any fetch, timeout, parse, or non-JSON error means "unknown",
+ * not "rejected". The launch is rejected only when every matching model
+ * entry carries a defined, non-available `route_state`, which tells us the
+ * local gateway circuit would refuse the run before it starts.
+ */
+async function assertGatewayModelAvailable(gateway: string, request: AgentRequest, env: NodeJS.ProcessEnv): Promise<void> {
+    let response: Response;
+    try {
+        const headers: Record<string, string> = {};
+        const token = env.WRENYARD_GATEWAY_TOKEN;
+        if (token)
+            headers['authorization'] = `Bearer ${token}`;
+        if (request.provider)
+            headers['x-wrenyard-provider'] = request.provider;
+        response = await fetch(`${gateway}/models`, {
+            headers,
+            signal: AbortSignal.timeout(5_000),
+        });
+    }
+    catch {
+        return;
+    }
+    let body: unknown;
+    try {
+        body = await response.json();
+    }
+    catch {
+        return;
+    }
+    if (body === null || typeof body !== 'object' || Array.isArray(body))
+        return;
+    const data = (body as Record<string, unknown>).data;
+    if (!Array.isArray(data))
+        return;
+    const target = request.canonicalModel?.trim() ?? request.model;
+    const matching = data.filter((entry): entry is Record<string, unknown> =>
+        entry !== null && typeof entry === 'object' &&
+        (entry as Record<string, unknown>).id === target);
+    if (matching.length === 0)
+        return;
+    if (matching.every((entry) => typeof entry.route_state === 'string' && entry.route_state !== 'available'))
+        throw new Error(`grok: gateway model ${JSON.stringify(target)} is not available (route_state ${JSON.stringify(matching[0]!.route_state)})`);
+}
+
 export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv): Promise<ProcessSpec> {
     assertLaunch(request);
     if (!request.clientReasoningEffort)
@@ -189,6 +235,8 @@ export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv):
     }
     const promptPath = join(home, 'prompt.txt');
     const gateway = env.WRENYARD_GATEWAY_OPENAI_CHAT_URL?.replace(/\/chat\/completions$/u, '');
+    if (request.mode === 'gateway' && gateway)
+        await assertGatewayModelAvailable(gateway, request, env);
     const modelId = request.mode === 'gateway' && request.provider
         ? `wrenyard-${request.provider}--${request.model.replace(/[^A-Za-z0-9_]/gu, '-')}`
         : request.model;
