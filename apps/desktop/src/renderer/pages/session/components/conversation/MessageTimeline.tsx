@@ -91,18 +91,15 @@ function parseStamp(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-/** The public id of the call that produced a reply, else the turn's model. */
-function replyModelId(reply: ReplyModel, turn: TurnModel): string | undefined {
-  const producer = turn.calls
-    .filter((call) => call.role === 'reply'
-      && (reply.cycle === undefined || call.cycle === reply.cycle)
-      && call.endedAt !== undefined
-      && parseStamp(call.endedAt) <= parseStamp(reply.at))
-    .at(-1);
-  if (producer !== undefined && producer.model !== '') return producer.model;
+/** The public id of the turn's reasoning model: the configured model, else the latest finished reason call's serving model. */
+function reasoningModelId(turn: TurnModel): string | undefined {
   const { provider, model } = turn.model;
-  if (provider === '') return model === '' ? undefined : model;
-  return `${provider}/${model}`;
+  if (provider !== '') return `${provider}/${model}`;
+  if (model !== '') return model;
+  const serving = turn.calls
+    .filter((call) => call.role === 'reason' && call.endedAt !== undefined && call.model !== '')
+    .at(-1);
+  return serving?.model;
 }
 
 /** Catalog display name of a public model id, else its bare model id. */
@@ -236,7 +233,7 @@ function EntryContent({ entry, sessionId, models, attachmentFiles, botNames, ent
         <AssistantMessage
           turn={entry.turn}
           reply={entry.reply}
-          model={modelDisplayName(replyModelId(entry.reply, entry.turn), models)}
+          model={modelDisplayName(reasoningModelId(entry.turn), models)}
           attachmentFiles={attachmentFiles}
           enter={enter}
           onReply={() => onReply(excerpt(entry.reply.text))}
