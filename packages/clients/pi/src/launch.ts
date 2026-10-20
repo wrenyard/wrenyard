@@ -28,7 +28,8 @@ function piModelsConfig(request: AgentRequest, baseUrl: string): string {
             wrenyard: {
                 baseUrl,
                 api: 'openai-completions',
-                apiKey: '${WRENYARD_GATEWAY_TOKEN}',
+                // Pi resolves a bare name as an environment variable; ${...} would be sent literally.
+                apiKey: GATEWAY_TOKEN_ENV,
                 authHeader: true,
                 headers: {
                     'x-wrenyard-provider': request.provider,
