@@ -129,6 +129,7 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
     if (variant)
         args.push('--variant', variant);
     args.push('-m', selector, '--title', 'Wrenyard task', '--format', 'json', '--pure');
+    args.push('--dir', request.cwd);
     return {
         executable: status.installation.executable,
         args,
