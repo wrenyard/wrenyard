@@ -838,7 +838,7 @@ const taskSettingsAutomaticSelectionSchema = {
 
 const taskSettingsTaskRowSchema = {
   type: 'object',
-  required: ['identity', 'name', 'display_name', 'builtin', 'user_task', 'effective', 'issues'],
+  required: ['identity', 'name', 'display_name', 'user_task', 'effective', 'issues'],
   properties: {
     identity: { type: 'string', minLength: 1 },
     name: { type: 'string', minLength: 1 },
