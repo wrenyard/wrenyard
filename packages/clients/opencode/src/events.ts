@@ -1,6 +1,6 @@
 import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
-    finishedEvent, fnv1a64Hex, jsonStringValue, messageEvent, readNativeRecords, recordOf, sessionIdOf, stringOf, toolCallRecord, toolResultRecord,
+    finishedEvent, fnv1a64Hex, jsonStringValue, messageEvent, readNativeRecords, recordOf, runFinishedRecord, sessionIdOf, stringOf, toolCallRecord, toolResultRecord,
     turnUsageRecord,
 } from '@wrenyard/agent-client/native';
 import { addUsageTokens, nonnegativeInt } from '@wrenyard/agent-client/statistics';
@@ -18,6 +18,14 @@ import { addUsageTokens, nonnegativeInt } from '@wrenyard/agent-client/statistic
  * identically, with a stable call_id from the native part id or a
  * deterministic content-derived fallback.
  */
+interface WrenyardRetryPayload {
+    sessionID?: string;
+    attempt?: number;
+    message?: string;
+    reason?: string;
+    next?: string;
+}
+
 export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent> {
     let sessionId: string | undefined;
     let output = '';
@@ -27,6 +35,8 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
     // can never turn a failed run into a success.
     let sawError = false;
     let completedStep = false;
+    let emittedTerminal = false;
+    let retryStderrBuffer = '';
     const usage = {
         input: 0, output: 0, reasoning: 0, total: 0,
         seen: false, inputIncomplete: false, outputIncomplete: false,
@@ -63,11 +73,30 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
     };
     for await (const item of readNativeRecords(events)) {
         if (item.kind === 'event') {
+            if (item.event.type === 'stderr') {
+                const retry = consumeWrenyardRetryStderr(retryStderrBuffer, item.event.text);
+                retryStderrBuffer = retry.buffer;
+                if (retry.payload && !emittedTerminal) {
+                    emittedTerminal = true;
+                    sawError = true;
+                    const payload = retry.payload;
+                    if (payload.sessionID)
+                        sessionId = payload.sessionID;
+                    yield {
+                        type: 'output',
+                        record: runFinishedRecord('opencode', 'failed', sessionId, {
+                            is_error: true,
+                            error: openCodeRetryUpstreamError(payload),
+                        }),
+                    };
+                }
+            }
             if (item.event.type === 'exit') {
                 const terminal = flushUsage();
                 if (terminal)
                     yield terminal;
-                yield finishedEvent('opencode', sessionId, output, sawError || !completedStep || item.event.exitCode !== 0 || item.event.signal !== null);
+                if (!emittedTerminal)
+                    yield finishedEvent('opencode', sessionId, output, sawError || !completedStep || item.event.exitCode !== 0 || item.event.signal !== null);
             }
             yield item.event;
             continue;
@@ -230,6 +259,62 @@ function partOutput(part: Record<string, unknown>, state: Record<string, unknown
         }
     }
     return '';
+}
+
+function consumeWrenyardRetryStderr(buffer: string, chunk: string): { buffer: string; payload?: WrenyardRetryPayload } {
+    const text = buffer + chunk;
+    let newline = text.indexOf('\n');
+    if (newline === -1)
+        return { buffer: text };
+    let payload: WrenyardRetryPayload | undefined;
+    let rest = text;
+    while (newline !== -1) {
+        const line = rest.slice(0, newline).trim();
+        rest = rest.slice(newline + 1);
+        const parsed = parseWrenyardRetryLine(line);
+        if (parsed)
+            payload = parsed;
+        newline = rest.indexOf('\n');
+    }
+    return { buffer: rest, payload };
+}
+
+function parseWrenyardRetryLine(line: string): WrenyardRetryPayload | undefined {
+    if (!line)
+        return undefined;
+    try {
+        const value: unknown = JSON.parse(line);
+        if (!value || typeof value !== 'object' || Array.isArray(value))
+            return undefined;
+        const retry = recordOf(value as Record<string, unknown>, 'wrenyard_retry');
+        if (!retry)
+            return undefined;
+        const sessionID = stringOf(retry, 'sessionID');
+        const message = stringOf(retry, 'message');
+        const reason = stringOf(retry, 'reason');
+        const next = stringOf(retry, 'next');
+        const attempt = retry.attempt;
+        return {
+            ...(sessionID ? { sessionID } : {}),
+            ...(typeof attempt === 'number' && Number.isFinite(attempt) ? { attempt } : {}),
+            ...(message ? { message } : {}),
+            ...(reason ? { reason } : {}),
+            ...(next ? { next } : {}),
+        };
+    }
+    catch { /* non-json stderr */ }
+    return undefined;
+}
+
+function openCodeRetryUpstreamError(payload: WrenyardRetryPayload): Record<string, unknown> {
+    const message = payload.message?.trim() || 'OpenCode refused to continue after an upstream rate limit';
+    const type = payload.reason?.trim();
+    const resetsAt = payload.next?.trim();
+    return {
+        message,
+        ...(type ? { type } : {}),
+        ...(resetsAt ? { resets_at: resetsAt } : {}),
+    };
 }
 
 /** Reads one `step_finish`-style text part. */

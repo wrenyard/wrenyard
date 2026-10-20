@@ -1,10 +1,29 @@
 import { randomBytes } from 'node:crypto';
-import { rm } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findExecutable, type AgentRequest } from '@wrenyard/agent-client';
 import { resolveMcpServers, type ResolvedMcpServer } from '@wrenyard/agent-client/mcp';
 import { assertLaunch, clientStateDirForEnv, createOwnedClientRunHome, stringEnv } from '@wrenyard/agent-client/native';
 import type { ProcessSpec } from '@wrenyard/execution';
+
+const RETRY_GUARD_PLUGIN_SOURCE = `export const WrenyardRetryGuard = async ({ client }) => ({
+    event: async ({ event }) => {
+        if (event.type !== 'session.status' || event.properties?.status?.type !== 'retry')
+            return;
+        const s = event.properties.status;
+        process.stderr.write(JSON.stringify({
+            wrenyard_retry: {
+                sessionID: event.properties.sessionID,
+                attempt: s.attempt,
+                message: s.message,
+                reason: s.action?.reason,
+                next: s.next,
+            },
+        }) + '\\n');
+        await client.session.abort({ path: { id: event.properties.sessionID } });
+    },
+});
+`;
 
 /**
  * Render the OpenCode `mcp` config block. A stdio server is a `local` entry
@@ -123,12 +142,16 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
     }
     const mcp = openCodeMcpConfig(resolveMcpServers(request.mcpServers));
     const config = JSON.stringify(mcp ? { ...base, mcp } : base);
+    const configDir = join(sharedConfigHome, 'opencode');
+    const pluginDir = join(configDir, 'plugins');
+    const pluginPath = join(pluginDir, 'wrenyard-retry-guard.mjs');
+    await mkdir(pluginDir, { recursive: true, mode: 0o700 });
     const args = ['run'];
     if (request.resumeSessionId)
         args.push('--session', request.resumeSessionId);
     if (variant)
         args.push('--variant', variant);
-    args.push('-m', selector, '--title', 'Wrenyard task', '--format', 'json', '--pure');
+    args.push('-m', selector, '--title', 'Wrenyard task', '--format', 'json');
     args.push('--dir', request.cwd);
     return {
         executable: status.installation.executable,
@@ -154,7 +177,10 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
             OPENCODE_CONFIG: configPath,
             OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
         }),
-        files: [{ path: configPath, data: config + '\n', cleanup: 'completion' }],
+        files: [
+            { path: configPath, data: config + '\n', cleanup: 'completion' },
+            { path: pluginPath, data: RETRY_GUARD_PLUGIN_SOURCE },
+        ],
         ownedRunHome: ownedHome,
     };
     } catch (error) {
