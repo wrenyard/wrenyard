@@ -108,8 +108,6 @@ export interface AgentFailedErrorUpstream {
   status?: number
   errorType?: string
   message?: string
-  /** An explicitly stated reset instant, as an ISO timestamp. */
-  resetsAt?: string
 }
 
 function firstLineOf(text: string | null | undefined): string | undefined {
@@ -138,9 +136,6 @@ export function taskVisibleFailureClassToken(
   failureClass: AgentFailureClass | string | null | undefined,
   upstream?: AgentFailedErrorUpstream | null,
 ): GatewayFailureClass | undefined {
-  // A 429 that states its reset is an allowance exhausted until then, the
-  // same reading the provider classifier gives the route.
-  if (upstream?.status === 429 && upstream.resetsAt !== undefined) return 'quota_exhausted'
   if (upstream?.status !== undefined) {
     const fromStatus = genericFailureClassFromStatus(upstream.status)
     if (fromStatus !== undefined) return fromStatus
