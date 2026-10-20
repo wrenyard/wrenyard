@@ -349,7 +349,11 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
       const usage = taskService.status(taskRunId)?.usage
       return {
         status: result.status as string,
-        output: outputText(result.output) || outputText(result.error),
+        // A run that did not finish done leads with its error, so the session
+        // always sees the failure cause beside any output the run produced.
+        output: result.status === 'done'
+          ? outputText(result.output) || outputText(result.error)
+          : [outputText(result.error), outputText(result.output)].filter(text => text !== '').join('\n\n'),
         ...(usage !== null && typeof usage === 'object' ? { usage: usage as Record<string, unknown> } : {}),
         ...(artifacts.length === 0 ? {} : { artifacts }),
         ...(artifactErrors.length === 0 ? {} : { artifactErrors }),

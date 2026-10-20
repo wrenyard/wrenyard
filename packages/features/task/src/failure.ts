@@ -283,9 +283,13 @@ export function agentFailedError(
   const category = mapAgentFailureClass(failureClass) ?? 'agent_failed'
   const classToken = taskVisibleFailureClassToken(failureClass, upstreamError)
   const reason = upstreamFailureReasonFirstLine(upstreamError, detail)
-  const message = classToken !== undefined && reason !== undefined
-    ? `Agent execution failed (${classToken}): ${reason}`
-    : `Agent execution failed: ${executionId}`
+  // The cause always reaches the caller: the classified type with the
+  // upstream's own message, else the execution's own error line, else its id.
+  const message = reason === undefined
+    ? `Agent execution failed: ${executionId}`
+    : classToken === undefined
+      ? `Agent execution failed: ${reason}`
+      : `Agent execution failed (${classToken}): ${reason}`
 
   return Object.assign(
     new Error(message),
