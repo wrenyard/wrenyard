@@ -46,6 +46,7 @@ import type {
   TaskGraphWaitResult,
   TaskGraphSlipResult,
   GatewayConnectionResult,
+  GatewayHealthResult,
   GatewaySettingsResult,
   GatewaySettingsSaveParams,
   GatewaySettingsSaveResult,
@@ -171,6 +172,8 @@ export interface CoreRpcHandlerOptions {
    * the config: it never rebinds, restarts or rotates the running gateway.
    */
   gatewaySettingsSave?: (params: GatewaySettingsSaveParams) => Promise<GatewaySettingsSaveResult>
+  /** IPC-only passive gateway health snapshot from recent request traffic. */
+  gatewayHealth?: () => Promise<GatewayHealthResult>
   /** Daemon-owned TaskSettingsService backing task.settings.snapshot/save. */
   taskSettings?: TaskSettingsService
   /**
@@ -280,6 +283,18 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         )
       }
       return options.gatewaySettings!()
+    })
+  }
+  if (options.gatewayHealth) {
+    router.register('gateway.health', async (_params, _message, context) => {
+      const rpcContext = coreRpcContextFromUnknown(context)
+      if (rpcContext.transport !== 'ipc') {
+        throw new ProtocolError(
+          { code: INVALID_PARAMS.code, message: 'gateway.health is only available over IPC' },
+          { code: 'gateway_health_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+        )
+      }
+      return options.gatewayHealth!()
     })
   }
   if (options.gatewaySettingsSave) {

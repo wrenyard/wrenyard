@@ -122,3 +122,51 @@ export interface GatewayConnectionParams {}
 
 /** Params of `gateway.settings` (empty object). */
 export interface GatewaySettingsParams {}
+
+/** Per-route block state returned with gateway health snapshots. */
+export type GatewayRouteState =
+  | 'rate_limited'
+  | 'quota_exhausted'
+  | 'auth_failed'
+  | 'access_denied'
+  | 'model_unavailable'
+
+/** Current route-state block for one route, when the gateway reports one. */
+export interface GatewayRouteStatus {
+  state: GatewayRouteState
+  until: string
+  phase?: 'closed' | 'open'
+  resets?: boolean
+  faultKind?: string
+}
+
+/** Aggregated request figures for one health time window. */
+export interface GatewayHealthWindow {
+  requests: number
+  successes: number
+  failures: Record<string, number>
+  cancelled: number
+  callerErrors: number
+  admissionRefusals: number
+  medianFirstResponseMs?: number
+  medianTps?: number
+  lastSuccessAt?: string
+  lastFailure?: { at: string; class: string; reason: string }
+}
+
+export interface GatewayHealthRoute {
+  provider: string
+  model: string
+  last1h: GatewayHealthWindow
+  last24h: GatewayHealthWindow
+  routeState?: GatewayRouteStatus
+}
+
+/** Params of `gateway.health` (empty object). */
+export interface GatewayHealthParams {}
+
+/** Passive per-route gateway health snapshot. */
+export interface GatewayHealthResult {
+  generatedAt: string
+  routes: GatewayHealthRoute[]
+}

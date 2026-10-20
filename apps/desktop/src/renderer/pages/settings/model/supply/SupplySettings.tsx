@@ -4,6 +4,7 @@ import { cn } from 'cn';
 import type { ProviderCatalogSnapshot, QuotaSnapshot } from '@/shell-contract';
 import { ProviderSupply } from '../../supply/components/ProviderSupply.js';
 import { ProviderUsage } from '../../supply/components/ProviderUsage.js';
+import { GatewayHealth } from '../../supply/components/GatewayHealth.js';
 import { RoutingTest } from '../../supply/components/RoutingTest.js';
 import { RoutingExclusionsSettings } from '../../components/RoutingExclusionsSettings.js';
 import { TaskRunTimeLimitSettings } from '../../components/TaskRunTimeLimitSettings.js';
@@ -25,6 +26,7 @@ export interface SupplySettingsProps {
   onReorder: (providerIds: string[]) => void;
   onConfigure: (entry: ProviderCatalogSnapshot) => void;
   routingActive: boolean;
+  gatewayActive: boolean;
   usageSettings: readonly SettingDefinition[];
   gatewaySettings: readonly SettingDefinition[];
   routingSettings: readonly SettingDefinition[];
@@ -46,6 +48,7 @@ export function SupplySettings({
   onReorder,
   onConfigure,
   routingActive,
+  gatewayActive,
   usageSettings,
   gatewaySettings,
   routingSettings,
@@ -118,6 +121,7 @@ export function SupplySettings({
             </div>
           </section>
         )}
+        <GatewayHealth active={gatewayActive && tab === 'gateway'} />
       </TabsContent>
 
       <TabsContent value="routing" className="flex flex-col gap-6">

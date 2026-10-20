@@ -4,6 +4,8 @@ import type { JsonSchema } from '../jsonrpc.mts'
 export type {
   GatewayConnectionParams,
   GatewayConnection as GatewayConnectionResult,
+  GatewayHealthParams,
+  GatewayHealthResult,
   GatewayPortMode,
   GatewayEffectiveConnection,
   GatewaySettingsParams,
@@ -147,5 +149,75 @@ export const gatewaySettingsSaveResultSchema = {
     tokenChangePending: { type: 'boolean' },
     effective: gatewayEffectiveConnectionSchema,
     warning: { type: 'string', minLength: 1 },
+  },
+} as const satisfies JsonSchema
+
+const gatewayHealthLastFailureSchema = {
+  type: 'object',
+  required: ['at', 'class', 'reason'],
+  additionalProperties: false,
+  properties: {
+    at: { type: 'string', minLength: 1 },
+    class: { type: 'string', minLength: 1 },
+    reason: { type: 'string' },
+  },
+} as const satisfies JsonSchema
+
+const gatewayHealthWindowSchema = {
+  type: 'object',
+  required: ['requests', 'successes', 'failures', 'cancelled', 'callerErrors', 'admissionRefusals'],
+  additionalProperties: false,
+  properties: {
+    requests: { type: 'integer', minimum: 0 },
+    successes: { type: 'integer', minimum: 0 },
+    failures: { type: 'object', additionalProperties: { type: 'integer', minimum: 0 } },
+    cancelled: { type: 'integer', minimum: 0 },
+    callerErrors: { type: 'integer', minimum: 0 },
+    admissionRefusals: { type: 'integer', minimum: 0 },
+    medianFirstResponseMs: { type: 'number', exclusiveMinimum: 0 },
+    medianTps: { type: 'number', exclusiveMinimum: 0 },
+    lastSuccessAt: { type: 'string', minLength: 1 },
+    lastFailure: gatewayHealthLastFailureSchema,
+  },
+} as const satisfies JsonSchema
+
+const gatewayRouteStatusSchema = {
+  type: 'object',
+  required: ['state', 'until'],
+  additionalProperties: false,
+  properties: {
+    state: { enum: ['rate_limited', 'quota_exhausted', 'auth_failed', 'access_denied', 'model_unavailable'] },
+    until: { type: 'string', minLength: 1 },
+    phase: { enum: ['closed', 'open'] },
+    resets: { type: 'boolean' },
+    faultKind: { type: 'string' },
+  },
+} as const satisfies JsonSchema
+
+export const gatewayHealthParamsSchema = {
+  type: 'object', properties: {}, additionalProperties: false,
+} as const satisfies JsonSchema
+
+export const gatewayHealthResultSchema = {
+  type: 'object',
+  required: ['generatedAt', 'routes'],
+  additionalProperties: false,
+  properties: {
+    generatedAt: { type: 'string', minLength: 1 },
+    routes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['provider', 'model', 'last1h', 'last24h'],
+        additionalProperties: false,
+        properties: {
+          provider: { type: 'string', minLength: 1 },
+          model: { type: 'string', minLength: 1 },
+          last1h: gatewayHealthWindowSchema,
+          last24h: gatewayHealthWindowSchema,
+          routeState: gatewayRouteStatusSchema,
+        },
+      },
+    },
   },
 } as const satisfies JsonSchema

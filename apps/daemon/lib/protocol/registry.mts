@@ -163,12 +163,16 @@ import {
   gatewaySettingsResultSchema,
   gatewaySettingsSaveParamsSchema,
   gatewaySettingsSaveResultSchema,
+  gatewayHealthParamsSchema,
+  gatewayHealthResultSchema,
   type GatewayConnectionParams,
   type GatewayConnectionResult,
   type GatewaySettingsParams,
   type GatewaySettingsResult,
   type GatewaySettingsSaveParams,
   type GatewaySettingsSaveResult,
+  type GatewayHealthParams,
+  type GatewayHealthResult,
 } from './methods/gateway.mts'
 export type {
   GatewayConnectionParams,
@@ -177,6 +181,8 @@ export type {
   GatewaySettingsResult,
   GatewaySettingsSaveParams,
   GatewaySettingsSaveResult,
+  GatewayHealthParams,
+  GatewayHealthResult,
 } from './methods/gateway.mts'
 import {
   providerConfigureParamsSchema,
@@ -839,6 +845,7 @@ export interface ForemanMethodParams {
   'gateway.connection': GatewayConnectionParams
   'gateway.settings': GatewaySettingsParams
   'gateway.settings.save': GatewaySettingsSaveParams
+  'gateway.health': GatewayHealthParams
   'provider.list': ProviderListParams
   'provider.configure': ProviderConfigureParams
   'provider.quota': ProviderQuotaParams
@@ -952,6 +959,7 @@ export interface ForemanMethodResults {
   'gateway.connection': GatewayConnectionResult
   'gateway.settings': GatewaySettingsResult
   'gateway.settings.save': GatewaySettingsSaveResult
+  'gateway.health': GatewayHealthResult
   'provider.list': ProviderListResult
   'provider.configure': ProviderConfigureResult
   'provider.quota': ProviderQuotaResult
@@ -1093,6 +1101,11 @@ export const methodRegistry: {
     params: gatewaySettingsSaveParamsSchema,
     result: gatewaySettingsSaveResultSchema,
     description: 'Validate and persist a gateway port/token change. Never rebinds, restarts or rotates the running gateway; the saved change takes effect at the next bind. IPC-only.',
+  },
+  'gateway.health': {
+    params: gatewayHealthParamsSchema,
+    result: gatewayHealthResultSchema,
+    description: 'Read passive per-route gateway health statistics from recent traffic. IPC-only; observational and never changes route state or admission.',
   },
   'provider.list': {
     params: providerListParamsSchema,

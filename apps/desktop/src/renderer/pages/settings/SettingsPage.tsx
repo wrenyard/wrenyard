@@ -467,6 +467,7 @@ export function SettingsPage({
           onReorder={handleReorder}
           onConfigure={setDialogEntry}
           routingActive={!searchActive && activeCategory === 'supply'}
+          gatewayActive={!searchActive && activeCategory === 'supply'}
           usageSettings={usageSettings}
           gatewaySettings={gatewaySettings}
           routingSettings={routingSettings}

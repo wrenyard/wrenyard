@@ -1,6 +1,7 @@
 import type { ProviderListResult, ProviderQuotaResult, ProviderSignInParams, ProviderSignInResult } from '@wrenyard/protocol/provider';
 import type {
   GatewayConnection as WrenyardGatewayConnection,
+  GatewayHealthResult as WrenyardGatewayHealthResult,
   GatewaySettings as WrenyardGatewaySettings,
   GatewaySettingsSaveInput as WrenyardGatewaySettingsSaveInput,
   GatewaySettingsSaveResult as WrenyardGatewaySettingsSaveResult,
@@ -52,6 +53,7 @@ export interface WrenyardIpcRequestOptions {
 
 export type {
   GatewayConnection as WrenyardGatewayConnection,
+  GatewayHealthResult as WrenyardGatewayHealthResult,
   GatewayEffectiveConnection as WrenyardGatewayEffectiveConnection,
   GatewayModel as WrenyardGatewayModel,
   GatewayModelPricing as WrenyardGatewayModelPricing,
@@ -200,6 +202,11 @@ export class WrenyardIpcClient {
    */
   gatewaySettings(options?: WrenyardIpcRequestOptions): Promise<WrenyardGatewaySettings> {
     return this.request<WrenyardGatewaySettings>('gateway.settings', {}, options);
+  }
+
+  /** Read passive per-route gateway health from recent traffic. IPC-only. */
+  gatewayHealth(options?: WrenyardIpcRequestOptions): Promise<WrenyardGatewayHealthResult> {
+    return this.request<WrenyardGatewayHealthResult>('gateway.health', {}, options);
   }
 
   /**

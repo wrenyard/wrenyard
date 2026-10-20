@@ -18,6 +18,9 @@ export { quotaQuery, useQuotaQuery, useQuotaRefresh } from '@/renderer/lib/queri
 /** Raw task definitions change rarely; once imported they stay fresh for the session. */
 const ROUTING_TASKS_STALE_MS = 5 * 60_000;
 
+/** Gateway health is passive traffic stats; refresh briefly while the tab is open. */
+const GATEWAY_HEALTH_STALE_MS = 30_000;
+
 /** Persist one complete provider order; the daemon returns the reordered snapshot. */
 export function useSaveProviderOrder() {
   const client = useQueryClient();
@@ -76,6 +79,16 @@ export const routingTestTasksQuery = queryOptions({
 
 export function useRoutingTestTasksQuery(enabled: boolean) {
   return useQuery({ ...routingTestTasksQuery, enabled });
+}
+
+export const gatewayHealthQuery = queryOptions({
+  queryKey: ['gateway', 'health'] as const,
+  queryFn: () => shell.getGatewayHealth(),
+  staleTime: GATEWAY_HEALTH_STALE_MS,
+});
+
+export function useGatewayHealthQuery(enabled: boolean) {
+  return useQuery({ ...gatewayHealthQuery, enabled });
 }
 
 /** One routing-test run. Invoked only from an explicit user click. */

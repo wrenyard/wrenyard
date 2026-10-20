@@ -2,6 +2,8 @@ import type { RpcMethod } from '../common/methods.ts'
 import type {
   GatewayConnection,
   GatewayConnectionParams,
+  GatewayHealthParams,
+  GatewayHealthResult,
   GatewaySettings,
   GatewaySettingsParams,
   GatewaySettingsSaveInput,
@@ -12,4 +14,5 @@ export interface GatewayMethods {
   'gateway.connection': RpcMethod<GatewayConnectionParams, GatewayConnection>
   'gateway.settings': RpcMethod<GatewaySettingsParams, GatewaySettings>
   'gateway.settings.save': RpcMethod<GatewaySettingsSaveInput, GatewaySettingsSaveResult>
+  'gateway.health': RpcMethod<GatewayHealthParams, GatewayHealthResult>
 }

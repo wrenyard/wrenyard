@@ -17,6 +17,7 @@ import {
   type DaemonLifecycleSnapshot,
   type ShellPage,
   type WrenyardShellApi,
+  type WrenyardGatewayHealthResult,
   type WrenyardGatewaySettings,
   type WrenyardGatewaySettingsSaveInput,
   type WrenyardGatewaySettingsSaveResult,
@@ -155,6 +156,9 @@ const api: WrenyardShellApi = {
   },
   saveGatewaySettings(input: WrenyardGatewaySettingsSaveInput): Promise<WrenyardGatewaySettingsSaveResult> {
     return ipcRenderer.invoke(SHELL_CHANNELS.gatewaySettingsSave, input) as Promise<WrenyardGatewaySettingsSaveResult>;
+  },
+  getGatewayHealth(): Promise<WrenyardGatewayHealthResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.gatewayHealth) as Promise<WrenyardGatewayHealthResult>;
   },
   getStats(): Promise<StatsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.statsSnapshot) as Promise<StatsSnapshot>;

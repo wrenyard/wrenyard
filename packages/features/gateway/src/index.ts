@@ -7,11 +7,40 @@ import { responsesProtocol } from './protocols/responses.ts';
 import { messagesProtocol } from './protocols/messages.ts';
 import type { GatewayProtocolModule } from './protocols/types.ts';
 import { createGatewayPipeline, type GatewayRequestCompletedEvent, type GatewayRoute } from './pipeline.ts';
+import type { UpstreamErrorFact } from './errors.ts';
+import type { ResponseTpsContract, ResponseTpsSample } from './response-tps.ts';
+import {
+  classifyGatewayOutcome,
+  createGatewayHealthStore,
+  type GatewayHealthOutcome,
+  type GatewayHealthRouteSnapshot,
+  type GatewayHealthWindowFigures,
+} from './health.ts';
 
 export type { RouteStateChangedEvent, RouteStatus, CircuitPhase, ClientFaultKind, MarkableFailure, Admission, RouteGuard } from './route-state.ts';
 export type { RouteFaultKind } from './route-failure.ts';
 export { classifyRouteFailure } from './route-failure.ts';
 export type { GatewayRequestCompletedEvent } from './pipeline.ts';
+export type { GatewayHealthOutcome, GatewayHealthRouteSnapshot, GatewayHealthWindowFigures } from './health.ts';
+export { classifyGatewayOutcome } from './health.ts';
+
+export interface GatewayHealthSnapshot {
+  generatedAt: string;
+  routes: Array<GatewayHealthRouteSnapshot & { routeState?: RouteStatus }>;
+}
+
+export interface GatewayHealthCompletionInput {
+  provider: string;
+  publicModel: string;
+  status: number;
+  outcome?: GatewayHealthOutcome;
+  failureClass?: string;
+  faultReason?: string;
+  faultCause?: GatewayRequestCompletedEvent['faultCause'];
+  upstream?: UpstreamErrorFact;
+  tps_samples?: ResponseTpsContract['tps_samples'];
+  timestamp: number;
+}
 
 export interface GatewayConnection {
   openaiChatBaseUrl: string;
@@ -65,6 +94,10 @@ export interface ModelGateway {
    * upstream-stated reset instant.
    */
   reportNativeRouteFault(provider: string, model: string, failure: MarkableFailure, guard?: RouteGuard): void;
+  /** Passive per-route health figures from recent completions; does not affect routing. */
+  health(): GatewayHealthSnapshot;
+  /** Replay one persisted completion into the passive health store (daemon backfill). */
+  ingestHealthCompletion(input: GatewayHealthCompletionInput): void;
   close(): Promise<void>;
 }
 
@@ -106,6 +139,59 @@ function routeModel(model: string): string {
  * rather than silently selecting the first declaration. The route key stays the
  * internal identity for health, quota and statistics.
  */
+function healthMetricsFromSamples(
+  samples?: ResponseTpsContract['tps_samples'],
+): { firstResponseMs?: number; tps?: number } {
+  if (samples === undefined || samples.length === 0) return {};
+  const sample = samples[0]!;
+  if ('generation_windows' in sample && sample.generation_windows.length > 0) {
+    const window = sample.generation_windows[0]!;
+    const firstResponseMs = sample.request_started_at_ms === undefined
+      ? undefined
+      : window.first_token_at_ms - sample.request_started_at_ms;
+    const span = window.completed_at_ms - window.first_token_at_ms;
+    const tps = span > 0 ? (1000 * sample.output_tokens) / span : undefined;
+    return {
+      ...(firstResponseMs !== undefined && Number.isFinite(firstResponseMs) && firstResponseMs >= 0 ? { firstResponseMs } : {}),
+      ...(tps !== undefined && Number.isFinite(tps) ? { tps } : {}),
+    };
+  }
+  const scalar = sample as ResponseTpsSample;
+  const firstResponseMs = scalar.request_started_at_ms === undefined
+    ? undefined
+    : scalar.first_token_at_ms - scalar.request_started_at_ms;
+  const span = scalar.completed_at_ms - scalar.first_token_at_ms;
+  const tps = span > 0 ? (1000 * scalar.output_tokens) / span : undefined;
+  return {
+    ...(firstResponseMs !== undefined && Number.isFinite(firstResponseMs) && firstResponseMs >= 0 ? { firstResponseMs } : {}),
+    ...(tps !== undefined && Number.isFinite(tps) ? { tps } : {}),
+  };
+}
+
+function healthFailureReason(input: {
+  faultReason?: string;
+  faultCause?: GatewayRequestCompletedEvent['faultCause'];
+  upstream?: UpstreamErrorFact;
+}): string | undefined {
+  if (input.upstream !== undefined) {
+    const code = input.upstream.code ?? input.upstream.type;
+    if (code !== undefined) return `${input.upstream.status} ${code}`;
+    return String(input.upstream.status);
+  }
+  if (input.faultCause?.message !== undefined && input.faultCause.message !== '') return input.faultCause.message;
+  return input.faultReason;
+}
+
+function resolveHealthRoute(
+  catalog: Catalog,
+  provider: string,
+  publicModel: string,
+): { provider: string; model: string } {
+  const identity = publicModel.includes('/') ? publicModel : `${provider}/${publicModel}`;
+  const split = gatewayRouteKey(catalog, identity);
+  return split ?? { provider, model: routeModel(publicModel) };
+}
+
 export function gatewayRouteKey(
   catalog: Catalog,
   identity: string,
@@ -128,7 +214,9 @@ export function gatewayRouteKey(
 export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
   const active = new Set<AbortController>();
   let closed = false;
-  const routeStates = new RouteStateStore(options.now ?? Date.now,
+  const nowFn = options.now ?? Date.now;
+  const healthStore = createGatewayHealthStore(nowFn);
+  const routeStates = new RouteStateStore(nowFn,
     options.providers.quotaPools ?? (() => []),
     event => { void Promise.resolve().then(() => options.onRouteStateChanged?.(event)).catch(() => undefined); });
 
@@ -200,15 +288,40 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       });
   };
 
+  const recordHealthFromCompletion = (event: GatewayRequestCompletedEvent, timestamp: number): void => {
+    if (event.provider === undefined || event.publicModel === undefined) return;
+    const route = resolveHealthRoute(options.catalog, event.provider, event.publicModel);
+    const classified = event.outcome !== undefined
+      ? { outcome: event.outcome, failureClass: event.failureClass }
+      : classifyGatewayOutcome({
+        status: event.status,
+        faultReason: event.faultReason,
+        hasUpstreamError: event.upstream !== undefined,
+        admissionRefusal: event.status === 503 && event.upstream === undefined,
+        cancelled: event.status === 499,
+      });
+    const metrics = healthMetricsFromSamples(event.tps_samples);
+    healthStore.record({
+      provider: route.provider,
+      publicModel: `${route.provider}/${route.model}`,
+      timestamp,
+      outcome: classified.outcome,
+      failureClass: classified.failureClass,
+      failureReason: healthFailureReason(event),
+      ...metrics,
+    });
+  };
+
   const emit = async (event: GatewayRequestCompletedEvent): Promise<void> => {
     try { await options.onRequestCompleted?.(event); } catch { /* stats must not fail inference */ }
+    try { recordHealthFromCompletion(event, nowFn()); } catch { /* passive health must not fail inference */ }
   };
 
   const pipeline = createGatewayPipeline({
     catalog: options.catalog,
     providers: options.providers,
     fetch: options.fetch ?? globalThis.fetch,
-    now: options.now ?? Date.now,
+    now: nowFn,
     routes: ROUTES,
     routeStates,
     active,
@@ -236,6 +349,37 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
         anthropicBaseUrl: `${root}/gateway/anthropic/v1`,
         models: await availableModels(),
       };
+    },
+
+    health() {
+      const generatedAt = new Date(nowFn()).toISOString();
+      const routes = healthStore.snapshot(nowFn()).map((route) => ({
+        ...route,
+        routeState: routeStates.status(route.provider, route.model),
+      }));
+      return { generatedAt, routes };
+    },
+
+    ingestHealthCompletion(input: GatewayHealthCompletionInput) {
+      const route = resolveHealthRoute(options.catalog, input.provider, input.publicModel);
+      const classified = input.outcome !== undefined
+        ? { outcome: input.outcome, failureClass: input.failureClass }
+        : classifyGatewayOutcome({
+          status: input.status,
+          faultReason: input.faultReason,
+          hasUpstreamError: input.upstream !== undefined,
+          admissionRefusal: input.status === 503 && input.upstream === undefined,
+          cancelled: input.status === 499,
+        });
+      healthStore.record({
+        provider: route.provider,
+        publicModel: `${route.provider}/${route.model}`,
+        timestamp: input.timestamp,
+        outcome: classified.outcome,
+        failureClass: classified.failureClass,
+        failureReason: healthFailureReason(input),
+        ...healthMetricsFromSamples(input.tps_samples),
+      });
     },
 
     async close() {

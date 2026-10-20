@@ -21,6 +21,9 @@ import type {
 } from '@wrenyard/session';
 import type { QuotaState } from '@wrenyard/auto-routing';
 import type {
+  GatewayHealthRoute,
+  GatewayHealthWindow,
+  GatewayHealthResult as WrenyardGatewayHealthResult,
   GatewayPortChoice as WrenyardGatewayPortChoice,
   GatewaySettings as WrenyardGatewaySettings,
   GatewaySettingsSaveInput as WrenyardGatewaySettingsSaveInput,
@@ -119,6 +122,9 @@ import type {
 // re-exports them under the local names so the preload facade and the renderer
 // resolve them from `@/shell-contract` without importing the protocol directly.
 export type {
+  GatewayHealthRoute,
+  GatewayHealthWindow,
+  WrenyardGatewayHealthResult,
   WrenyardGatewaySettings,
   WrenyardGatewaySettingsSaveInput,
   WrenyardGatewaySettingsSaveResult,
@@ -300,6 +306,7 @@ export const SHELL_CHANNELS = {
   settingsSnapshot: 'wrenyard-shell:settings-snapshot',
   gatewaySettings: 'wrenyard-shell:gateway-settings',
   gatewaySettingsSave: 'wrenyard-shell:gateway-settings-save',
+  gatewayHealth: 'wrenyard-shell:gateway-health',
   statsSnapshot: 'wrenyard-shell:stats-snapshot',
   quotaSnapshot: 'wrenyard-shell:quota-snapshot',
   saveProviderOrder: 'wrenyard-shell:save-provider-order',
@@ -1541,6 +1548,7 @@ export interface WrenyardShellApi {
   getSettings(): Promise<SettingsSnapshot>;
   getGatewaySettings(): Promise<WrenyardGatewaySettings>;
   saveGatewaySettings(input: WrenyardGatewaySettingsSaveInput): Promise<WrenyardGatewaySettingsSaveResult>;
+  getGatewayHealth(): Promise<WrenyardGatewayHealthResult>;
   getStats(): Promise<StatsSnapshot>;
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;
   /** Read-only data-directory usage from the connected daemon; `refresh` starts a new scan. */

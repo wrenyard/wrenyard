@@ -73,7 +73,14 @@ import { initializeLocalSpeedSamples, readLocalSpeedSamplesCached, updateLocalSp
 import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../events/event-types.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { WorkspaceTodoService, todoIndexPath } from './services/workspace-todo-service.mts'
-import { classifyRouteFailure, createModelGateway, type ModelGateway, type RouteStatus } from '@wrenyard/gateway'
+import {
+  classifyRouteFailure,
+  createModelGateway,
+  type GatewayHealthCompletionInput,
+  type GatewayHealthOutcome,
+  type ModelGateway,
+  type RouteStatus,
+} from '@wrenyard/gateway'
 import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin, createOpenCodeZen, createWorkBuddyProviders, resolveHistoricalOfferedModelId, type WorkBuddyProvider } from '@wrenyard/providers'
 import {
   defaultProviderContext,
@@ -939,6 +946,8 @@ async function createForemanDaemonResources(
           ...(event.tps_samples === undefined ? {} : { tps_samples: event.tps_samples }),
           ...(event.upstream === undefined ? {} : { upstream: event.upstream }),
           ...(event.faultCause === undefined ? {} : { faultCause: event.faultCause }),
+          ...(event.outcome === undefined ? {} : { outcome: event.outcome }),
+          ...(event.failureClass === undefined ? {} : { failureClass: event.failureClass }),
         },
         occurredAt: new Date().toISOString(),
       }
@@ -958,6 +967,54 @@ async function createForemanDaemonResources(
       await getForemanEventBus().publish(foremanEvent)
     },
   })
+  const gatewayHealthBackfillCutoff = Date.now()
+  void (async () => {
+    try {
+      const sinceIso = new Date(gatewayHealthBackfillCutoff - 24 * 60 * 60 * 1000).toISOString()
+      const rows = runtime.db.prepare<unknown[], { timestamp: string; data: string | null }>(
+        `SELECT timestamp, data FROM events
+         WHERE type = 'gateway.request.completed' AND created_at >= ?
+         ORDER BY id ASC`,
+      ).all(sinceIso)
+      for (const row of rows) {
+        const timestamp = Date.parse(row.timestamp)
+        if (!Number.isFinite(timestamp) || timestamp >= gatewayHealthBackfillCutoff) continue
+        if (row.data === null) continue
+        let envelope: unknown
+        try {
+          envelope = JSON.parse(row.data)
+        } catch {
+          continue
+        }
+        if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) continue
+        const record = envelope as Record<string, unknown>
+        if (record.schema_version !== 'foreman.event.v1') continue
+        const rawData = record.data
+        if (!rawData || typeof rawData !== 'object' || Array.isArray(rawData)) continue
+        const data = rawData as Record<string, unknown>
+        const provider = typeof data.provider === 'string' ? data.provider.trim() : ''
+        const publicModel = typeof data.publicModel === 'string' ? data.publicModel.trim() : ''
+        const status = typeof data.status === 'number' ? data.status : Number(data.status)
+        if (provider === '' || publicModel === '' || !Number.isFinite(status)) continue
+        const completion: GatewayHealthCompletionInput = { provider, publicModel, status, timestamp }
+        if (typeof data.outcome === 'string') completion.outcome = data.outcome as GatewayHealthOutcome
+        if (typeof data.failureClass === 'string') completion.failureClass = data.failureClass
+        if (typeof data.faultReason === 'string') completion.faultReason = data.faultReason
+        if (data.faultCause !== undefined && typeof data.faultCause === 'object' && !Array.isArray(data.faultCause)) {
+          completion.faultCause = data.faultCause as GatewayHealthCompletionInput['faultCause']
+        }
+        if (data.upstream !== undefined && typeof data.upstream === 'object' && !Array.isArray(data.upstream)) {
+          completion.upstream = data.upstream as GatewayHealthCompletionInput['upstream']
+        }
+        if (Array.isArray(data.tps_samples)) {
+          completion.tps_samples = data.tps_samples as GatewayHealthCompletionInput['tps_samples']
+        }
+        gateway.ingestHealthCompletion(completion)
+      }
+    } catch (error) {
+      writeDaemonLog('warn', 'gateway health backfill failed', error)
+    }
+  })()
   // The session feature invokes allowlisted workspace methods through this one
   // router, so the router exists before the workspace bindings are assembled.
   const rpcRouter = new RpcRouter({
@@ -1639,6 +1696,7 @@ async function createForemanDaemonResources(
     clientService,
     gatewayConnection: gatewayConnectionSnapshot,
     gatewaySettings: gatewaySettingsSnapshot,
+    gatewayHealth: async () => gateway.health(),
     gatewaySettingsSave: (params) => saveGatewaySettings(params),
     providerList: () => providerService.list(),
     providerConfigure: async (params) => {

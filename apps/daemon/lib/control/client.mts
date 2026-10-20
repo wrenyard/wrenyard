@@ -145,6 +145,8 @@ import type {
   ClientListResult,
   ClientActionParams,
   ClientActionResult,
+  GatewayHealthParams,
+  GatewayHealthResult,
 } from '../protocol/registry.mts'
 
 export interface ForemanRequestOptions {
@@ -215,6 +217,12 @@ export class ForemanClient {
   readonly health = {
     ping: (params: HealthPingParams = {}): Promise<HealthPingResult> => {
       return this.rpc.request<HealthPingResult>('health.ping', params)
+    },
+  }
+
+  readonly gateway = {
+    health: (params: GatewayHealthParams = {}): Promise<GatewayHealthResult> => {
+      return this.rpc.request<GatewayHealthResult>('gateway.health', params)
     },
   }
 

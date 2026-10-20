@@ -42,6 +42,10 @@ export function registerAppearancePreferencesIpc(ipcMain: IpcMain, deps: ShellIp
     assertShellSender(event.sender);
     return options.request('gateway.settings.save', input);
   });
+  ipcMain.handle(SHELL_CHANNELS.gatewayHealth, async (event) => {
+    assertShellSender(event.sender);
+    return options.request('gateway.health', {});
+  });
 
   return () => {
     for (const channel of [
@@ -51,6 +55,7 @@ export function registerAppearancePreferencesIpc(ipcMain: IpcMain, deps: ShellIp
       SHELL_CHANNELS.setPreference,
       SHELL_CHANNELS.gatewaySettings,
       SHELL_CHANNELS.gatewaySettingsSave,
+      SHELL_CHANNELS.gatewayHealth,
     ]) ipcMain.removeHandler(channel);
   };
 }

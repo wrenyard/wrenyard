@@ -20,6 +20,7 @@ import { ResponseSampler, type ResponseTpsContract } from './response-tps.ts';
 import { repairUpstreamResponse, relayResponse } from './relay.ts';
 import { gatewayErrorBody, mapUpstreamErrorBody, streamErrorFact, upstreamErrorFact, type UpstreamErrorFact } from './errors.ts';
 import { applyReasoningFields, type GatewayProtocolModule, type GatewayUsage, type ResponseObserver } from './protocols/types.ts';
+import { classifyGatewayOutcome, type GatewayHealthOutcome } from './health.ts';
 
 export interface GatewayRequestCompletedEvent {
   protocol: GatewayProtocol;
@@ -63,6 +64,10 @@ export interface GatewayRequestCompletedEvent {
   upstream?: UpstreamErrorFact;
   /** Sanitized local transport fault details for a 502 with no upstream response. */
   faultCause?: { name?: string; message?: string; code?: string };
+  /** Passive health classification; does not affect routing or admission. */
+  outcome?: GatewayHealthOutcome;
+  /** Upstream or gateway fault class behind `outcome`, when one applies. */
+  failureClass?: string;
 }
 
 /** One resolved gateway route: which protocol module owns it and what it is. */
@@ -246,11 +251,25 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       const role = localHeader(request, GATEWAY_HEADERS.callRole);
       const sessionId = localHeader(request, GATEWAY_HEADERS.sessionId);
       /** The one completion event of this request, with its attribution. */
-      const finish = (event: Omit<GatewayRequestCompletedEvent, 'protocol' | 'durationMs'>): Promise<void> => options.emit({
-        protocol, durationMs: Date.now() - startedAt,
-        ...(executionId ? { executionId } : {}), ...(role ? { role } : {}), ...(sessionId ? { sessionId } : {}),
-        ...event,
-      });
+      const finish = (
+        event: Omit<GatewayRequestCompletedEvent, 'protocol' | 'durationMs' | 'outcome' | 'failureClass'>,
+        hints?: { admissionRefusal?: boolean; cancelled?: boolean },
+      ): Promise<void> => {
+        const classified = classifyGatewayOutcome({
+          status: event.status,
+          faultReason: event.faultReason,
+          hasUpstreamError: event.upstream !== undefined,
+          admissionRefusal: hints?.admissionRefusal === true,
+          cancelled: hints?.cancelled === true,
+        });
+        return options.emit({
+          protocol, durationMs: Date.now() - startedAt,
+          ...(executionId ? { executionId } : {}), ...(role ? { role } : {}), ...(sessionId ? { sessionId } : {}),
+          ...event,
+          outcome: classified.outcome,
+          ...(classified.failureClass === undefined ? {} : { failureClass: classified.failureClass }),
+        });
+      };
       /** A request the Gateway itself refuses; the body is the official envelope. */
       const reject = async (status: number, message: string, event: Partial<GatewayRequestCompletedEvent> = {}): Promise<true> => {
         json(response, status, gatewayErrorBody(module, status, message));
@@ -421,7 +440,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           ...target, status: 503, routeState: admission.status.state, routeUntil: retryAt,
           faultReason: admission.status.faultKind ?? admission.status.state, routePhase: admission.status.phase,
           ...(attemptId === undefined ? {} : { attemptId }),
-        });
+        }, { admissionRefusal: true });
         return true;
       }
       const guard = admission.guard;
@@ -698,7 +717,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           ...(partialUsage === undefined ? {} : { usage: { ...partialUsage, partial: true } }),
           ...(usage ? { usage } : {}),
           ...(sampler?.sample() ?? {}),
-        });
+        }, { cancelled: cancelled && !firstResponseTimedOut });
       } finally {
         clearFirstResponseTimer();
         request.off('aborted', abort);
