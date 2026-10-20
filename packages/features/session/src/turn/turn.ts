@@ -31,8 +31,14 @@ import type { CallFailureSummary, ActionBaseContext, SessionCallHost, SessionVie
 import type { RuntimeAction, SessionRuntime, TurnRuntime } from './runtime.ts';
 import { messageOf } from '../errors.ts';
 
+/** Step 1 blocks on memory search only up to this long before reasoning starts. */
+const MEMORY_SEARCH_STEP1_WAIT_MS = 8000;
+
 /** Run the turn and step loop over the session runtime. */
 export class TurnRunner {
+  /** At most one memory-search invocation per turn; cleared when it settles. */
+  private readonly memorySearchFlights = new WeakMap<TurnRuntime, Promise<void>>();
+
   constructor(
     private readonly engine: SessionCallHost,
     private readonly replies: ReplyWriter,
@@ -56,9 +62,10 @@ export class TurnRunner {
         try {
           if (turn.turn === 1 && step === 1) startInitialTitle(this.engine, session, turn);
 
-          // One memory-search call precedes every reason request, including the first.
+          // Memory search overlaps reasoning after step 1: step 1 waits at most
+          // MEMORY_SEARCH_STEP1_WAIT_MS; later steps start search without awaiting.
           turn.phase = 'preparing';
-          await runMemorySearch(this.engine, session, turn, step);
+          await this.prepareMemorySearchForStep(session, turn, step);
           if (turn.finished) return;
 
           turn.phase = 'reasoning';
@@ -160,6 +167,35 @@ export class TurnRunner {
         await this.replies.close(session, turn, messageOf(error));
       }
     }
+  }
+
+  /**
+   * Start memory search for this step when none is in flight. Step 1 waits up
+   * to MEMORY_SEARCH_STEP1_WAIT_MS; later steps proceed to reasoning immediately.
+   */
+  private async prepareMemorySearchForStep(
+    session: SessionRuntime,
+    turn: TurnRuntime,
+    step: number,
+  ): Promise<void> {
+    this.ensureMemorySearch(session, turn, step);
+    if (step !== 1) return;
+    const search = this.memorySearchFlights.get(turn);
+    if (search === undefined) return;
+    await Promise.race([
+      search,
+      new Promise<void>((resolve) => { setTimeout(resolve, MEMORY_SEARCH_STEP1_WAIT_MS); }),
+    ]);
+  }
+
+  /** Run at most one memory search per turn; in-flight work is not restarted. */
+  private ensureMemorySearch(session: SessionRuntime, turn: TurnRuntime, step: number): void {
+    if (this.memorySearchFlights.has(turn)) return;
+    const promise = runMemorySearch(this.engine, session, turn, step).finally(() => {
+      if (this.memorySearchFlights.get(turn) === promise) this.memorySearchFlights.delete(turn);
+    });
+    this.memorySearchFlights.set(turn, promise);
+    this.engine.track(promise);
   }
 
   /** Append the step's single `step.finished` once, when a `step.started` exists. */
