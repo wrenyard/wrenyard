@@ -946,8 +946,15 @@ async function createForemanDaemonResources(
           ...(event.usage === undefined ? {} : { usage: event.usage }),
           ...(event.tps_samples === undefined ? {} : { tps_samples: event.tps_samples }),
           ...(event.upstream === undefined ? {} : { upstream: event.upstream }),
+          ...(event.faultCause === undefined ? {} : { faultCause: event.faultCause }),
         },
         occurredAt: new Date().toISOString(),
+      }
+      if (event.faultCause !== undefined) {
+        const { name, message, code } = event.faultCause
+        const label = [name, message].filter((part) => part !== undefined && part !== '').join(': ')
+        const suffix = code === undefined || code === '' ? '' : ` (code ${code})`
+        writeDaemonLog('warn', `gateway request failed locally: ${label}${suffix}`)
       }
       gatewayEventStore.append(foremanEvent)
       // The completion event is now persisted, so the attributed execution can

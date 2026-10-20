@@ -14,7 +14,7 @@ import {
 } from '@wrenyard/providers/catalog';
 import { upstreamAuthHeaders, type ProviderCredential, type ProviderRuntime } from '@wrenyard/providers';
 import { completedWithoutOutput } from './response-usage.ts';
-import { classifyRouteOutcome, classifyStreamFailure, clientTimeoutFailure, isPoisoning, transportFailure, type RouteFaultKind } from './route-failure.ts';
+import { classifyRouteOutcome, classifyStreamFailure, clientTimeoutFailure, isPoisoning, type RouteFaultKind } from './route-failure.ts';
 import type { CircuitPhase, MarkableFailure, RouteStateStore, RouteStatus } from './route-state.ts';
 import { ResponseSampler, type ResponseTpsContract } from './response-tps.ts';
 import { repairUpstreamResponse, relayResponse } from './relay.ts';
@@ -60,6 +60,8 @@ export interface GatewayRequestCompletedEvent {
    * the relay (the recorded `status` stays the real upstream status).
    */
   upstream?: UpstreamErrorFact;
+  /** Sanitized local transport fault details for a 502 with no upstream response. */
+  faultCause?: { name?: string; message?: string; code?: string };
 }
 
 /** One resolved gateway route: which protocol module owns it and what it is. */
@@ -628,10 +630,28 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         const routeTimedOut = timedOut || clientTimedOut;
         const status = aborted ? (routeTimedOut ? 504 : 499) : 502;
         let faultFact: Partial<GatewayRequestCompletedEvent> = {};
-        if (!aborted || routeTimedOut) {
-          const failure = routeTimedOut ? clientTimeoutFailure() : transportFailure();
-          const state = recordFault(failure, status);
+        if (routeTimedOut) {
+          const state = recordFault(clientTimeoutFailure(), status);
           faultFact = state === undefined ? {} : { routeState: state.state, routeUntil: state.until, faultReason: state.faultKind, routePhase: state.phase };
+        } else if (!aborted) {
+          const sanitizeFaultField = (value: unknown): string | undefined => {
+            if (value === undefined || value === null) return undefined;
+            const collapsed = String(value).replace(/\s+/g, ' ').trim();
+            if (!collapsed) return undefined;
+            return collapsed.length > 200 ? collapsed.slice(0, 200) : collapsed;
+          };
+          const err = error as Error & { code?: unknown; cause?: { code?: unknown } };
+          const faultCause: GatewayRequestCompletedEvent['faultCause'] = {};
+          const name = sanitizeFaultField(err.name);
+          const message = sanitizeFaultField(err.message);
+          const code = sanitizeFaultField(err.code ?? err.cause?.code);
+          if (name !== undefined) faultCause.name = name;
+          if (message !== undefined) faultCause.message = message;
+          if (code !== undefined) faultCause.code = code;
+          faultFact = {
+            faultReason: 'transport',
+            ...(Object.keys(faultCause).length > 0 ? { faultCause } : {}),
+          };
         }
         if (!response.headersSent) {
           const message = aborted ? (routeTimedOut ? 'Provider request timed out' : 'Request cancelled') : 'Provider request failed';
