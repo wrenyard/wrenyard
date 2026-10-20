@@ -61,6 +61,7 @@ import {
 } from './execution/native-provider-readiness.mts'
 import { createAgentClients, CodeBuddyClient, readCodexGatewayCredential, refreshCodexGatewayCredential, readCodexModels, type AgentClient, type NativeClientReadiness } from '@wrenyard/clients'
 import { findExecutable } from '@wrenyard/agent-client'
+import { compareVersions, isSemver } from '@wrenyard/protocol/update-feed'
 import type { ClientAction, ClientListEntry, ClientListHost, ClientListParams, ClientReadiness } from '../protocol/methods/client.mts'
 import { ExecService } from '@wrenyard/exec'
 import { ProviderService } from '@wrenyard/provider-service'
@@ -1701,7 +1702,11 @@ async function createForemanDaemonResources(
           if (entry.npmPackage !== undefined && latestByPkg[entry.npmPackage] !== undefined) {
             const latest = latestByPkg[entry.npmPackage]
             entry.latestVersion = latest
-            entry.updateAvailable = entry.version !== undefined && latest !== entry.version
+            entry.updateAvailable = entry.version !== undefined && (
+              isSemver(latest) && isSemver(entry.version)
+                ? compareVersions(latest, entry.version) > 0
+                : latest !== entry.version
+            )
           }
         }
       }

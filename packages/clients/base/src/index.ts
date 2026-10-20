@@ -1,4 +1,5 @@
 import { access, realpath } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { delimiter, isAbsolute, join } from 'node:path';
 import type { ReasoningEffort } from '@wrenyard/models';
 /** Stable agent protocol. No Forge process, profile command, or client switch. */
@@ -175,7 +176,48 @@ export async function requestJson(url: string, init: RequestInit, options?: Oper
     }
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
-/** Shared PATH/explicit-path lookup. Client packages choose the executable names. */
+/** Find an installed executable and report its version. */
+export async function withVersion(status: ClientStatus, options?: InspectOptions): Promise<ClientStatus> {
+    if (status.installation.state !== 'installed')
+        return status;
+    const executable = status.installation.executable;
+    const env = options?.env ?? process.env;
+    const version = await new Promise<string | undefined>((resolve) => {
+        let output = '';
+        let settled = false;
+        const finish = (value: string | undefined): void => {
+            if (settled)
+                return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(value);
+        };
+        let child: ReturnType<typeof spawn>;
+        try {
+            child = spawn(executable, ['--version'], { env, stdio: ['ignore', 'pipe', 'ignore'] });
+        }
+        catch {
+            resolve(undefined);
+            return;
+        }
+        const timer = setTimeout(() => {
+            child.kill();
+            finish(undefined);
+        }, 5_000);
+        child.stdout?.on('data', (chunk: Buffer) => {
+            if (output.length < 4_096)
+                output += chunk.toString('utf8').slice(0, 4_096 - output.length);
+        });
+        child.on('error', () => finish(undefined));
+        child.on('close', (code) => {
+            const match = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/.exec(output);
+            finish(code === 0 ? match?.[0] : undefined);
+        });
+    });
+    return version ? { ...status, installation: { ...status.installation, version } } : status;
+}
+
+/** Locate a client executable from configuration or PATH. */
 export async function findExecutable(names: readonly string[], options?: InspectOptions): Promise<ClientStatus> {
     const env = options?.env ?? process.env;
     const explicit = options?.executable?.trim();
