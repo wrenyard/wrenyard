@@ -2,3 +2,4 @@
 export * from './json.ts'
 export * from './jsonrpc.ts'
 export * from './methods.ts'
+export * from './errors.ts'

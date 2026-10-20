@@ -1,67 +1,15 @@
-/**
- * Typed JSON-RPC params/results and JSON schemas for the client.list and
- * client.action methods.
- *
- * client.list lists the daemon's supported agent clients: each entry reports the
- * detected installation, version and executable path plus a derived readiness
- * state, where the client came from (npm or manual) and any in-flight
- * install/upgrade job. client.action triggers an install or upgrade of a client
- * through its npm package, running as a background job.
- */
-
 import type { JsonSchema } from '../jsonrpc.mts'
 
-// ─── client.list ───────────────────────────────────────────────────
-
-export interface ClientListParams {
-  /** When true, also fetch the latest published npm version and compute updateAvailable. */
-  checkUpdates?: boolean
-}
-
-/** The derived readiness state of one agent client. */
-export type ClientReadiness = 'ready' | 'not_installed' | 'disabled' | 'error'
-
-/** Host identity reported alongside a client list. */
-export interface ClientListHost {
-  hostname: string
-  platform: string
-}
-
-export interface ClientListEntry {
-  /** Stable client id (e.g. 'codex', 'claude'). */
-  id: string
-  /** Human-facing display name. */
-  name: string
-  /** Whether the client executable was detected on the daemon host. */
-  installed: boolean
-  /** Detected client version; absent when it could not be read. */
-  version?: string
-  /** Resolved executable path; absent when no executable was detected. */
-  path?: string
-  /** Whether the client is enabled for daemon use. */
-  enabled: boolean
-  /** Derived readiness state. */
-  readiness: ClientReadiness
-  /** Human-readable reason for a non-ready state; never a credential leak. */
-  reason?: string
-  /** Where the client was installed from: an npm-managed package or manual. */
-  source?: 'npm' | 'manual'
-  /** The npm package that installs this client, when one is known. */
-  npmPackage?: string
-  /** Latest published npm version, when checkUpdates was requested. */
-  latestVersion?: string
-  /** True when an installed npm client is behind latestVersion. */
-  updateAvailable?: boolean
-  /** A background install/upgrade currently running for this client. */
-  busy?: 'install' | 'upgrade'
-  /** The last install/upgrade failure message, when one was recorded. */
-  lastError?: string
-}
-
-export interface ClientListResult {
-  clients: ClientListEntry[]
-  host: ClientListHost
-}
+export type {
+  ClientListParams,
+  ClientReadiness,
+  ClientListHost,
+  ClientListEntry,
+  ClientListResult,
+  ClientAction,
+  ClientActionParams,
+  ClientActionResult,
+} from '@wrenyard/protocol/client'
 
 const clientListEntrySchema = {
   type: 'object',
@@ -128,20 +76,6 @@ export const clientListResultSchema = {
 } as const satisfies JsonSchema
 
 // ─── client.action ─────────────────────────────────────────────────
-
-/** A client lifecycle action the daemon can perform. */
-export type ClientAction = 'install' | 'upgrade'
-
-export interface ClientActionParams {
-  /** The stable client id to act on. */
-  id: string
-  /** The action to perform. */
-  action: ClientAction
-}
-
-export interface ClientActionResult {
-  client: ClientListEntry
-}
 
 export const clientActionParamsSchema = {
   type: 'object',

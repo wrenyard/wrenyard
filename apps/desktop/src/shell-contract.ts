@@ -20,17 +20,148 @@ import type {
   LedgerEvent,
 } from '@wrenyard/session';
 import type { QuotaState } from '@wrenyard/auto-routing';
-import type { WrenyardGatewaySettings, WrenyardGatewaySettingsSaveInput, WrenyardGatewaySettingsSaveResult } from '@wrenyard/control';
+import type {
+  GatewayPortChoice as WrenyardGatewayPortChoice,
+  GatewaySettings as WrenyardGatewaySettings,
+  GatewaySettingsSaveInput as WrenyardGatewaySettingsSaveInput,
+  GatewaySettingsSaveResult as WrenyardGatewaySettingsSaveResult,
+} from '@wrenyard/protocol/gateway';
+import type {
+  TaskSettingsAutomaticDispatch as ProtocolTaskSettingsAutomaticDispatch,
+  TaskSettingsLayer as ProtocolTaskSettingsLayer,
+  TaskSettingsIntelligence,
+  TaskSettingsCapability,
+  TaskSettingsSourcedValue,
+  TaskSettingsAutomaticSelection,
+  TaskSettingsResolvedDispatch,
+  TaskSettingsEffective,
+  TaskSettingsBuiltinMetadata,
+  TaskResolutionFailure as TaskSettingsResolutionFailure,
+  TaskInheritanceChainEntry as TaskDefinitionInheritanceLayer,
+  TaskSettingsSnapshotResult as TaskSettingsSnapshot,
+  TaskSettingsSaveParams as TaskSettingsSaveRequest,
+  TaskRoutingTestParams,
+  TaskRoutingTestRow,
+  TaskRoutingTestResult,
+  TaskRoutingTestTask,
+  TaskRoutingTestTasksResult,
+} from '@wrenyard/protocol/task';
+import type { DailyBucket as StatsDailySnapshot } from '@wrenyard/protocol/stats';
+import type {
+  ProviderListModel,
+  ProviderListModelPricing as ProviderModelPricingSnapshot,
+} from '@wrenyard/protocol/provider';
+import type { StorageUsageResult as StorageUsageSnapshot } from '@wrenyard/protocol/storage';
+import type {
+  AgentBotLocation,
+  AgentBotSummary,
+  AgentCreateParams,
+  AgentCreateResult,
+  AgentEventsParams,
+  AgentGetParams,
+  AgentGetResult,
+  AgentGroupEventsParams,
+  AgentGroupEventsResult,
+  AgentGroupSendParams,
+  AgentGroupSendResult,
+  AgentListResult,
+  AgentMemoryFile,
+  AgentMemoryListParams,
+  AgentMemoryListResult,
+  AgentMethods,
+  AgentWakeParams,
+  AgentWakeResult,
+  GroupMessage,
+} from '@wrenyard/protocol/agent';
+import type {
+  RoutineCreateParams,
+  RoutineCreateResult,
+  RoutineDeleteParams,
+  RoutineDeleteResult,
+  RoutineListParams,
+  RoutineListResult,
+  RoutineMethods,
+  RoutineRecord,
+  RoutineRunParams,
+  RoutineRunResult,
+  RoutineUpdateParams,
+  RoutineUpdateResult,
+} from '@wrenyard/protocol/routine';
+import type {
+  BotAcceptanceCheck,
+  BotComponentId,
+  BotComponentState,
+  BotHealthComponent,
+  BotHealthHost,
+  BotLoad,
+  BotModel,
+  BotConfigValidateParams,
+  BotConfigValidateResult,
+  BotControlAction,
+  BotControlParams,
+  BotControlResult,
+  BotCreateParams,
+  BotCreateResult,
+  BotHealthError,
+  BotHealthParams,
+  BotHostMode,
+  BotItemAction,
+  BotItemActionParams,
+  BotItemActionResult,
+  BotItemGetParams,
+  BotItemGetResult,
+  BotItemRecord,
+  BotItemState,
+  BotItemsParams,
+  BotItemsResult,
+  BotListResult,
+  BotLogParams,
+  BotLogRecord,
+  BotLogResult,
+  BotMethods,
+  BotMode,
+  BotRecord,
+  BotState,
+  BotTickLag,
+  BotTickParams,
+  BotTickResult,
+} from '@wrenyard/protocol/bot';
+import type {
+  Todo,
+  TodoCreateInput,
+  TodoCreateParams,
+  TodoCreateResult,
+  TodoListResult,
+  TodoStatus,
+  TodoUpdateResult,
+} from '@wrenyard/protocol/workspace';
+import type {
+  ClientAction,
+  ClientActionParams,
+  ClientActionResult,
+  ClientListEntry,
+  ClientListHost,
+  ClientListResult,
+  ClientMethods,
+  ClientReadiness,
+} from '@wrenyard/protocol/client';
+import type {
+  OperationComponentAction,
+  OperationComponentHint,
+  OperationComponentId,
+  OperationComponentSnapshot,
+  OperationComponentState,
+} from '@wrenyard/protocol/components';
 
-// The gateway access DTOs are owned by the control client; the shell contract
-// re-exports them so the preload facade and the renderer resolve them from
-// `@/shell-contract` without importing `@wrenyard/control` directly.
+// The gateway access DTOs are owned by the protocol package; the shell contract
+// re-exports them under the local names so the preload facade and the renderer
+// resolve them from `@/shell-contract` without importing the protocol directly.
 export type {
   WrenyardGatewaySettings,
   WrenyardGatewaySettingsSaveInput,
   WrenyardGatewaySettingsSaveResult,
   WrenyardGatewayPortChoice,
-} from '@wrenyard/control';
+};
 
 // The Pet module keeps its public DTOs under `src/pet`. Desktop code outside
 // that module reads the text of the contract here (types) and the runtime
@@ -750,14 +881,7 @@ export interface StatsTodaySnapshot {
   taskDispatches?: { count: number; done: number };
 }
 
-export interface StatsDailySnapshot {
-  dayKey: string;
-  dispatchCount: number;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  outcomes?: Omit<StatsOutcomesSnapshot, 'running'>;
-}
+export type { StatsDailySnapshot };
 
 export type StatsPeriod = '24h' | '7d' | '1mo';
 
@@ -870,40 +994,13 @@ export interface QuotaFocus {
 export type ProviderAuthMode = 'api-key' | 'environment' | 'native' | 'none';
 
 /** USD per million tokens: [cached, input, output]. */
-export type ProviderModelPricingSnapshot = readonly [number, number, number];
+export type { ProviderModelPricingSnapshot };
 
-/** Shared provider-model row for the Provider and Model List surfaces. */
-export interface ProviderModelSnapshot {
-  id: string;
-  displayName: string;
-  effectiveTps?: number | null;
-  quotaState?: 'abundant' | 'sufficient' | 'insufficient' | 'exhausted';
-  quotaEvidence?: 'measured' | 'unknown_by_design' | 'not_obtained';
-  /**
-   * Authoritative catalog free-model flag. Only an explicit `true` marks a
-   * model free; absence/`undefined` means unknown and must never be inferred
-   * from a missing or zero price.
-   */
-  free?: boolean;
-  /** CodeBuddy per-model credit multiplier string carried verbatim from the live
-   * `/v3/config` offering (e.g. `x1.33 credits`); absent when the provider
-   * declares none. A display-only multiplier, never a balance or USD price. */
-  credits?: string;
-  /** Catalog intelligence tier for the model. */
-  intelligence?: 'low' | 'mid' | 'high' | 'premium';
-  /** Catalog list price as [cached, input, output] USD per million tokens;
-   * absent when the price is genuinely unknown (never defaulted to zero). */
-  pricing?: ProviderModelPricingSnapshot;
-  /** Which evidence tier produced `effectiveTps`. */
-  speedSource?:
-    | 'local_31d'
-    | 'provider_override'
-    | 'catalog_default'
-    | 'free_supply_floor'
-    | 'cooldown';
-  /** True when a credential is configured AND the resolver admits provider/model. */
-  available?: boolean;
-}
+/** Shared provider-model row for the Provider and Model List surfaces.
+ *  Extends the protocol `ProviderListModel`; the protocol additionally carries
+ *  optional catalog fields (`reasoningEfforts`, `supportedClients`,
+ *  `contextWindow`, `maxTokens`, `taskOnly`) the Desktop surface ignores. */
+export interface ProviderModelSnapshot extends ProviderListModel {}
 
 export interface ProviderAuthStatus {
   id: string;
@@ -946,30 +1043,7 @@ export interface QuotaSnapshot {
  * the current or most recent scan, so a running or failed re-scan may still
  * carry the previous `result`.
  */
-export interface StorageUsageSnapshot {
-  device: { hostname: string; platform: string };
-  roots: Array<{ kind: 'state' | 'config'; path: string }>;
-  status: 'scanning' | 'ready' | 'failed';
-  /** ISO time the current or most recent scan started. */
-  startedAt?: string;
-  /** ISO time the scan that produced `result` finished. */
-  scannedAt?: string;
-  /** Top-level failure message of the last scan, present when `status` is `failed`. */
-  error?: string;
-  result?: {
-    totalBytes: number;
-    fileCount: number;
-    categories: Array<{
-      id: 'sessions' | 'records' | 'files' | 'worktrees' | 'logs' | 'clients' | 'other';
-      bytes: number;
-      fileCount: number;
-      unreadable: number;
-    }>;
-    unreadable: number;
-    unreadableSamples: string[];
-    skippedLinks: number;
-  };
-}
+export type { StorageUsageSnapshot };
 
 /**
  * How many points a window's remaining percentage may trail its expected
@@ -1001,23 +1075,18 @@ export function eligibleQuotaProviders(snapshot: QuotaSnapshot): QuotaProviderSn
 export type TaskSettingsScope = 'global' | 'task';
 
 /** Automatic dispatch field enums (mirrors the task dispatch requirements). */
-export type TaskSettingsIntelligence = 'low' | 'mid' | 'high' | 'premium';
-export type TaskSettingsCapability = 'text' | 'image';
+export type { TaskSettingsIntelligence, TaskSettingsCapability };
 
-/** JSON-safe snake_case automatic dispatch constraints a user layer may set. */
-export interface TaskSettingsAutomaticDispatch {
-  expected_tps?: number;
-  minimum_tps?: number;
-  intelligence_min?: TaskSettingsIntelligence;
-  intelligence_expected?: TaskSettingsIntelligence;
-  max_output_usd_per_million?: number;
-  required_capabilities?: readonly TaskSettingsCapability[];
-  requires_web_search?: boolean;
-  exclude_model_ids?: readonly string[];
-  exclude_profile_ids?: readonly string[];
-  exclude_client_ids?: readonly string[];
-  exclude_provider_ids?: readonly string[];
-}
+/**
+ * JSON-safe snake_case automatic dispatch constraints a user layer may set.
+ * The protocol declaration additionally carries `fast` and
+ * `expected_reasoning_effort`; Desktop narrows them out because its form does
+ * not edit them.
+ */
+export type TaskSettingsAutomaticDispatch = Omit<
+  ProtocolTaskSettingsAutomaticDispatch,
+  'fast' | 'expected_reasoning_effort'
+>;
 
 export type TaskSettingsAutomaticPatch = {
   [K in keyof TaskSettingsAutomaticDispatch]?: TaskSettingsAutomaticDispatch[K] | null;
@@ -1032,10 +1101,7 @@ export type TaskSettingsSourceLayer =
   | 'invocation';
 
 /** An effective value plus the layer that provided it. */
-export interface TaskSettingsSourcedValue<T> {
-  value: T;
-  source: TaskSettingsSourceLayer;
-}
+export type { TaskSettingsSourcedValue };
 
 /**
  * Writable settings fields of a user layer. Absent fields fall through to the
@@ -1048,9 +1114,11 @@ export interface TaskSettingsRoutingWeights {
   intelligence: number;
 }
 
-export interface TaskSettingsLayer {
-  timeout_ms?: number | null;
+export interface TaskSettingsLayer
+  extends Omit<ProtocolTaskSettingsLayer, 'automatic' | 'routing_weights'> {
+  /** Global-only automatic scoring weights; null clears them. */
   routing_weights?: TaskSettingsRoutingWeights | null;
+  /** Desktop's dispatch form edits the narrowed automatic dispatch shape. */
   automatic?: Partial<TaskSettingsAutomaticDispatch> | null;
 }
 
@@ -1061,7 +1129,11 @@ export interface TaskSettingsPatch {
   automatic?: TaskSettingsAutomaticPatch | null;
 }
 
-/** Effective automatic dispatch: every field carries its own source layer. */
+/**
+ * Effective automatic dispatch: every field carries its own source layer.
+ * The protocol shape additionally carries `expected_reasoning_effort`; the
+ * Desktop form omits it, so the field is declared non-present here.
+ */
 export interface TaskSettingsEffectiveAutomatic {
   expected_tps: TaskSettingsSourcedValue<number | null>;
   minimum_tps: TaskSettingsSourcedValue<number | null>;
@@ -1077,17 +1149,10 @@ export interface TaskSettingsEffectiveAutomatic {
 }
 
 /** Effective settings of one task, each value tagged with its source layer. */
-export interface TaskSettingsEffective {
-  routing_weights?: TaskSettingsSourcedValue<TaskSettingsRoutingWeights | null>;
-  timeout_ms: TaskSettingsSourcedValue<number | null>;
-  automatic: TaskSettingsEffectiveAutomatic;
-}
+export type { TaskSettingsEffective };
 
 /** Structured automatic-resolution failure detail the daemon attaches to an issue. */
-export interface TaskSettingsResolutionFailure {
-  code: 'no_available_provider' | 'price_limit' | 'intelligence_requirement' | 'speed_requirement' | 'quota_unavailable' | 'quota_insufficient' | 'context_window';
-  message: string;
-}
+export type { TaskSettingsResolutionFailure };
 
 /** A validation problem surfaced by the daemon. */
 export interface TaskSettingsValidationIssue {
@@ -1098,20 +1163,12 @@ export interface TaskSettingsValidationIssue {
   resolutionFailure?: TaskSettingsResolutionFailure;
 }
 
-/** A daemon-owned resolved dispatch projection for an explicit reference. */
-export interface TaskResolvedDispatch {
-  /** Exact canonical resolved identity string. */
-  runtime: string;
-  client: string;
-  provider: string;
-  model: string;
-  model_id?: string;
-  profile?: string;
-  /** Paired authoritative Catalog provider display label; present only when the daemon resolves both labels. */
-  provider_display_name?: string;
-  /** Paired authoritative unified Catalog model display label; present only when the daemon resolves both labels. */
-  model_display_name?: string;
-}
+/**
+ * A daemon-owned resolved dispatch projection for an explicit reference.
+ * Aliased to the protocol resolved dispatch: it carries the full canonical
+ * dispatch fields plus the paired additive Catalog display labels.
+ */
+export type TaskResolvedDispatch = TaskSettingsResolvedDispatch;
 
 /**
  * One ordered, non-executing preview segment of a builtin prompt template. The
@@ -1128,17 +1185,8 @@ export type TaskSettingsInstructionSegment =
 export type TaskSettingsInstructionTemplate = TaskSettingsInstructionSegment[];
 
 /** Read-only metadata about a daemon-builtin task. */
-export interface TaskSettingsBuiltinMetadata {
-  identity: string;
-  name: string;
-  source: string;
-  description?: string;
-  project?: string;
-  prompt_template: 'dynamic' | 'fixed';
-  instruction_template: TaskSettingsInstructionTemplate;
-  timeout_ms: number | null;
-  dispatch: TaskSettingsAutomaticDispatch;
-}
+/** Read-only metadata about a daemon-builtin task. */
+export type { TaskSettingsBuiltinMetadata };
 
 /**
  * Automatic-selection resolution data carried on a row by the daemon when
@@ -1148,27 +1196,14 @@ export interface TaskSettingsBuiltinMetadata {
  * `TaskSettingsTaskRow.automatic_selection`, which is omitted until the daemon
  * resolves.
  */
-export interface TaskSettingsAutomaticSelection {
-  /** Exact runtime target that produced the automatic selection. */
-  exact_runtime: string;
-  /** Daemon-resolved dispatch of the automatic selection. */
-  resolved: TaskResolvedDispatch;
-  /** Human-safe rationale text for the automatic selection. */
-  reason: string;
-}
+export type { TaskSettingsAutomaticSelection };
 
 /**
  * One layer of a Task definition's inheritance chain, ordered base→effective.
  * The final entry is the effective layer; earlier entries are the layers it
  * inherited from. Desktop renders this read-only and never edits it.
  */
-export interface TaskDefinitionInheritanceLayer {
-  source: 'builtin' | 'project';
-  /** Registered project id; present only for project layers. */
-  project?: string;
-  /** Path of the Task definition file that supplied this layer. */
-  path: string;
-}
+export type { TaskDefinitionInheritanceLayer };
 
 /** Stable per-task identity row with persisted layer and merged effective settings. */
 export interface TaskSettingsTaskRow {
@@ -1192,33 +1227,10 @@ export interface TaskSettingsTaskRow {
   issues: TaskSettingsValidationIssue[];
 }
 
-export interface TaskSettingsSnapshot {
-  config_path: string;
-  revision: string;
-  project?: string;
-  /** Persisted user-global settings layer. */
-  user_global: TaskSettingsLayer;
-  rows: TaskSettingsTaskRow[];
-  /** Optional backend load failures surfaced when some task sources could not be read. */
-  load_errors?: Array<{
-    source_path: string;
-    file_name: string;
-    message: string;
-    project?: string;
-    project_display_name?: string;
-  }>;
-}
+export type { TaskSettingsSnapshot };
 
 /** Bounded save request for task.settings.save. */
-export interface TaskSettingsSaveRequest {
-  scope: TaskSettingsScope;
-  /** Required when `scope` is 'task'; must be absent for 'global'. */
-  task_id?: string;
-  /** Optional bounded project hint for task resolution. */
-  project?: string;
-  expected_revision: string;
-  patch: TaskSettingsPatch;
-}
+export type { TaskSettingsSaveRequest };
 
 /**
  * Form-first routing test contract. Desktop transports the typed form request
@@ -1227,52 +1239,13 @@ export interface TaskSettingsSaveRequest {
  * resolution. The snake_case wire DTO mirrors the daemon DTOs exactly.
  */
 
-/** Typed form request: the raw automatic constraints plus optional timeout. */
-export interface TaskRoutingTestParams {
-  automatic: TaskSettingsAutomaticDispatch;
-  timeout_ms?: number;
-}
-
-/**
- * One scoring factor's actual weighted contribution from the shared scorer.
- * The four factor contributions sum exactly to `score`; they are backend
- * provided and never recomputed in the renderer.
- */
-export interface TaskRoutingTestRow {
-  provider: string;
-  provider_name: string;
-  model: string;
-  model_name: string;
-  effective_tps: number | null;
-  price_score: number | null;
-  speed_score: number | null;
-  quota_score: number | null;
-  intelligence_score: number | null;
-  score: number | null;
-  rank: number | null;
-  /** Short Chinese reason; populated for rejected rows, null for qualified rows. */
-  reason: string | null;
-}
-
-/** Flattened routing-test result; `rows` preserves backend ordering. */
-export interface TaskRoutingTestResult {
-  rows: TaskRoutingTestRow[];
-}
-
-/** One importable task definition with its raw automatic configuration. */
-export interface TaskRoutingTestTask {
-  identity: string;
-  name: string;
-  display_name: string;
-  project?: string;
-  automatic: TaskSettingsAutomaticDispatch;
-  timeout_ms?: number;
-}
-
-/** Read-only projection of every valid builtin and project task definition. */
-export interface TaskRoutingTestTasksResult {
-  tasks: TaskRoutingTestTask[];
-}
+export type {
+  TaskRoutingTestParams,
+  TaskRoutingTestRow,
+  TaskRoutingTestResult,
+  TaskRoutingTestTask,
+  TaskRoutingTestTasksResult,
+};
 
 /**
  * Raw prompt-execution surface. Desktop is only a typed transport for the
@@ -1303,55 +1276,16 @@ export type {
 export type AgentStatus = 'idle' | 'running' | 'error' | 'disabled';
 
 /** Where a bot definition lives: synced with the workspace, or this device only. */
-export type AgentBotLocation = 'workspace' | 'device';
+export type { AgentBotLocation };
 
 /** One file of a bot's memory directory, as listed read-only. */
-export interface AgentMemoryFile {
-  name: string;
-  size: number;
-  updatedAt: string;
-}
+export type { AgentMemoryFile };
 
-export interface AgentBot {
-  id: string;
-  name: string;
-  /** Identity icon; falls back to the first letter of the name in the UI. */
-  icon?: string;
-  /** One-line identity description. */
-  description?: string;
-  enabled: boolean;
-  status: AgentStatus;
-  error?: string;
-  location: AgentBotLocation;
-  /** The one primary bot: listed first, marked, and never deletable. */
-  primary: boolean;
-  /** The bot definition directory, in place of the old flat config path. */
-  directory: string;
-  /** Why this bot is disabled by a clash, or why its primary claim was refused. */
-  warning?: string;
-  tools: string[];
-  lastWakeAt?: string;
-  queued: number;
-  sessionId?: string;
-}
+export type AgentBot = AgentBotSummary;
 
 export type RoutineState = 'active' | 'paused';
 
-export interface Routine {
-  /** 8 lowercase hex characters. */
-  id: string;
-  botId: string;
-  /** Optional short name from the routine file. */
-  name?: string;
-  prompt: string;
-  intervalMinutes: number;
-  state: RoutineState;
-  createdAt: string;
-  nextRunAt?: string;
-  lastRunAt?: string;
-  lastError?: string;
-  runCount: number;
-}
+export type Routine = RoutineRecord;
 
 /**
  * The exact daemon methods the shell bridge forwards. Any other method is
@@ -1375,84 +1309,48 @@ export const AGENT_METHODS = [
 
 export type AgentMethod = (typeof AGENT_METHODS)[number];
 
-export interface AgentListResult { bots: AgentBot[] }
-export interface AgentGetParams { id: string }
-/** The bot, its raw `bot.json` and `identity.md`, and its memory listing. */
-export interface AgentGetResult {
-  bot: AgentBot;
-  config: string;
-  identity: string;
-  memory: AgentMemoryFile[];
-}
-/** Create one bot from the built-in onboard template; the id is immutable. */
-export interface AgentCreateParams {
-  id: string;
-  name: string;
-  icon?: string;
-  /** Defaults to `workspace`. */
-  location?: AgentBotLocation;
-}
-export interface AgentCreateResult { bot: AgentBot }
-export interface AgentMemoryListParams { id: string }
-export interface AgentMemoryListResult { files: AgentMemoryFile[] }
-export interface AgentEventsParams { id: string; afterSeq: number; limit?: number }
+export type {
+  AgentListResult,
+  AgentGetParams,
+  AgentGetResult,
+  AgentCreateParams,
+  AgentCreateResult,
+  AgentMemoryListParams,
+  AgentMemoryListResult,
+  AgentEventsParams,
+  AgentWakeParams,
+  AgentWakeResult,
+};
+
 /** Same shape as the daemon `session.events` result, for the bot context ledger. */
 export interface AgentEventsResult { events: LedgerEvent[]; lastSeq: number }
-export interface AgentWakeParams { id: string; text: string }
-export interface AgentWakeResult { queued: number }
 
 /**
  * One entry of the shared group transcript, mirrored from the daemon
  * `group.mts` wire type. `seq` is the monotonic transcript cursor Desktop pages
  * with; a bot entry names the bot that spoke at publish time.
  */
-export interface GroupMessage {
-  seq: number
-  at: string
-  author: 'user' | 'bot'
-  botId?: string
-  name?: string
-  text: string
-}
+export type {
+  GroupMessage,
+  AgentGroupEventsParams,
+  AgentGroupEventsResult,
+  AgentGroupSendParams,
+  AgentGroupSendResult,
+};
 
-export interface AgentGroupEventsParams { afterSeq: number; limit?: number }
-export interface AgentGroupEventsResult { messages: GroupMessage[]; lastSeq: number }
-export interface AgentGroupSendParams { text: string }
-export interface AgentGroupSendResult { message: GroupMessage; awakened: string[] }
+export type {
+  RoutineListParams,
+  RoutineListResult,
+  RoutineCreateParams,
+  RoutineCreateResult,
+  RoutineUpdateParams,
+  RoutineUpdateResult,
+  RoutineRunParams,
+  RoutineRunResult,
+  RoutineDeleteParams,
+  RoutineDeleteResult,
+};
 
-export interface RoutineListParams { botId?: string }
-export interface RoutineListResult { routines: Routine[] }
-export interface RoutineCreateParams {
-  botId: string;
-  prompt: string;
-  intervalMinutes: number;
-  /** Optional short name persisted in the routine file front matter. */
-  name?: string;
-}
-export interface RoutineCreateResult { routine: Routine }
-export interface RoutineUpdateParams { id: string; state: 'active' | 'paused' }
-export interface RoutineUpdateResult { routine: Routine }
-export interface RoutineRunParams { id: string }
-export interface RoutineRunResult { routine: Routine }
-export interface RoutineDeleteParams { id: string }
-export interface RoutineDeleteResult { deleted: true }
-
-/** Params and result of each forwarded agent method, used to type the facade. */
-export interface AgentMethodMap {
-  'agent.list': { params: undefined; result: AgentListResult };
-  'agent.get': { params: AgentGetParams; result: AgentGetResult };
-  'agent.create': { params: AgentCreateParams; result: AgentCreateResult };
-  'agent.memory.list': { params: AgentMemoryListParams; result: AgentMemoryListResult };
-  'agent.events': { params: AgentEventsParams; result: AgentEventsResult };
-  'agent.wake': { params: AgentWakeParams; result: AgentWakeResult };
-  'agent.group.events': { params: AgentGroupEventsParams; result: AgentGroupEventsResult };
-  'agent.group.send': { params: AgentGroupSendParams; result: AgentGroupSendResult };
-  'routine.list': { params: RoutineListParams; result: RoutineListResult };
-  'routine.create': { params: RoutineCreateParams; result: RoutineCreateResult };
-  'routine.update': { params: RoutineUpdateParams; result: RoutineUpdateResult };
-  'routine.run': { params: RoutineRunParams; result: RoutineRunResult };
-  'routine.delete': { params: RoutineDeleteParams; result: RoutineDeleteResult };
-}
 
 /* ------------------------------------------------------------------ */
 /* Bot mode                                                            */
@@ -1467,157 +1365,57 @@ export interface AgentMethodMap {
  */
 
 /** Lifecycle of one bot. */
-export type BotState = 'running' | 'paused' | 'stopped';
+export type { BotState };
 
 /** `live` performs merge/push/complete/notify; `dryRun` only records them. */
-export type BotMode = 'live' | 'dryRun';
+export type { BotMode };
 
 /** One item's lifecycle state, mirrored from the daemon's item machine. */
-export type BotItemState =
-  | 'discovered'
-  | 'verifying'
-  | 'verified'
-  | 'dispatched'
-  | 'in_progress'
-  | 'ready'
-  | 'accepting'
-  | 'accepted'
-  | 'rejected'
-  | 'merging'
-  | 'merged'
-  | 'completing'
-  | 'completed'
-  | 'dismissed'
-  | 'parked'
-  | 'failed'
-  | 'withdrawn';
+export type { BotItemState };
 
 /** The model a bot dispatched an item's session with. */
-export interface BotModel {
-  provider: string;
-  model: string;
-  reasoningEffort: string;
-}
+export type { BotModel };
 
-export interface BotRecord {
-  /** 8 lowercase hex characters. */
-  id: string;
-  workspaceRoot: string;
-  name: string;
-  configPath?: string;
-  configHash?: string;
-  state: BotState;
-  mode: BotMode;
-  lastTickAt?: string;
-  nextPollAt?: string;
-  createdAt: string;
-  updatedAt: string;
-}
+export type { BotRecord };
 
 /** One acceptance check recorded for an item. */
-export interface BotAcceptanceCheck {
-  claim: string;
-  method: string;
-  status: 'verified' | 'failed' | 'not_verified';
-  evidence?: string[];
-  note?: string;
-}
+export type { BotAcceptanceCheck };
 
-export interface BotItemRecord {
-  id: string;
-  botId: string;
-  sourceId: string;
-  generation: number;
-  fingerprint?: string;
-  title?: string;
-  body?: string;
-  project?: string;
-  class?: string;
-  state: BotItemState;
-  parkedFrom?: BotItemState;
-  question?: string;
-  answer?: string;
-  sessionId?: string;
-  sessionModel?: BotModel;
-  worktreeId?: string;
-  branch?: string;
-  headSha?: string;
-  mergedSha?: string;
-  acceptance?: BotAcceptanceCheck[];
-  counters?: Record<string, number>;
-  error?: string;
-  dryRun: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
+export type { BotItemRecord };
 
-export interface BotLogRecord {
-  seq: number;
-  botId: string;
-  itemId?: string;
-  at: string;
-  level: string;
-  code?: string;
-  message: string;
-}
+export type { BotLogRecord };
 
 /** Last and worst delay between a scheduled tick and its actual start. */
-export interface BotTickLag {
-  last: number;
-  max: number;
-}
+export type { BotTickLag };
 
-export interface BotHealthError {
-  at: string;
-  code: string;
-  message: string;
-}
+export type { BotHealthError };
 
 /** `installed` when the daemon runs from the bundled suite; `source` otherwise. */
-export type BotHostMode = 'installed' | 'source';
+export type { BotHostMode };
 
 /** The device and daemon a bot runs on. */
-export interface BotHealthHost {
-  hostname: string;
-  platform: string;
-  arch: string;
-  daemonVersion?: string;
-  mode: BotHostMode;
-}
+export type { BotHealthHost };
 
 /** The managed operation components a bot's acceptance may require. */
-export type BotComponentId = 'browser' | 'desktop';
+export type { BotComponentId };
 
-export type BotComponentState =
-  | 'not-installed'
-  | 'installing'
-  | 'needs-authorization'
-  | 'ready'
-  | 'failed'
-  | 'unsupported'
-  | 'disabled';
+export type { BotComponentState };
 
 /** One operation component's current state, mirrored from `components.list`. */
-export interface BotHealthComponent {
-  id: BotComponentId;
-  state: BotComponentState;
-}
+export type { BotHealthComponent };
 
 /**
  * Live daemon execution load observed at the last tick. `backedOff` is the
  * current dispatch state: true while the bot holds new work because the daemon
  * is loaded.
  */
-export interface BotLoad {
-  activeExecutions: number;
-  maxExecutions: number;
-  queuedExecutions: number;
-  /** How long the oldest queued execution has waited, when any is queued. */
-  oldestQueuedMs?: number;
-  backedOff: boolean;
-}
+export type { BotLoad };
 
-/** Durable endurance numbers for one bot, correct across daemon restarts. */
+/**
+ * Durable endurance numbers for one bot. Kept local: the protocol `BotHealth`
+ * additionally requires `lowDisk` and makes `forcedTicks`/`load` non-optional;
+ * this Desktop projection tolerates older daemons that omit them.
+ */
 export interface BotHealth {
   uptimeSince: string;
   ticks: number;
@@ -1637,8 +1435,7 @@ export interface BotHealth {
   load?: BotLoad;
 }
 
-export type BotControlAction = 'start' | 'pause' | 'resume' | 'stop';
-export type BotItemAction = 'retry' | 'dismiss' | 'answer' | 'cleanup';
+export type { BotControlAction, BotItemAction };
 
 /**
  * The exact daemon methods the shell bridge forwards. Any other method is
@@ -1660,44 +1457,31 @@ export const BOT_METHODS = [
 
 export type BotMethod = (typeof BOT_METHODS)[number];
 
-export interface BotCreateParams { name: string; configPath: string; mode?: BotMode }
-export interface BotCreateResult { bot: BotRecord }
-export interface BotControlParams { botId: string; action: BotControlAction }
-export interface BotControlResult { bot: BotRecord }
-export interface BotTickParams { botId: string }
-export interface BotTickResult { ticked: true }
-export interface BotConfigValidateParams { configPath: string }
-export interface BotConfigValidateResult { valid: boolean; name?: string; error?: string }
-export interface BotItemsParams { botId: string; state?: BotItemState }
-export interface BotItemsResult { items: BotItemRecord[] }
-export interface BotItemGetParams { botId: string; itemId: string }
-export interface BotItemGetResult { item: BotItemRecord }
-export interface BotItemActionParams {
-  botId: string;
-  itemId: string;
-  action: BotItemAction;
-  answer?: string;
-}
-export interface BotItemActionResult { item: BotItemRecord }
-export interface BotLogParams { botId: string; afterSeq: number; limit?: number }
-export interface BotLogResult { entries: BotLogRecord[] }
-export interface BotHealthParams { botId: string }
+export type {
+  BotCreateParams,
+  BotCreateResult,
+  BotControlParams,
+  BotControlResult,
+  BotTickParams,
+  BotTickResult,
+  BotConfigValidateParams,
+  BotConfigValidateResult,
+  BotItemsParams,
+  BotItemsResult,
+  BotItemGetParams,
+  BotItemGetResult,
+  BotItemActionParams,
+  BotItemActionResult,
+  BotLogParams,
+  BotLogResult,
+  BotHealthParams,
+  BotListResult,
+};
+/** `bot.health` resolves to the local tolerant projection above. */
 export type BotHealthResult = BotHealth;
-export interface BotListResult { bots: BotRecord[] }
 
 /** Params and result of each forwarded bot method, used to type the facade. */
-export interface BotMethodMap {
-  'bot.list': { params: undefined; result: BotListResult };
-  'bot.create': { params: BotCreateParams; result: BotCreateResult };
-  'bot.control': { params: BotControlParams; result: BotControlResult };
-  'bot.tick': { params: BotTickParams; result: BotTickResult };
-  'bot.config.validate': { params: BotConfigValidateParams; result: BotConfigValidateResult };
-  'bot.items': { params: BotItemsParams; result: BotItemsResult };
-  'bot.item.get': { params: BotItemGetParams; result: BotItemGetResult };
-  'bot.item.action': { params: BotItemActionParams; result: BotItemActionResult };
-  'bot.log': { params: BotLogParams; result: BotLogResult };
-  'bot.health': { params: BotHealthParams; result: BotHealthResult };
-}
+export type BotMethodMap = BotMethods;
 
 /* ------------------------------------------------------------------ */
 /* Workspace todos                                                     */
@@ -1711,35 +1495,19 @@ export interface BotMethodMap {
  */
 
 /** The complete, ordered set of valid todo statuses. */
-export type TodoStatus = 'open' | 'in_progress' | 'done' | 'cancelled';
+export type { TodoStatus };
 
 /** One workspace todo, as stored in its Markdown file. */
-export interface Todo {
-  id: string;
-  title: string;
-  status: TodoStatus;
-  project?: string;
-  depends_on: string[];
-  created: string;
-  updated: string;
-  request: string;
-  acceptance: string;
-  attachments: string[];
-  resultSummary?: string;
-}
+export type { Todo };
 
 /** Input for creating one workspace todo; the daemon generates the id. */
-export interface TodoCreateInput {
-  title: string;
-  status?: TodoStatus;
-  project?: string;
-  depends_on?: string[];
-  request?: string;
-  acceptance?: string;
-  attachments?: string[];
-}
+export type { TodoCreateInput };
 
-/** Input for updating one workspace todo; absent fields are kept. */
+/**
+ * Input for updating one workspace todo. The protocol `TodoUpdateInput`
+ * additionally carries an optional `resultSummary`; kept as a narrowed local
+ * declaration because the Desktop facade does not edit it.
+ */
 export interface TodoUpdateInput {
   id: string;
   title?: string;
@@ -1764,11 +1532,10 @@ export const BOT_TODO_METHODS = ['todo.create', 'todo.update'] as const;
 
 export type BotTodoMethod = (typeof BOT_TODO_METHODS)[number];
 
-export interface TodoListResult { todos: Todo[] }
-export type TodoCreateParams = TodoCreateInput;
-export interface TodoCreateResult { todo: Todo }
+export type { TodoListResult, TodoCreateParams, TodoCreateResult };
+/** `todo.update` takes the narrowed local input; result is the protocol row. */
 export type TodoUpdateParams = TodoUpdateInput;
-export interface TodoUpdateResult { todo: Todo }
+export type { TodoUpdateResult };
 
 /** Params and result of each forwarded todo method, used to type the facade. */
 export interface TodoMethodMap {
@@ -1790,53 +1557,21 @@ export interface BotTodoMethodMap {
  * `client.list` method. These wire types mirror the daemon's client DTOs
  * exactly; Desktop never detects or installs a client itself.
  */
-export type ClientReadiness = 'ready' | 'not_installed' | 'disabled' | 'error';
+export type { ClientReadiness };
 
 /** Host identity reported alongside a client list. */
-export interface ClientListHost {
-  hostname: string;
-  platform: string;
-}
+export type { ClientListHost };
 
-export interface ClientListEntry {
-  id: string;
-  name: string;
-  installed: boolean;
-  version?: string;
-  path?: string;
-  enabled: boolean;
-  readiness: ClientReadiness;
-  reason?: string;
-  /** Where the client was installed from: an npm-managed package or manual. */
-  source?: 'npm' | 'manual';
-  /** The npm package that installs this client, when one is known. */
-  npmPackage?: string;
-  /** Latest published npm version, when checkUpdates was requested. */
-  latestVersion?: string;
-  /** True when an installed npm client is behind latestVersion. */
-  updateAvailable?: boolean;
-  /** A background install/upgrade currently running for this client. */
-  busy?: 'install' | 'upgrade';
-  /** The last install/upgrade failure message, when one was recorded. */
-  lastError?: string;
-}
+export type { ClientListEntry };
 
-export interface ClientListResult {
-  clients: ClientListEntry[];
-  host: ClientListHost;
-}
+export type { ClientListResult };
 
 /** A client lifecycle action the daemon can perform. */
-export type ClientAction = 'install' | 'upgrade';
+export type { ClientAction };
 
-export interface ClientActionParams {
-  id: string;
-  action: ClientAction;
-}
+export type { ClientActionParams };
 
-export interface ClientActionResult {
-  client: ClientListEntry;
-}
+export type { ClientActionResult };
 
 /** The bounded daemon surface the shell `client` bridge forwards. */
 export const CLIENT_METHODS = ['client.list', 'client.action'] as const;
@@ -1844,10 +1579,7 @@ export const CLIENT_METHODS = ['client.list', 'client.action'] as const;
 export type ClientMethod = (typeof CLIENT_METHODS)[number];
 
 /** Params and result of each forwarded client method, used to type the facade. */
-export interface ClientMethodMap {
-  'client.list': { params: { checkUpdates?: boolean }; result: ClientListResult };
-  'client.action': { params: ClientActionParams; result: ClientActionResult };
-}
+export type ClientMethodMap = ClientMethods;
 
 /* ------------------------------------------------------------------ */
 /* WY Remote: SSH connection and single active context                 */
@@ -1906,7 +1638,12 @@ export interface RemoteConnectionTestResult {
   message?: string;
 }
 
-/** Outcome of a confirm/rename/connect/return mutation. */
+/**
+ * Outcome of a confirm/rename/connect/return mutation. Kept local: the
+ * protocol `RemoteHostMutationResult` is a `RemoteHostListResult` (a fresh
+ * saved-host list), while the Desktop bridge contract resolves with an
+ * `ok`/`message` acknowledgement.
+ */
 export interface RemoteHostMutationResult {
   ok: boolean;
   message?: string;
@@ -1928,78 +1665,23 @@ export interface RemoteHostListResult {
  * `components.*` snapshots exactly so the preload facade, main handlers and
  * renderer read one definition.
  */
-export type OperationComponentId = 'browser' | 'desktop';
+export type { OperationComponentId };
 
-export type OperationComponentState =
-  | 'not-installed'
-  | 'installing'
-  | 'needs-authorization'
-  | 'ready'
-  | 'failed'
-  | 'unsupported'
-  | 'disabled';
+export type { OperationComponentState };
 
-export type OperationComponentAction =
-  | 'refresh'
-  | 'install'
-  | 'update'
-  | 'repair'
-  | 'authorize'
-  | 'uninstall'
-  | 'enable'
-  | 'disable'
-  | 'login'
-  | 'save-login'
-  | 'clear-login';
+export type { OperationComponentAction };
 
-export type OperationComponentHint =
-  | 'legacy-browser-mcp'
-  | 'shared-browser-runtime'
-  | 'external-mcp'
-  | 'existing-installation'
-  | 'missing-accessibility'
-  | 'missing-screen-recording'
-  | 'screen-locked'
-  | 'no-gui-session';
+export type { OperationComponentHint };
 
 /** Staged progress of an in-flight component action. */
-export interface OperationComponentProgress {
-  phase: string;
-  /** Bytes received so far; present only while a download is running. */
-  receivedBytes?: number;
-  /** Total expected bytes; present only when the size is known. */
-  totalBytes?: number;
-}
+export type OperationComponentProgress = NonNullable<OperationComponentSnapshot['progress']>;
 
-export interface OperationComponentSnapshot {
-  id: OperationComponentId;
-  /** Upstream component name, e.g. `agent-browser` or `Cua Driver`. */
-  name: string;
-  state: OperationComponentState;
-  /** Who owns the installation: Wrenyard-managed or an external installation. */
-  source?: 'managed' | 'external';
-  version?: string;
-  /** Pinned upstream version this delivery targets. */
-  pinnedVersion: string;
-  path?: string;
-  /** Host the component belongs to (the daemon's machine). */
-  host: string;
-  platform: string;
-  arch: string;
-  checkedAt?: string;
-  progress?: OperationComponentProgress;
-  /** Sanitized failure reason; present only in the `failed` state. */
-  error?: string;
-  hints: OperationComponentHint[];
-  /** Actions currently offered for this snapshot; the UI renders only these. */
-  actions: OperationComponentAction[];
-  /**
-   * Present only while a managed browser login store exists: saved cookie
-   * domains and origin hostnames plus the store's save time. Values are never
-   * included.
-   */
-  loginState?: { domains: string[]; savedAt: string };
-}
+/**
+ * One operation component snapshot, aliased to the protocol shape. The
+ * protocol additionally carries an optional `runtimePresent` flag the
+ * Desktop surface ignores; the extra optional field is additive only.
+ */
+export type { OperationComponentSnapshot };
 
 export interface WrenyardShellApi {
   platform: NodeJS.Platform;

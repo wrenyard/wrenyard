@@ -7,7 +7,7 @@
  * persistence detail: producers map their own run state onto it.
  */
 
-import type { TaskUsage } from './task-run-metadata.ts'
+import type { TaskUsage } from './run-metadata.ts'
 
 export type RunRecordKind = 'task' | 'auxiliary'
 

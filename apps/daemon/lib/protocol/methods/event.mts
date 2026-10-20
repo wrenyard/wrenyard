@@ -1,17 +1,8 @@
 import type { JsonRecord, JsonSchema } from '../jsonrpc.mts'
 
-export interface EventListParams {
-  since?: number
-  limit?: number
-  /** Start at the current maximum event id when since is omitted. */
-  tail?: boolean
-}
 
-export interface EventListResult {
-  events: JsonRecord[]
-  count: number
-  cursor: number
-}
+export type { EventListParams, EventListResult } from '@wrenyard/protocol/event'
+export type { JsonRecord } from '@wrenyard/protocol/common'
 
 export const eventListParamsSchema = {
   type: 'object',

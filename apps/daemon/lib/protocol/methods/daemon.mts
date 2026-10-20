@@ -1,15 +1,12 @@
 import type { JsonSchema } from '../jsonrpc.mts'
 
-export interface DaemonShutdownParams {
-  reason?: string
-  force?: boolean
-}
 
-export interface DaemonShutdownResult {
-  ok: true
-  shutting_down: true
-  reason: string
-}
+export type {
+  DaemonShutdownParams,
+  DaemonShutdownResult,
+  DaemonStatusParams,
+  DaemonStatusResult,
+} from '@wrenyard/protocol/daemon'
 
 export const daemonShutdownParamsSchema = {
   type: 'object',
@@ -32,24 +29,6 @@ export const daemonShutdownResultSchema = {
 } as const satisfies JsonSchema
 
 // ── daemon.status ─────────────────────────────────────────────────────
-
-export interface DaemonStatusParams {}
-
-export interface DaemonStatusResult {
-  ok: true
-  shutting_down: boolean
-  idle: boolean
-  activeTaskCount: number
-  activeWorkflowCount: number
-  activeExecutionCount: number
-  /**
-   * Active taskgraph runs, distinct from the legacy `activeWorkflowCount`. The
-   * daemon always returns it; the schema keeps it optional so responses from
-   * older daemons that predate the field remain valid.
-   */
-  activeTaskGraphCount?: number
-  lowDisk: { status: 'ok' | 'low' | 'unavailable'; availableBytes: number | null; minimumBytes: number; error: string | null }
-}
 
 export const daemonStatusParamsSchema = {
   type: 'object',

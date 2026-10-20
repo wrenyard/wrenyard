@@ -1,5 +1,19 @@
 import type { JsonSchema } from '../jsonrpc.mts'
 
+export type {
+  WorkspaceVcsStatusEntry,
+  WorkspaceVcsStatusParams,
+  WorkspaceVcsStatusResult,
+  WorkspaceVcsDiffParams,
+  WorkspaceVcsDiffResult,
+  WorkspaceVcsCommitParams,
+  WorkspaceVcsCommitResult,
+  WorkspaceVcsPushParams,
+  WorkspaceVcsPushResult,
+  WorkspaceVcsPullParams,
+  WorkspaceVcsPullResult,
+} from '@wrenyard/protocol/workspace'
+
 const nullableStringSchema = {
   anyOf: [
     { type: 'string' },
@@ -8,24 +22,6 @@ const nullableStringSchema = {
 } as const satisfies JsonSchema
 
 // ─── workspace.vcs.status ──────────────────────────────────────────────
-
-export interface WorkspaceVcsStatusEntry {
-  path: string
-  index: string
-  worktree: string
-  origPath?: string
-}
-
-export interface WorkspaceVcsStatusParams {}
-
-export interface WorkspaceVcsStatusResult {
-  branch: string | null
-  head: string | null
-  upstream: string | null
-  ahead: number
-  behind: number
-  entries: WorkspaceVcsStatusEntry[]
-}
 
 export const workspaceVcsStatusParamsSchema = {
   type: 'object',
@@ -64,15 +60,6 @@ export const workspaceVcsStatusResultSchema = {
 
 // ─── workspace.vcs.diff ────────────────────────────────────────────────
 
-export interface WorkspaceVcsDiffParams {
-  paths?: string[]
-  staged?: boolean
-}
-
-export interface WorkspaceVcsDiffResult {
-  diff: string
-}
-
 export const workspaceVcsDiffParamsSchema = {
   type: 'object',
   properties: {
@@ -96,18 +83,6 @@ export const workspaceVcsDiffResultSchema = {
 } as const satisfies JsonSchema
 
 // ─── workspace.vcs.commit ──────────────────────────────────────────────
-
-export interface WorkspaceVcsCommitParams {
-  message: string
-  files: string[]
-}
-
-export interface WorkspaceVcsCommitResult {
-  hash: string
-  branch: string | null
-  files: string[]
-  shortstat: string
-}
 
 export const workspaceVcsCommitParamsSchema = {
   type: 'object',
@@ -142,18 +117,6 @@ export const workspaceVcsCommitResultSchema = {
 
 // ─── workspace.vcs.push ────────────────────────────────────────────────
 
-export interface WorkspaceVcsPushParams {}
-
-export interface WorkspaceVcsPushResult {
-  branch: string
-  remote: string
-  pushed: boolean
-  head?: string
-  summary: string
-  reason?: string
-  error?: string
-}
-
 export const workspaceVcsPushParamsSchema = {
   type: 'object',
   additionalProperties: false,
@@ -175,17 +138,6 @@ export const workspaceVcsPushResultSchema = {
 } as const satisfies JsonSchema
 
 // ─── workspace.vcs.pull ────────────────────────────────────────────────
-
-export interface WorkspaceVcsPullParams {}
-
-export interface WorkspaceVcsPullResult {
-  branch: string
-  remote: string
-  pulled: boolean
-  summary: string
-  reason?: string
-  error?: string
-}
 
 export const workspaceVcsPullParamsSchema = {
   type: 'object',

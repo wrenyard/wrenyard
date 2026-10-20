@@ -1,9 +1,4 @@
 import type { JsonSchema } from '../jsonrpc.mts'
-import type {
-  OperationComponentAction,
-  OperationComponentId,
-  OperationComponentSnapshot,
-} from '../../daemon/services/operation-components.mts'
 
 // ─── components.list / components.action ─────────────────────────────────────
 // Machine-local operation component status (agent-browser, Cua Driver) and the
@@ -11,20 +6,18 @@ import type {
 // an update, a repair or an operating-system permission request only ever
 // happens through an explicit `components.action` call from Desktop Settings.
 
-export type ComponentsListParams = Record<string, never>
 
-export type ComponentsListResult = {
-  components: OperationComponentSnapshot[]
-}
-
-export type ComponentsActionParams = {
-  id: OperationComponentId
-  action: OperationComponentAction
-}
-
-export type ComponentsActionResult = {
-  component: OperationComponentSnapshot
-}
+export type {
+  ComponentsListParams,
+  ComponentsListResult,
+  ComponentsActionParams,
+  ComponentsActionResult,
+  OperationComponentId,
+  OperationComponentAction,
+  OperationComponentSnapshot,
+  OperationComponentState,
+  OperationComponentHint,
+} from '@wrenyard/protocol/components'
 
 export const componentsListParamsSchema = {
   type: 'object',

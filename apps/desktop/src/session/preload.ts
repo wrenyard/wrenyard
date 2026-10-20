@@ -8,8 +8,10 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
-import type { ReasoningEffort } from '@wrenyard/models';
 import type {
+  SessionContextInspectParams,
+  SessionInterruptParams,
+  SessionMediaReadParams,
   SessionModelEntry,
   SessionPromptCancelParams,
   SessionPromptSuggestParams,
@@ -17,6 +19,7 @@ import type {
   SessionRoutesPreviewParams,
   SessionRoutesPreviewRole,
   SessionRoutesPreviewResult,
+  SessionSendParams,
 } from '@wrenyard/protocol';
 import type {
   AttachmentInput,
@@ -113,24 +116,13 @@ export const SESSION_CHANNELS = {
 export type SessionBridgeModelEntry = SessionModelEntry;
 
 /** Params of the read-only context inspection (`session.context.inspect`). */
-export interface SessionBridgeContextInspectRequest {
-  /** Omitted means a new session: resident layers plus the workspace snapshot. */
-  sessionId?: string;
-  /** Gateway public id the input box currently has selected. */
-  model: string;
-}
+export type SessionBridgeContextInspectRequest = SessionContextInspectParams;
 
 /** Params of the read-only route preview (`session.routes.preview`). */
 export type SessionBridgeRoutesPreviewRequest = SessionRoutesPreviewParams;
 
-export interface SessionBridgeSendRequest {
-  sessionId: string;
-  text: string;
-  /** A send always carries the selected public reasoning effort. */
-  model: { provider: string; model: string; reasoningEffort: ReasoningEffort; fast?: boolean };
-  /** Local attachment inputs forwarded untouched to the daemon. */
-  attachments?: AttachmentInput[];
-}
+/** Params of `session.send`; the bridge forwards the request untouched. */
+export type SessionBridgeSendRequest = SessionSendParams;
 
 /**
  * A composer attachment before or alongside a send. Extends the daemon
@@ -152,10 +144,7 @@ export interface DraftAttachment extends AttachmentInput {
   staged?: boolean;
 }
 
-export interface SessionBridgeMediaRequest {
-  sessionId: string;
-  path: string;
-}
+export type SessionBridgeMediaRequest = SessionMediaReadParams;
 
 export interface SessionMediaReadResult {
   /** Present for images; absent when the daemon only authorizes the path. */
@@ -164,10 +153,7 @@ export interface SessionMediaReadResult {
   path?: string;
 }
 
-export interface SessionBridgeInterruptRequest {
-  sessionId: string;
-  turn: number;
-}
+export type SessionBridgeInterruptRequest = SessionInterruptParams;
 
 export interface SessionBridgeEventPayload {
   sessionId: string;

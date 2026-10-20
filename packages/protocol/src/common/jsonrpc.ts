@@ -53,17 +53,20 @@ export type JsonRpcResponse<TResult = unknown, TData = unknown> =
   | JsonRpcSuccessResponse<TResult>
   | JsonRpcErrorResponse<TData>
 
-/**
- * Standard JSON-RPC 2.0 numeric error codes. Session/feature specific codes
- * are declared separately and must not collide with these.
- */
-export const JSON_RPC_ERROR_CODES = {
-  PARSE_ERROR: -32700,
-  INVALID_REQUEST: -32600,
-  METHOD_NOT_FOUND: -32601,
-  INVALID_PARAMS: -32602,
-  INTERNAL_ERROR: -32603,
-} as const
+/** Loose record shape used to type runtime JSON-schema literals. */
+export type JsonRecord = Record<string, unknown>
 
-export type JsonRpcStandardErrorCode =
-  typeof JSON_RPC_ERROR_CODES[keyof typeof JSON_RPC_ERROR_CODES]
+/**
+ * Minimal JSON-schema form used to `satisfies`-check `as const` schema
+ * literals; intentionally permissive, not a validating schema engine.
+ */
+export type JsonSchema = boolean | JsonRecord
+
+/**
+ * Canonical Wrenyard IPC protocol version.
+ *
+ * Clients send it in the `health.ping` handshake; clients validate the
+ * daemon's echoed value against it, and the daemon validates the client's
+ * value against it. Increment only for an incompatible wire change.
+ */
+export const WRENYARD_PROTOCOL_VERSION = 2

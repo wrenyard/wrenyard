@@ -1,23 +1,10 @@
 import type { JsonSchema } from '../jsonrpc.mts'
 
-export interface HealthPingParams {}
 
-export interface HealthPingResult {
-  ok: true
-  /**
-   * Integer IPC protocol version. Clients send their expected version in the
-   * handshake params and validate this echoed value; a missing value fails the
-   * client handshake closed.
-   */
-  protocolVersion: number
-  uptimeMs?: number
-  identity?: {
-    mode: 'source' | 'installed'
-    version?: string
-    checkout?: string
-    node?: string
-  }
-}
+export type {
+  HealthPingParams,
+  HealthPingResult,
+} from '@wrenyard/protocol/daemon'
 
 export const healthPingParamsSchema = {
   type: 'object',

@@ -8,11 +8,23 @@
  */
 
 import type { JsonSchema } from '../jsonrpc.mts'
-import type { Todo, TodoCreateInput, TodoUpdateInput } from '../../daemon/services/workspace-todo-service.mts'
 
-// Re-export the authoritative service types so protocol consumers import them
+// Re-export the authoritative wire types so protocol consumers import them
 // from the protocol module rather than reaching into the daemon service.
-export type { Todo, TodoStatus, TodoCreateInput, TodoUpdateInput } from '../../daemon/services/workspace-todo-service.mts'
+export type {
+  Todo,
+  TodoStatus,
+  TodoCreateInput,
+  TodoUpdateInput,
+  TodoListParams,
+  TodoListResult,
+  TodoGetParams,
+  TodoGetResult,
+  TodoCreateParams,
+  TodoCreateResult,
+  TodoUpdateParams,
+  TodoUpdateResult,
+} from '@wrenyard/protocol/workspace'
 
 /** The complete, ordered set of valid todo statuses shared by every schema. */
 const TODO_STATUS_VALUES = ['open', 'in_progress', 'done', 'cancelled'] as const
@@ -46,12 +58,6 @@ const todoSchema = {
 
 // ─── todo.list ─────────────────────────────────────────────────────
 
-export type TodoListParams = Record<string, never>
-
-export interface TodoListResult {
-  todos: Todo[]
-}
-
 export const todoListParamsSchema = {
   type: 'object',
   description: 'List every workspace todo, ordered by id. Read-only.',
@@ -70,14 +76,6 @@ export const todoListResultSchema = {
 } as const satisfies JsonSchema
 
 // ─── todo.get ──────────────────────────────────────────────────────
-
-export interface TodoGetParams {
-  id: string
-}
-
-export interface TodoGetResult {
-  todo: Todo
-}
 
 export const todoGetParamsSchema = {
   type: 'object',
@@ -98,12 +96,6 @@ export const todoGetResultSchema = {
 } as const satisfies JsonSchema
 
 // ─── todo.create ───────────────────────────────────────────────────
-
-export type TodoCreateParams = TodoCreateInput
-
-export interface TodoCreateResult {
-  todo: Todo
-}
 
 export const todoCreateParamsSchema = {
   type: 'object',
@@ -139,12 +131,6 @@ export const todoCreateResultSchema = {
 } as const satisfies JsonSchema
 
 // ─── todo.update ───────────────────────────────────────────────────
-
-export type TodoUpdateParams = TodoUpdateInput
-
-export interface TodoUpdateResult {
-  todo: Todo
-}
 
 export const todoUpdateParamsSchema = {
   type: 'object',

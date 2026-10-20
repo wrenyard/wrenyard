@@ -5,6 +5,8 @@ import { clipboard, dialog, ipcMain, nativeImage, shell, type IpcMainInvokeEvent
 import { WrenyardIpcClient, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control';
 import type { ReasoningEffort } from '@wrenyard/models';
 import type { ProviderListResult, ProviderQuotaResult } from '@wrenyard/protocol/provider';
+import type { SessionEventsResult } from '@wrenyard/protocol/session';
+import type { TaskRunCancelResult } from '@wrenyard/protocol/task';
 import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';
 import type { TaskRunUsage } from '../shell-contract.js';
 import {
@@ -14,6 +16,7 @@ import {
   type TranscriptRunInfo,
 } from '../pet/shared/taskgraph.js';
 import { toModelEntries } from './model-entries.js';
+import { SESSION_CHANNELS } from './preload.js';
 import type {
   SessionBridgeEventPayload,
   SessionBridgeLivePayload,
@@ -30,26 +33,7 @@ import {
 import type { SessionSeenStore } from './seen-store.js';
 import { StaleGenerationError } from '../main/remote/context.js';
 
-export const SESSION_CHANNELS = {
-  list: 'session:list', create: 'session:create', ledger: 'session:ledger',
-  ledgerSnapshot: 'session:ledger-snapshot',
-  send: 'session:send', interrupt: 'session:interrupt', models: 'session:models',
-  cancelTask: 'session:cancel-task',
-  context: 'session:context', tasks: 'session:tasks',
-  taskRunEvents: 'session:task-run-events',
-  routesPreview: 'session:routes-preview',
-  promptSuggest: 'session:prompt-suggest', promptCancel: 'session:prompt-cancel',
-  mediaRead: 'session:media-read', mediaReveal: 'session:media-reveal',
-  mediaOriginal: 'session:media-original', mediaOpen: 'session:media-open', mediaCopy: 'session:media-copy',
-  delete: 'session:delete', mediaPick: 'session:media-pick',
-  rename: 'session:rename', regenerateTitle: 'session:regenerate-title',
-  updateMetadata: 'session:update-metadata',
-  mediaDescribe: 'session:media-describe', mediaStageClipboard: 'session:media-stage-clipboard',
-  mediaDiscard: 'session:media-discard',
-  seen: 'session:seen', seenState: 'session:seen-state',
-  seenChanged: 'session:seen-changed',
-  event: 'session:event', live: 'session:live',
-} as const;
+export { SESSION_CHANNELS };
 export type {
   SessionBridge, SessionBridgeContextInspectRequest, SessionBridgeEventPayload,
   SessionBridgeInterruptRequest, SessionBridgeLivePayload, SessionBridgeMediaRequest,
@@ -112,7 +96,7 @@ export interface SessionRegistration {
   reset(): void;
   close(): Promise<void>;
 }
-interface EventPage { events: LedgerEvent[]; lastSeq: number; live?: LiveCall[] }
+type EventPage = SessionEventsResult;
 interface PollState {
   ownerId: number;
   target: WebContents;
@@ -477,7 +461,7 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
   handle(SESSION_CHANNELS.interrupt, async (_event, value) => { await request('session.interrupt', value); });
   handle(SESSION_CHANNELS.cancelTask, async (_event, value) => {
     if (typeof value !== 'string' || value === '') throw new Error('Invalid taskRunId');
-    const result = await request<{ ok?: boolean; message?: string }>('task.run.cancel', { task_run_id: value });
+    const result = await request<TaskRunCancelResult>('task.run.cancel', { task_run_id: value });
     if (result?.ok === false) throw new Error(result.message ?? '取消任务失败');
   });
   handle(SESSION_CHANNELS.models, async () => {

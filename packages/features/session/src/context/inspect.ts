@@ -26,37 +26,28 @@ import {
 import { renderEventText } from './render.ts';
 import { buildReason } from '../reasoning/prompt.ts';
 import type { LedgerPort, SessionHost, SessionViewInfo } from '../ports.ts';
+import type {
+  ContextInspectCalibration,
+  ContextInspectFiles,
+  ContextInspectModel,
+  ContextItemKind,
+  ContextLayerId,
+  ContextLayerTokens,
+  SessionContextInspectParams,
+} from '@wrenyard/protocol/session';
 
-/** Every layer of the main reasoning view except the transient `wy-user`. */
-export type ContextLayerId = 'wy-system' | 'wy-global' | 'wy-role' | 'wy-workspace' | 'wy-ctx' | 'wy-info';
+export type {
+  ContextInspectCalibration,
+  ContextInspectFiles,
+  ContextInspectModel,
+  ContextItemKind,
+  ContextLayerId,
+  ContextLayerTokens,
+} from '@wrenyard/protocol/session';
 
-/** How one context item reads in the breakdown. */
-export type ContextItemKind =
-  | 'user'
-  | 'assistant'
-  | 'thinking'
-  | 'reply'
-  | 'doc'
-  | 'search'
-  | 'memory'
-  | 'files'
-  | 'action-result'
-  | 'ws-update'
-  | 'interrupt'
-  | 'error';
+export type ContextInspectRequest = SessionContextInspectParams;
 
-export interface ContextInspectRequest {
-  /** Omitted means a new session: resident layers plus the workspace snapshot. */
-  sessionId?: string;
-  /** Gateway public id of the model the input box currently has selected. */
-  model: string;
-}
-
-export interface ContextLayerTokens {
-  id: ContextLayerId;
-  tokens: number;
-}
-
+/** `step` is feature-local; the protocol DTO carries `cycle`. */
 export interface ContextItem {
   seq: number;
   turn: number;
@@ -65,29 +56,6 @@ export interface ContextItem {
   /** Document/memory path, search intent, file list, or the first line of a message. */
   label: string;
   tokens: number;
-}
-
-export interface ContextInspectModel {
-  publicId: string;
-  contextWindow?: number;
-  maxOutputTokens?: number;
-}
-
-export interface ContextInspectCalibration {
-  spanId: string;
-  model: string;
-  /** The reasoning span's `request.inputEstimate`. */
-  estimated: number;
-  /** The span's `metrics.usage.inputTokens` (including cached input). */
-  actual: number;
-}
-
-/** Persisted session-file image counts for the inspected model. */
-export interface ContextInspectFiles {
-  /** Selected recent occurrences carried for the inspected model (prepared preview). */
-  images: number;
-  /** Occurrences omitted: older than the window, unprepared, or unseen by the model. */
-  omitted: number;
 }
 
 export interface ContextInspection {

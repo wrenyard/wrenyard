@@ -1,49 +1,18 @@
-import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/providers/catalog'
+import { REASONING_EFFORTS } from '@wrenyard/providers/catalog'
 import type { JsonSchema } from '../jsonrpc.mts'
 
-export interface GatewayConnectionParams {}
-
-export interface GatewayConnectionResult {
-  openaiChatBaseUrl: string
-  openaiResponsesBaseUrl: string
-  anthropicBaseUrl: string
-  token: string
-  models: Array<{
-    id: string
-    publicId: string
-    provider: string
-    /** Gateway protocols this exact model supports; the session picks its adapter from this list. */
-    protocols: readonly ('openai_chat' | 'openai_responses' | 'anthropic_messages')[]
-    displayName: string
-    contextWindow?: number
-    maxTokens?: number
-    taskOnly?: boolean
-    family?: 'claude'
-    claudeTier?: 'haiku' | 'sonnet' | 'opus'
-    supports1MContext?: boolean
-    /** True when a verified, distinct upstream Fast mode exists for this route. */
-    supportsFast?: boolean
-    /** Catalog intelligence tier; absent when genuinely unknown (a route naming
-     * no registered canonical model). */
-    intelligence?: 'low' | 'mid' | 'high' | 'premium'
-    maxOutputTokens?: number
-    capabilities?: readonly ('text' | 'image')[]
-    /**
-     * The legal reasoning-effort levels this model accepts, in ascending
-     * intensity. A per-run reasoning-effort choice is validated against this
-     * exact ladder; an EMPTY ladder means no selectable level.
-     */
-    reasoningEfforts: readonly ReasoningEffort[]
-    speed?: number
-    /** USD per million tokens: [cached, input, output]. */
-    pricing?: readonly [number, number, number]
-    /** Current circuit state of the route; absent while it is healthy. */
-    routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'access_denied' | 'model_unavailable'
-    routeUntil?: string
-    routePhase?: 'closed' | 'open'
-    faultKind?: string
-  }>
-}
+export type {
+  GatewayConnectionParams,
+  GatewayConnection as GatewayConnectionResult,
+  GatewayPortMode,
+  GatewayEffectiveConnection,
+  GatewaySettingsParams,
+  GatewaySettings as GatewaySettingsResult,
+  GatewayPortChoice as GatewaySettingsPortChoice,
+  GatewayTokenReplacement,
+  GatewaySettingsSaveInput as GatewaySettingsSaveParams,
+  GatewaySettingsSaveResult,
+} from '@wrenyard/protocol/gateway'
 
 export const gatewayConnectionParamsSchema = {
   type: 'object', properties: {}, additionalProperties: false,
@@ -102,66 +71,6 @@ export const gatewayConnectionResultSchema = {
 // change is never confused with a live one. Reading reports whether a token is
 // persisted rather than returning a saved value that differs from the effective
 // one; only the effective token is exposed, for copy/reveal.
-
-/** How the gateway chooses the loopback port it binds. */
-export type GatewayPortMode = 'random' | 'fixed'
-
-/** The connection the running daemon currently serves (captured at bind time). */
-export type GatewayEffectiveConnection = {
-  host: string
-  port: number
-  openaiChatBaseUrl: string
-  openaiResponsesBaseUrl: string
-  anthropicBaseUrl: string
-  /** The token the running daemon accepts right now. */
-  token: string
-}
-
-export interface GatewaySettingsParams {}
-
-export type GatewaySettingsResult = {
-  /** Saved port choice; takes effect at the next bind. */
-  savedPortMode: GatewayPortMode
-  /** Saved fixed port; present only when `savedPortMode` is `fixed`. */
-  savedPort?: number
-  /** Whether a persisted token exists; the saved value is never returned. */
-  tokenSaved: boolean
-  /** True when the saved port choice differs from the choice used at this bind. */
-  portChangePending: boolean
-  /** True when the persisted token differs from the effective token. */
-  tokenChangePending: boolean
-  /** The connection the running daemon serves right now. */
-  effective: GatewayEffectiveConnection
-}
-
-/** Port choice for a save. `fixed` requires a validated 1–65535 TCP port. */
-export type GatewaySettingsPortChoice =
-  | { mode: 'random' }
-  | { mode: 'fixed'; port: number }
-
-/** Persisted-token replacement: a caller-supplied value or a fresh CSPRNG one. */
-export type GatewayTokenReplacement =
-  | { kind: 'custom'; token: string }
-  | { kind: 'generate' }
-
-export interface GatewaySettingsSaveParams {
-  /** Omit to keep the saved port choice unchanged. */
-  port?: GatewaySettingsPortChoice
-  /** Omit to keep the persisted token unchanged. */
-  token?: GatewayTokenReplacement
-  /** Explicit acknowledgement required before any token replacement. */
-  confirmTokenReplacement?: boolean
-}
-
-export type GatewaySettingsSaveResult = GatewaySettingsResult & {
-  ok: true
-  /**
-   * Present when a token replacement was persisted: the running gateway keeps
-   * accepting the previous token until the next bind, after which existing
-   * external clients must use the new credentials.
-   */
-  warning?: string
-}
 
 /**
  * Returned whenever a token replacement is persisted. The running daemon keeps

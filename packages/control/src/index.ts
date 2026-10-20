@@ -1,4 +1,11 @@
-import type { ProviderListResult, ProviderQuotaResult, ProviderListModel } from '@wrenyard/protocol/provider';
+import type { ProviderListResult, ProviderQuotaResult } from '@wrenyard/protocol/provider';
+import type {
+  GatewayConnection as WrenyardGatewayConnection,
+  GatewaySettings as WrenyardGatewaySettings,
+  GatewaySettingsSaveInput as WrenyardGatewaySettingsSaveInput,
+  GatewaySettingsSaveResult as WrenyardGatewaySettingsSaveResult,
+} from '@wrenyard/protocol/gateway';
+import type { TaskRunOutputResult as WrenyardTaskRunOutputResult } from '@wrenyard/protocol/task';
 import { createConnection, type Socket } from "node:net";
 import { protocolVersionMismatchMessage, WRENYARD_PROTOCOL_VERSION } from "./transport/index.ts";
 
@@ -43,129 +50,27 @@ export interface WrenyardIpcRequestOptions {
   timeoutMs?: number | null;
 }
 
-/** USD per million tokens: [cached, input, output]. */
-export type WrenyardGatewayModelPricing = readonly [number, number, number];
-
-/** The Gateway protocol entry points a model may be served through. */
-export type WrenyardGatewayProtocol = 'openai_chat' | 'openai_responses' | 'anthropic_messages';
-
-export interface WrenyardGatewayModel {
-  /** The registered model identity. It is never a provider-qualified id and
-   * never an upstream wire spelling. */
-  id: string;
-  /** Internal provider-scoped route key (`provider/id`) used for route health,
-   * quota and statistics. Provider selection is a separate dimension. */
-  publicId: string;
-  provider: string;
-  /**
-   * The Gateway protocols this exact model supports, not the provider's blanket
-   * capabilities. A session selects its adapter from this list, by precedence
-   * Chat → Responses → Messages.
-   */
-  protocols: readonly WrenyardGatewayProtocol[];
-  displayName: string;
-  contextWindow?: number;
-  maxTokens?: number;
-  taskOnly?: boolean;
-  family?: 'claude';
-  claudeTier?: 'haiku' | 'sonnet' | 'opus';
-  supports1MContext?: boolean;
-  /** True when a verified, distinct upstream Fast mode exists for this route. */
-  supportsFast?: boolean;
-  /** Catalog intelligence tier; absent when genuinely unknown (a route naming
-   * no registered canonical model). */
-  intelligence?: 'low' | 'mid' | 'high' | 'premium';
-  maxOutputTokens?: number;
-  capabilities?: readonly ('text' | 'image')[];
-  /**
-   * The legal reasoning efforts this model accepts, in ascending intensity.
-   * Replaces the legacy fixed `reasoningEffort` field on the public gateway
-   * contract; absent when the model's ladder is unknown.
-   */
-  reasoningEfforts?: ProviderListModel['reasoningEfforts'];
-  routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'access_denied' | 'model_unavailable';
-  routeUntil?: string;
-  /** Circuit phase of the route; absent while the route is healthy. */
-  routePhase?: 'closed' | 'open';
-  /** The fault kind behind the route's block, when the Gateway knows it. */
-  faultKind?: string;
-  speed?: number;
-  pricing?: WrenyardGatewayModelPricing;
-}
-
-export interface WrenyardGatewayConnection {
-  openaiChatBaseUrl: string;
-  openaiResponsesBaseUrl: string;
-  anthropicBaseUrl: string;
-  token: string;
-  models: WrenyardGatewayModel[];
-}
-
-/** How the gateway chooses the loopback port it binds. */
-export type WrenyardGatewayPortMode = 'random' | 'fixed';
-
-/** The gateway connection the running daemon currently serves (bind-time). */
-export interface WrenyardGatewayEffectiveConnection {
-  host: string;
-  port: number;
-  openaiChatBaseUrl: string;
-  openaiResponsesBaseUrl: string;
-  anthropicBaseUrl: string;
-  /** The token the running daemon accepts right now. */
-  token: string;
-}
+export type {
+  GatewayConnection as WrenyardGatewayConnection,
+  GatewayEffectiveConnection as WrenyardGatewayEffectiveConnection,
+  GatewayModel as WrenyardGatewayModel,
+  GatewayModelPricing as WrenyardGatewayModelPricing,
+  GatewayPortChoice as WrenyardGatewayPortChoice,
+  GatewayPortMode as WrenyardGatewayPortMode,
+  GatewayProtocol as WrenyardGatewayProtocol,
+  GatewaySettings as WrenyardGatewaySettings,
+  GatewaySettingsSaveInput as WrenyardGatewaySettingsSaveInput,
+  GatewaySettingsSaveResult as WrenyardGatewaySettingsSaveResult,
+  GatewayTokenReplacement as WrenyardGatewayTokenReplacement,
+} from '@wrenyard/protocol/gateway';
 
 /**
- * Persisted gateway access settings plus the effective connection. The saved
- * port choice is what the next bind will use; `effective` is what the running
- * daemon serves right now. `tokenSaved` reports whether a token is persisted
- * without returning its value, and the pending flags say whether a saved port
- * or token change has not yet taken effect.
- */
-export interface WrenyardGatewaySettings {
-  savedPortMode: WrenyardGatewayPortMode;
-  savedPort?: number;
-  tokenSaved: boolean;
-  portChangePending: boolean;
-  tokenChangePending: boolean;
-  effective: WrenyardGatewayEffectiveConnection;
-}
-
-/** Port choice for a save; `fixed` requires a validated 1–65535 TCP port. */
-export type WrenyardGatewayPortChoice =
-  | { mode: 'random' }
-  | { mode: 'fixed'; port: number };
-
-/** Persisted-token replacement: a caller-supplied value or a fresh generated one. */
-export type WrenyardGatewayTokenReplacement =
-  | { kind: 'custom'; token: string }
-  | { kind: 'generate' };
-
-export interface WrenyardGatewaySettingsSaveInput {
-  /** Omit to keep the saved port choice unchanged. */
-  port?: WrenyardGatewayPortChoice;
-  /** Omit to keep the persisted token unchanged. */
-  token?: WrenyardGatewayTokenReplacement;
-  /** Explicit acknowledgement required before any token replacement. */
-  confirmTokenReplacement?: boolean;
-}
-
-export interface WrenyardGatewaySettingsSaveResult extends WrenyardGatewaySettings {
-  ok: true;
-  /**
-   * Present when a token replacement was persisted: the running gateway keeps
-   * the previous token until the next bind, after which existing external
-   * clients must update their credentials.
-   */
-  warning?: string;
-}
-
-/**
- * Terminal result returned by `task.run.wait`. This reuses the same completion
- * envelope as the Foreman `TaskRunOutputResult` protocol type; do not invent a
- * second envelope. Desktop and other control consumers read this shape
- * directly, with `output`/`error`/`failure_category` carrying the full
- * terminal metadata for done/failed/cancelled/interrupted runs.
+ * Terminal result returned by `task.run.wait`. This is the Foreman
+ * `TaskRunOutputResult` protocol type; control re-exports it under the legacy
+ * `WrenyardTaskRunOutputResult` name so existing consumers keep one import
+ * site. Desktop and other control consumers read this shape directly, with
+ * `output`/`error`/`failure_category` carrying the full terminal metadata for
+ * done/failed/cancelled/interrupted runs.
  *
  * `task_id` (the persisted definition template) and `usage` are required;
  * `resolved` is present only when the run has a schema-valid dispatch snapshot.
@@ -173,79 +78,19 @@ export interface WrenyardGatewaySettingsSaveResult extends WrenyardGatewaySettin
  * resolves from its registry; it is optional and absent rather than guessed
  * when the definition cannot be resolved.
  */
-export interface WrenyardTaskRunOutputResult {
-  task_run_id: string;
-  task_id: string;
-  /** Authoritative definition display name (builtin or project), sent only
-   * when the daemon's registry can resolve it. */
-  task_name?: string;
-  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
-  summary?: string;
-  output: unknown;
-  error?: string | null;
-  failure_category?: string;
-  suggestion?: string;
-  error_message?: string;
-  pid?: number;
-  resolved?: WrenyardTaskResolvedDispatch;
-  usage: WrenyardTaskUsage;
-  _meta?: Record<string, unknown>;
-}
+export type { TaskRunOutputResult as WrenyardTaskRunOutputResult } from '@wrenyard/protocol/task';
 
-/** Mirrors the frozen snake_case wire DTO `TaskReferencePricing`. */
-export interface WrenyardTaskReferencePricing {
-  input_usd_per_million?: number;
-  output_usd_per_million?: number;
-  cached_input_usd_per_million?: number;
-  cache_write_input_usd_per_million?: number;
-  source?: string;
-  checked_at?: string;
-}
+/** Frozen snake_case wire DTO `TaskReferencePricing`, re-exported under the legacy name. */
+export type { TaskReferencePricing as WrenyardTaskReferencePricing } from '@wrenyard/protocol/task';
 
-/** Mirrors the frozen snake_case wire DTO `TaskResolvedSpeed`. */
-export interface WrenyardTaskResolvedSpeed {
-  effective_tps: number;
-  source: 'local_31d' | 'provider_override' | 'catalog_default';
-  sample_count: number;
-  checked_at: string;
-  expected_tps_met: boolean;
-  degradation_reason?: string;
-}
+/** Frozen snake_case wire DTO `TaskResolvedSpeed`, re-exported under the legacy name. */
+export type { TaskResolvedSpeed as WrenyardTaskResolvedSpeed } from '@wrenyard/protocol/task';
 
-/** Mirrors the frozen snake_case wire DTO `TaskResolvedDispatch`. */
-export interface WrenyardTaskResolvedDispatch {
-  requested_agent_runtime: string;
-  profile: string;
-  client: string;
-  provider: string;
-  model: string;
-  model_id: string;
-  mode: 'native' | 'gateway';
-  speed: WrenyardTaskResolvedSpeed;
-  intelligence: string;
-  reference_pricing: WrenyardTaskReferencePricing;
-  /** Actual reasoning effort emitted by the resolved dispatch DTO. */
-  reasoningEffort?: NonNullable<ProviderListModel['reasoningEfforts']>[number];
-  protocol?: string;
-}
+/** Frozen snake_case wire DTO `TaskResolvedDispatch`, re-exported under the legacy name. */
+export type { TaskResolvedDispatch as WrenyardTaskResolvedDispatch } from '@wrenyard/protocol/task';
 
-/** Mirrors the frozen snake_case wire DTO `TaskUsage`. Unknown numerics are optional. */
-export interface WrenyardTaskUsage {
-  completeness: 'complete' | 'partial' | 'unavailable';
-  attempt_count: number;
-  usage_event_count: number;
-  input_tokens?: number;
-  cached_input_tokens?: number;
-  cache_read_input_tokens?: number;
-  cache_creation_input_tokens?: number;
-  output_tokens?: number;
-  total_tokens?: number;
-  generation_ms?: number;
-  output_tps?: number;
-  reference_cost_usd?: number;
-  reference_cost_complete: boolean;
-  reference_cost_basis?: 'catalog_reference';
-}
+/** Frozen snake_case wire DTO `TaskUsage`. Unknown numerics are optional. Re-exported under the legacy name. */
+export type { TaskUsage as WrenyardTaskUsage } from '@wrenyard/protocol/task';
 
 export type WrenyardProviderStatus = ProviderListResult['providers'][number];
 

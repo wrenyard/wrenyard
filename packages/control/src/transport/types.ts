@@ -1,27 +1,14 @@
+export type {
+  JsonRpcErrorObject,
+  JsonRpcErrorResponse,
+  JsonRpcId,
+  JsonRpcResponse,
+  JsonRpcSuccessResponse,
+} from '@wrenyard/protocol/common'
+
+export { WRENYARD_PROTOCOL_VERSION } from '@wrenyard/protocol/common'
+
 export type NdjsonChunk = Buffer | string
-
-/** Request/response correlation id. `null` is allowed by JSON-RPC 2.0. */
-export type JsonRpcId = string | number | null
-
-export interface JsonRpcErrorObject {
-  code: number
-  message: string
-  data?: unknown
-}
-
-export interface JsonRpcSuccessResponse<TResult = unknown> {
-  jsonrpc: '2.0'
-  result: TResult
-  id: JsonRpcId
-}
-
-export interface JsonRpcErrorResponse {
-  jsonrpc: '2.0'
-  error: JsonRpcErrorObject
-  id: JsonRpcId
-}
-
-export type JsonRpcResponse<TResult = unknown> = JsonRpcSuccessResponse<TResult> | JsonRpcErrorResponse
 
 export interface FrameDecoderOptions {
   encoding?: BufferEncoding
@@ -47,12 +34,3 @@ export class NdjsonFrameError extends Error {
   }
 }
 
-/**
- * Canonical Wrenyard IPC protocol version.
- *
- * This is the single definition shared by every client and the daemon: clients
- * send it in the `health.ping` handshake, clients validate the daemon's echoed
- * value against it, and the daemon validates the client's value against it.
- * Increment only for an incompatible wire change.
- */
-export const WRENYARD_PROTOCOL_VERSION = 2

@@ -8,16 +8,33 @@
   "exports": {
     ".": "./src/index.ts",
     "./common": "./src/common/index.ts",
+    "./session": "./src/session/index.ts",
+    "./task": "./src/task/index.ts",
+    "./taskgraph": "./src/taskgraph/index.ts",
+    "./activity": "./src/activity/index.ts",
+    "./agent": "./src/agent/index.ts",
+    "./bot": "./src/bot/index.ts",
+    "./client": "./src/client/index.ts",
+    "./components": "./src/components/index.ts",
+    "./daemon": "./src/daemon/index.ts",
+    "./event": "./src/event/index.ts",
+    "./gateway": "./src/gateway/index.ts",
+    "./stats": "./src/stats/index.ts",
+    "./storage": "./src/storage/index.ts",
     "./exec": "./src/exec/index.ts",
     "./provider": "./src/provider/index.ts",
+    "./project": "./src/project/index.ts",
+    "./routine": "./src/routine/index.ts",
     "./update-feed": "./src/update-feed.ts",
-    "./tps": "./src/tps.ts"
+    "./workspace": "./src/workspace/index.ts",
+    "./tps": "./src/task/tps.ts"
   },
   "scripts": {
     "test": "tsx --test src/*.test.ts"
   },
   "dependencies": {
-    "@wrenyard/models": "workspace:*"
+    "@wrenyard/models": "workspace:*",
+    "@wrenyard/session": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.9.0"

@@ -7,8 +7,22 @@
 
 import type { JsonSchema } from '../jsonrpc.mts'
 
-/** The document kinds shared by every workspace.doc schema. */
-export type WorkspaceDocKind = 'spec' | 'report' | 'handoff'
+export type {
+  WorkspaceDocKind,
+  WorkspaceDocListParams,
+  WorkspaceDocEntry,
+  WorkspaceDocListResult,
+  WorkspaceDocReadParams,
+  WorkspaceDocReadResult,
+  WorkspaceDocCreateParams,
+  WorkspaceDocCreateResult,
+  WorkspaceDocUpdateParams,
+  WorkspaceDocUpdateResult,
+  WorkspaceDocEdit,
+  WorkspaceDocEditParams,
+  WorkspaceDocDeleteParams,
+  WorkspaceDocDeleteResult,
+} from '@wrenyard/protocol/workspace'
 
 /** Kind discriminator shared by every workspace.doc schema. */
 const docKindProperty = {
@@ -21,24 +35,6 @@ const docKindProperty = {
 const DOC_NAME_DESCRIPTION = 'The full document name, as returned by workspace.doc.list or workspace.doc.create.'
 
 // ─── workspace.doc.list ────────────────────────────────────────────
-
-export interface WorkspaceDocListParams {
-  project: string
-  kind?: WorkspaceDocKind
-}
-
-export interface WorkspaceDocEntry {
-  project: string
-  kind: WorkspaceDocKind
-  name: string
-  title: string
-  status?: string
-  updated?: string
-}
-
-export interface WorkspaceDocListResult {
-  documents: WorkspaceDocEntry[]
-}
 
 export const workspaceDocListParamsSchema = {
   type: 'object',
@@ -83,12 +79,6 @@ export const workspaceDocListResultSchema = {
 
 // ─── workspace.doc.read ────────────────────────────────────────────
 
-export type WorkspaceDocReadParams = {
-  project: string
-} & ({ kind: WorkspaceDocKind; name: string; id?: never } | { id: 'AGENTS.md'; kind?: never; name?: never })
-
-export type WorkspaceDocReadResult = WorkspaceDocReadParams & { title: string; content: string; version: string }
-
 export const workspaceDocReadParamsSchema = {
   type: 'object',
   properties: { project: { type: 'string', minLength: 1 }, kind: docKindProperty, name: { type: 'string', minLength: 1, description: DOC_NAME_DESCRIPTION }, id: { type: 'string', const: 'AGENTS.md' } },
@@ -107,22 +97,6 @@ export const workspaceDocReadResultSchema = {
 } as const satisfies JsonSchema
 
 // ─── workspace.doc.create ──────────────────────────────────────────
-
-export interface WorkspaceDocCreateParams {
-  project: string
-  kind: WorkspaceDocKind
-  name: string
-  content: string
-}
-
-export interface WorkspaceDocCreateResult {
-  project: string
-  kind: WorkspaceDocKind
-  name: string
-  title: string
-  change: 'created'
-  version: string
-}
 
 export const workspaceDocCreateParamsSchema = {
   type: 'object',
@@ -161,10 +135,6 @@ export const workspaceDocCreateResultSchema = {
 
 // ─── workspace.doc.update ──────────────────────────────────────────
 
-export type WorkspaceDocUpdateParams = WorkspaceDocReadParams & { content: string; base_version: string }
-
-export type WorkspaceDocUpdateResult = WorkspaceDocReadParams & { title: string; change: 'updated'; version: string }
-
 export const workspaceDocUpdateParamsSchema = {
   type: 'object',
   properties: { project: { type: 'string', minLength: 1 }, kind: docKindProperty, name: { type: 'string', minLength: 1 }, id: { type: 'string', const: 'AGENTS.md' }, content: { type: 'string' }, base_version: { type: 'string', minLength: 1 } },
@@ -194,17 +164,6 @@ export const workspaceDocUpdateResultSchema = {
 
 // ─── workspace.doc.edit ────────────────────────────────────────────
 
-export interface WorkspaceDocEdit {
-  old: string
-  new: string
-}
-
-export type WorkspaceDocEditParams = {
-  project: string
-  edits: WorkspaceDocEdit[]
-  base_version?: string
-} & ({ kind: WorkspaceDocKind; name: string; id?: never } | { id: 'AGENTS.md'; kind?: never; name?: never; base_version: string })
-
 const workspaceDocEditEntrySchema = {
   type: 'object',
   required: ['old', 'new'],
@@ -232,22 +191,6 @@ export const workspaceDocEditParamsSchema = {
 } as const satisfies JsonSchema
 
 // ─── workspace.doc.delete ──────────────────────────────────────────
-
-export interface WorkspaceDocDeleteParams {
-  project: string
-  kind: WorkspaceDocKind
-  name: string
-  /** Version token from workspace.doc.read; the optimistic concurrency token. */
-  base_version: string
-}
-
-export interface WorkspaceDocDeleteResult {
-  project: string
-  kind: WorkspaceDocKind
-  name: string
-  change: 'deleted'
-  version: string
-}
 
 export const workspaceDocDeleteParamsSchema = {
   type: 'object',
