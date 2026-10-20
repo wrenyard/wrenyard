@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { PanelRight } from 'lucide-react';
+import { ChartColumn, PanelRight } from 'lucide-react';
 import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { TitleBarAuxiliary } from '@/renderer/components/page';
 import { UsageCard } from '@/renderer/components/usage/UsageCard';
 import { QuotaCardActions, QuotaPanel } from '@/renderer/app/statusbar/QuotaPanel';
+import { shell } from '@/renderer/lib/desktop';
 import { useQuotaFocus } from '@/renderer/lib/quota-focus';
 import {
   closeSessionInspector,
@@ -62,11 +63,22 @@ function SessionInspectorUsageBody() {
           modelName={data.models.find((entry) => entry.publicId === data.modelId)?.displayName}
         />
       </UsageCard>
-      <UsageCard id="session" title="本会话用量">
+      <UsageCard
+        id="session"
+        title="本会话用量"
+        footer={(
+          <>
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{note ?? ''}</span>
+            <Button variant="outline" size="xs" onClick={() => void shell.navigate('stats')}>
+              <ChartColumn />
+              工房台账
+            </Button>
+          </>
+        )}
+      >
         <SessionUsagePanel
           clusters={data.clusters}
           groups={{ reason: data.callGroups.reason, aux: data.callGroups.aux, task: data.taskGroups }}
-          note={note}
           rootRef={panelRef}
           currency={data.currency}
         />
