@@ -1,7 +1,10 @@
 import { createAgentClients, type AgentRequest, type AgentSession } from '@wrenyard/clients';
+import { clientStateDirForEnv } from '@wrenyard/agent-client/native';
 import { ExecService, type ExecRequest } from '@wrenyard/exec';
+import { armRunHomeSessionPreserve, clearRunHomeSessionPreserveSlot } from '../../../../../packages/execution/src/index.ts';
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { delimiter, join } from 'node:path'
 import type { ForemanDatabase } from '../../db/types.mts'
 import { resolveWrenyardSuiteRoot } from '../../layout/suite-root.mts'
@@ -195,6 +198,10 @@ interface RegistryEntry {
   sawErrorResult: boolean
   pendingNativeSessionId?: string
   pendingClientFamily?: ClientFamily
+  /** Native session resumed by this execution (`opts.resume`), when set. */
+  resumeSessionId?: string
+  /** Client family chosen at launch; used for codebuddy-only session snapshots. */
+  launchClientFamily?: ClientFamily
   pendingFailureClass?: string
   /** Resolved by the attempt-deadline (timeout) handler so a bounded
    *  stream-drain await converges at the deadline instead of hanging on a
@@ -776,6 +783,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       sawTerminalResult: false,
       sawErrorResult: false,
       pendingClientFamily: opts.clientFamily,
+      resumeSessionId: opts.resume,
+      launchClientFamily: opts.clientFamily,
     }
   }
 
@@ -883,6 +892,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         this.buildReasoningEffortPlanEnv(entry.executionId, opts.dispatchSnapshot?.fast),
         entry.executionId,
       )
+      if (clientId === 'codebuddy') {
+        baseEnv.WRENYARD_EXECUTION_ID = entry.executionId
+      }
       const operationOptions = {
         env: prepared ? prepared.applyEnv(baseEnv) : baseEnv,
       };
@@ -1015,6 +1027,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       if (detectedNative) {
         entry.pendingNativeSessionId = detectedNative.nativeSessionId
         entry.pendingClientFamily = detectedNative.clientFamily
+        if (detectedNative.clientFamily === 'codebuddy') {
+          armRunHomeSessionPreserve(entry.executionId, detectedNative.clientFamily, detectedNative.nativeSessionId)
+        }
       }
       const detectedProfile = detectResolvedProfile(event)
       if (detectedProfile) {
@@ -1305,6 +1320,15 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
             `[foreman] Failed to persist native session for ${entry.executionId}: ${errorMessage(sessionError)}`,
           )
         }
+      }
+      if (committed) {
+        void this.finalizeCodeBuddyResumeSnapshot(entry, terminal.status).catch((error: unknown) => {
+          this.log(
+            'warn',
+            `[foreman] Failed to finalize codebuddy session snapshot for ${entry.executionId}: ${errorMessage(error)}`,
+          )
+        })
+        clearRunHomeSessionPreserveSlot(entry.executionId)
       }
       if (committed && terminal.status === 'done') {
         // The execution's usage is durable at this point, so the local speed
@@ -1827,6 +1851,14 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       if (entry.session && entry.terminalGeneration === 0) count += 1
     }
     return count
+  }
+
+  /** Drop a successful resume snapshot; non-done resume runs refresh via run-home preserve. */
+  private async finalizeCodeBuddyResumeSnapshot(entry: RegistryEntry, status: TerminalStatus): Promise<void> {
+    if (entry.launchClientFamily !== 'codebuddy' || !entry.resumeSessionId) return
+    if (status !== 'done') return
+    const snapshot = clientStateDirForEnv(process.env, 'codebuddy', 'sessions', entry.resumeSessionId)
+    await rm(snapshot, { recursive: true, force: true })
   }
 
   private persistNativeSessionIfCaptured(entry: RegistryEntry, timestamp: string): void {

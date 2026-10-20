@@ -1,10 +1,9 @@
-import { mkdir, symlink } from 'node:fs/promises';
-import { rm } from 'node:fs/promises';
+import { cp, mkdir, readdir, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AgentRequest } from '@wrenyard/agent-client';
 import { claudeFamilyMcpConfig, resolveMcpServers } from '@wrenyard/agent-client/mcp';
-import { assertLaunch, clientStateDirForEnv, createOwnedClientRunHome, stringEnv } from '@wrenyard/agent-client/native';
-import type { ProcessSpec } from '@wrenyard/execution';
+import { assertLaunch, clientStateDirForEnv, createOwnedClientRunHome, preserveClientRunHomeSessionSnapshot, stringEnv } from '@wrenyard/agent-client/native';
+import { registerRunHomeSessionPreserveSlot, type ProcessSpec } from '@wrenyard/execution';
 
 export async function launchCodeBuddy(request: AgentRequest, env: NodeJS.ProcessEnv, executable: string): Promise<ProcessSpec> {
     assertLaunch(request);
@@ -15,9 +14,34 @@ export async function launchCodeBuddy(request: AgentRequest, env: NodeJS.Process
         throw new Error('codebuddy requires a mapped reasoning effort');
     const ownedHome = await createOwnedClientRunHome(env, 'codebuddy');
     try {
+    const preserveSlot = { snapshotDir: ownedHome.path, sessionId: '', preserveTo: '' };
+    const executionId = env.WRENYARD_EXECUTION_ID?.trim();
+    if (executionId) registerRunHomeSessionPreserveSlot(executionId, preserveSlot);
+    ownedHome.preserveSession = async (homePath, context) => {
+        if (context?.success) return;
+        if (!preserveSlot.sessionId) return;
+        await preserveClientRunHomeSessionSnapshot(env, ownedHome, homePath, preserveSlot.sessionId);
+    };
     const sharedProjects = clientStateDirForEnv(env, 'codebuddy', 'agent-config', 'projects');
     await mkdir(sharedProjects, { recursive: true });
     await symlink(sharedProjects, join(ownedHome.path, 'projects'), 'dir');
+    if (request.resumeSessionId) {
+        const snapshot = clientStateDirForEnv(env, 'codebuddy', 'sessions', request.resumeSessionId);
+        try {
+            const entries = await readdir(snapshot, { withFileTypes: true });
+            for (const entry of entries) {
+                if (entry.name === 'projects') continue;
+                await cp(join(snapshot, entry.name), join(ownedHome.path, entry.name), {
+                    recursive: true,
+                    force: false,
+                    verbatimSymlinks: true,
+                });
+            }
+        }
+        catch {
+            /* no snapshot yet: --resume may still attach to an empty config dir */
+        }
+    }
     const args = ['-y', '--input-format', 'stream-json', '--output-format', 'stream-json', '--replay-user-messages', '--include-partial-messages', '--model', request.model];
     if (request.resumeSessionId)
         args.push('--resume', request.resumeSessionId);

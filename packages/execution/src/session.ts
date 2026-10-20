@@ -1,7 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { lstat, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawnProcess } from './process.ts';
 import { killProcessTree } from './process.ts';
 
@@ -22,6 +22,35 @@ const STARTUP_CONFIRM_MS = 15_000;
  */
 const MAX_RESULT_STREAM_BYTES = 2 * 1024 * 1024;
 
+/** Mutable preserve slot registered for a live execution id (see launch + supervisor arm). */
+export type OwnedRunHomeSessionPreserveSlot = {
+  snapshotDir: string;
+  sessionId: string;
+  preserveTo: string;
+};
+
+const preserveSlotByExecutionId = new Map<string, OwnedRunHomeSessionPreserveSlot>();
+
+/** Bind a run-home preserve slot to the execution that owns the child process. */
+export function registerRunHomeSessionPreserveSlot(executionId: string, slot: OwnedRunHomeSessionPreserveSlot): void {
+  const id = executionId.trim();
+  if (!id || id.length > 128 || /[^\w-]/u.test(id)) return;
+  preserveSlotByExecutionId.set(id, slot);
+}
+
+/** Late-bind the native session id so non-success cleanup can snapshot the run home. */
+export function armRunHomeSessionPreserve(executionId: string, clientFamily: string, nativeSessionId: string): void {
+  const slot = preserveSlotByExecutionId.get(executionId.trim());
+  if (!slot || !nativeSessionId || nativeSessionId.includes('/') || nativeSessionId.includes('\\') || nativeSessionId.includes('\0')) return;
+  if (!clientFamily || clientFamily.includes('/') || clientFamily.includes('\\')) return;
+  slot.sessionId = nativeSessionId;
+  slot.preserveTo = `clients/${clientFamily}/sessions/${nativeSessionId}`;
+}
+
+export function clearRunHomeSessionPreserveSlot(executionId: string): void {
+  preserveSlotByExecutionId.delete(executionId.trim());
+}
+
 export interface ProcessFile {
   readonly path: string;
   readonly data: string | Uint8Array;
@@ -36,7 +65,13 @@ export interface ProcessSpec {
   readonly env: Readonly<Record<string, string>>;
   readonly stdin?: string | Uint8Array;
   readonly files?: readonly ProcessFile[];
-  readonly ownedRunHome?: { readonly path: string; readonly metadataPath: string; readonly clientFamily: string; readonly runId: string; preserveSession?: (homePath: string) => Promise<void> };
+  readonly ownedRunHome?: {
+    readonly path: string;
+    readonly metadataPath: string;
+    readonly clientFamily: string;
+    readonly runId: string;
+    preserveSession?: (homePath: string, context?: { readonly success: boolean }) => Promise<void>;
+  };
 }
 
 export interface ExecutionResult {
@@ -495,7 +530,7 @@ async function cleanupOwnedRunHome(home: ProcessSpec['ownedRunHome'], success: b
   if (!rollback && home.preserveSession) {
     // A snapshot failure leaves the run home and its active marker untouched
     // so session data needed for resume is never deleted before it is saved.
-    try { await home.preserveSession(home.path); }
+    try { await home.preserveSession(home.path, { success }); }
     catch { return; }
   }
   if (!rollback) {

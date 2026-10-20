@@ -685,6 +685,18 @@ async function runTimeLimitWarningResume(
     },
   )
   if (terminal.status === 'timeout') {
+    const salvagedTimeout = await parseStructuredFinalOutput(terminal.output, schema, opts.preSchemaTransform)
+    if (salvagedTimeout.success) {
+      const summary = prependTimeLimitMarker(salvagedTimeout.summary)
+      opts.onDelivery?.({ summary, data: salvagedTimeout.data, truncatedByTimeLimit: true })
+      return { data: salvagedTimeout.data, summary }
+    }
+    const processText = processOutput(terminal.output)
+    if (processText?.trim()) {
+      const summary = prependTimeLimitMarker(processText.trim().slice(0, 4000))
+      opts.onDelivery?.({ summary, data: [], truncatedByTimeLimit: true })
+      return { data: [], summary }
+    }
     throw agentTimeoutError(
       terminal.executionId ?? lastExecutionId ?? 'unknown',
       1,
@@ -717,8 +729,12 @@ async function runTimeLimitWarningResume(
     opts.onRouteSuccess?.()
     return { data: parsed.data, summary: parsed.summary }
   }
-  // The warning window did not yield a valid structured output: status timeout
-  // exactly as today, with no further structured-output corrections.
+  const processText = processOutput(terminal.output)
+  if (processText?.trim()) {
+    const summary = prependTimeLimitMarker(processText.trim().slice(0, 4000))
+    opts.onDelivery?.({ summary, data: [], truncatedByTimeLimit: true })
+    return { data: [], summary }
+  }
   throw agentTimeoutError(
     terminal.executionId ?? lastExecutionId ?? 'unknown',
     1,

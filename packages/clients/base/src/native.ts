@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, realpath } from 'node:fs/promises';
+import { cp, lstat, mkdir, open, readFile, realpath, rm } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
 import { resolveWrenyardClientStateDir, resolveWrenyardStateRoot } from '@wrenyard/paths';
 import type { AgentEvent, AgentRequest, StreamChunk } from './index.ts';
@@ -346,7 +346,7 @@ export interface OwnedClientRunHome {
      * Called before settle cleanup deletes the run home. A rejection aborts
      * deletion: the run home and its `active` marker are left in place.
      */
-    preserveSession?: (homePath: string) => Promise<void>;
+    preserveSession?: (homePath: string, context?: { readonly success: boolean }) => Promise<void>;
 }
 
 /** Launch provenance phase recorded on an owned run marker. */
@@ -456,6 +456,42 @@ export async function createOwnedClientRunHome(env: NodeJS.ProcessEnv, clientFam
     const marker = JSON.stringify({ version: 1, client_family: clientFamily, run_id: runId, state: 'active', created_at: new Date().toISOString(), owner_pid: process.pid, launch_phase: 'prepared' }) + '\n';
     await writeOwnedRunMarker(env, { path, metadataPath, clientFamily, runId }, marker, true);
     return { path, metadataPath, clientFamily, runId };
+}
+
+/**
+ * Copy a validated owned run home into `clients/<family>/sessions/<sessionId>/`
+ * beside `runs/`, replacing any prior snapshot for that session id.
+ */
+export async function preserveClientRunHomeSessionSnapshot(
+    env: NodeJS.ProcessEnv,
+    home: OwnedClientRunHome,
+    homePath: string,
+    sessionId: string,
+): Promise<void> {
+    if (homePath !== home.path) return;
+    if (!sessionId || sessionId.includes('/') || sessionId.includes('\\') || sessionId.includes('\0')) return;
+    const expected = resolve(home.path);
+    if (relative(expected, resolve(home.metadataPath)) !== '.wrenyard-run.json') return;
+    const parent = dirname(expected);
+    const grandparent = dirname(parent);
+    if (basename(parent) !== 'runs') return;
+    for (const directory of [grandparent, parent, expected]) {
+        const stat = await lstat(directory).catch(() => undefined);
+        if (!stat?.isDirectory() || stat.isSymbolicLink()) return;
+    }
+    const markerStat = await lstat(home.metadataPath).catch(() => undefined);
+    if (!markerStat?.isFile() || markerStat.isSymbolicLink()) return;
+    let marker: Record<string, unknown>;
+    try { marker = JSON.parse(await readFile(home.metadataPath, 'utf8')) as Record<string, unknown>; } catch { return; }
+    if (marker.version !== 1 || marker.client_family !== home.clientFamily || marker.run_id !== home.runId || marker.state !== 'active') return;
+    const sessionsDir = clientStateDirForEnv(env, home.clientFamily, 'sessions');
+    const resolvedTarget = resolve(join(sessionsDir, sessionId));
+    const relFromRuns = relative(parent, resolvedTarget);
+    if (!relFromRuns || relFromRuns === '.' || !relFromRuns.startsWith(`..${sep}`)) return;
+    if (relFromRuns.split(sep).some((segment) => segment === 'runs')) return;
+    await rm(resolvedTarget, { recursive: true, force: true }).catch(() => undefined);
+    await mkdir(sessionsDir, { recursive: true });
+    await cp(expected, resolvedTarget, { recursive: true, verbatimSymlinks: true });
 }
 
 async function validateOwnedRunHome(env: NodeJS.ProcessEnv, home: OwnedClientRunHome): Promise<void> {

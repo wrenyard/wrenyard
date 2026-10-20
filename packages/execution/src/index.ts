@@ -1,5 +1,16 @@
 export { Executor, ExecutionError, type ExecutionOptions, type ExecutionResult } from './executor.ts';
-export { startProcess, type ProcessSpec, type ProcessFile, type ExecutionSession, type ExecutionEvent, type StartProcessOptions } from './session.ts';
+export {
+  startProcess,
+  registerRunHomeSessionPreserveSlot,
+  armRunHomeSessionPreserve,
+  clearRunHomeSessionPreserveSlot,
+  type ProcessSpec,
+  type ProcessFile,
+  type ExecutionSession,
+  type ExecutionEvent,
+  type StartProcessOptions,
+  type OwnedRunHomeSessionPreserveSlot,
+} from './session.ts';
 export {
   killProcessTree,
   spawnProcess,
