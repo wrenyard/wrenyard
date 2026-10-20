@@ -77,6 +77,7 @@ export function toModelEntries(
         displayName: model.displayName,
         runtime,
         reasoningEfforts: [...efforts],
+        ...(gatewayModel.capabilities === undefined ? {} : { capabilities: gatewayModel.capabilities }),
         quotaProvider: provider.quotaProvider ?? provider.id,
         ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
         ...(model.maxTokens === undefined ? {} : { maxOutputTokens: model.maxTokens }),

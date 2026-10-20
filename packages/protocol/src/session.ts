@@ -375,6 +375,8 @@ export interface SessionModelEntry {
   runtime: SessionInferenceMode
   /** Required non-empty route-owned reasoning levels this model can materialize. */
   reasoningEfforts: ReasoningEffort[]
+  /** Input modalities supported by this model when declared. */
+  capabilities?: readonly ('text' | 'image')[]
   /** Quota provider id backing this model: the catalog `quotaProvider`, else `provider`. */
   quotaProvider?: string
   contextWindow?: number

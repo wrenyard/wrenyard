@@ -19,6 +19,7 @@ import { InterruptControl } from './InterruptControl.js';
 import { IdleCacheNotice } from './IdleCacheNotice.js';
 import { MediaAttachments, fromDraftAttachment } from './MediaAttachments.js';
 import { QuotaRingButton } from './QuotaRingButton.js';
+import { useConfirm } from '@/renderer/hooks/use-confirm';
 
 /** Input text is token-counted 300ms after typing stops (usage spec 3.3). */
 const INPUT_TOKEN_DEBOUNCE_MS = 300;
@@ -157,6 +158,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   const inputTokens = useInputTokenCount(text);
   const { setInputTokens } = useSessionUsage();
   const { budget } = useContextBudget(sessionKey, modelId, inputTokens);
+  const confirm = useConfirm();
   const quota = useQuotaQuery();
   const exceeded = budget?.exceeded ?? false;
   const idleInputUsdPerMillion = useMemo(
@@ -459,13 +461,21 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   };
 
   const submit = (): void => {
-    if (submitLatch.current) return;
-    // Latch synchronously at the very start, before any async work, so a second
-    // click or key repeat in the same tick cannot start a second turn while a
-    // turn is recovering. Every early exit and throw path releases it.
-    submitLatch.current = true;
-    const body = text.trim();
-    const submitted = attachmentsRef.current;
+    void (async () => {
+      if (submitLatch.current) return;
+      const body = text.trim();
+      const submitted = attachmentsRef.current;
+      if (submitted.some((item) => item.preview !== undefined || item.mime?.startsWith('image/'))
+        && selected?.capabilities?.includes('image') !== true) {
+        const confirmed = await confirm({
+          title: '当前模型不支持图片',
+          description: '发送后模型将看不到图片内容。仍要发送吗？',
+          confirmLabel: '仍然发送',
+        });
+        if (!confirmed) return;
+      }
+      // Latch before state mutation or sending work.
+      submitLatch.current = true;
     // An over-budget context is not refused here: only sending a turn triggers
     // the engine's compaction, so blocking would deadlock the session. What the
     // engine still refuses after compacting surfaces through the turn error.
@@ -524,6 +534,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         submitLatch.current = false;
         setSending(false);
       });
+    })();
   };
 
   // An empty draft with running turns offers stop; typing brings send back.
