@@ -20,6 +20,8 @@ export interface ResponseTpsSample {
   output_tokens: number;
   first_token_at_ms: number;
   completed_at_ms: number;
+  /** When the request started, so a first-token latency can be derived. */
+  request_started_at_ms?: number;
 }
 
 export interface ResponseTpsContract {
@@ -31,6 +33,8 @@ export interface ResponseSamplerOptions {
   now?: () => number;
   /** The canonical public model id this response was requested as. */
   model?: string;
+  /** When the gateway request started, on the same epoch clock as `now`. */
+  requestStartedAtMs?: number;
 }
 
 /**
@@ -41,12 +45,14 @@ export interface ResponseSamplerOptions {
 export class ResponseSampler implements TpsSink {
   private readonly now: () => number;
   private readonly model: string;
+  private readonly requestStartedAtMs: number | undefined;
   private readonly collector = new TpsGenerationCollector();
   private responseId: string | undefined;
 
   constructor(options: ResponseSamplerOptions = {}) {
     this.now = options.now ?? (() => Date.now());
     this.model = options.model ?? '';
+    this.requestStartedAtMs = options.requestStartedAtMs;
   }
 
   /** One nonempty generation delta on a stable, distinct channel. */
@@ -81,6 +87,7 @@ export class ResponseSampler implements TpsSink {
         model: this.model,
         output_tokens: measured.outputTokens,
         ...sampleTiming({ tokens: measured.outputTokens, windows: measured.windows }),
+        ...(this.requestStartedAtMs === undefined ? {} : { request_started_at_ms: this.requestStartedAtMs }),
       }],
     };
   }

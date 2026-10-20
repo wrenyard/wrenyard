@@ -244,6 +244,7 @@ export function resolveModelSpeed(
       model: local.model,
       checkedAt: local.checkedAt,
       sampleCount: local.sampleCount,
+      ...(local.firstTokenMs === undefined ? {} : { firstTokenMs: local.firstTokenMs }),
     }
   }
   const override = provider.modelSpeedOverrides?.[modelDef.id]

@@ -15,6 +15,8 @@ export interface TaskResolvedSpeed {
   source: 'local_31d' | 'provider_override' | 'catalog_default' | 'free_supply_floor' | 'cooldown'
   sample_count: number
   checked_at?: string
+  /** Median measured first-token latency, when local samples provide it. */
+  firstTokenMs?: number
   expected_tps_met: boolean
   degradation_reason?: string
 }

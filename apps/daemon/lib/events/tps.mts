@@ -33,11 +33,14 @@ export interface ExecutionTpsSample {
   outputTokens: number
   durationMs: number
   tps: number
+  /** Median measured first-token latency of this execution's valid responses. */
+  firstTokenMs?: number
 }
 
 export interface TpsEstimate {
   tps: number
   sampleCount: number
+  firstTokenMs?: number
   checkedAt: string
 }
 
@@ -107,6 +110,8 @@ const MIN_WINDOW_MS = TPS_MIN_SAMPLE_WINDOW_MS
 const MAX_SAMPLES = 50
 /** Minimum samples required to publish an aggregate estimate. */
 const MIN_SAMPLES = 3
+/** Largest plausible request-start-to-first-token latency (10 minutes). */
+const MAX_FIRST_TOKEN_MS = 600_000
 
 export interface ReadExecutionTpsOptions {
   /** Restricts the read to one execution's primary key row. */
@@ -308,6 +313,7 @@ export function readExecutionTpsSamples(
           outputTokens: totals.outputTokens,
           durationMs: totals.durationMs,
           tps,
+          ...(totals.firstTokenMs === undefined ? {} : { firstTokenMs: totals.firstTokenMs }),
         })
         continue
       }
@@ -371,10 +377,11 @@ function parseGatewayAttribution(value: string | null): GatewayAttribution | und
 }
 
 /** Sums valid paired samples; conflicting duplicate response ids invalidate the set. */
-function sumResponseSamples(samples: ResponseSample[]): { outputTokens: number; durationMs: number } | undefined {
+function sumResponseSamples(samples: ResponseSample[]): { outputTokens: number; durationMs: number; firstTokenMs?: number } | undefined {
   const seen = new Map<string, ResponseSample>()
   let outputTokens = 0
   let durationMs = 0
+  const latencies: number[] = []
   for (const sample of samples) {
     const previous = seen.get(sample.responseId)
     if (previous) {
@@ -384,10 +391,12 @@ function sumResponseSamples(samples: ResponseSample[]): { outputTokens: number; 
     seen.set(sample.responseId, sample)
     outputTokens += sample.outputTokens
     durationMs += sample.durationMs
+    if (sample.firstTokenMs !== undefined) latencies.push(sample.firstTokenMs)
   }
   if (!isSafeInteger(outputTokens) || outputTokens <= 0) return undefined
   if (!Number.isFinite(durationMs) || durationMs <= 0) return undefined
-  return { outputTokens, durationMs }
+  const firstTokenMs = median(latencies)
+  return { outputTokens, durationMs, ...(firstTokenMs === undefined ? {} : { firstTokenMs }) }
 }
 
 /**
@@ -415,7 +424,13 @@ export function estimateTps(samples: readonly ExecutionTpsSample[]): TpsEstimate
   const tps = median(newest.map((sample) => sample.tps))
   if (tps === undefined) return undefined
   const checkedAt = newest[0].endedAt
-  return { tps, sampleCount: newest.length, checkedAt }
+  // First-token latency follows the same newest-window sample set and only
+  // publishes when at least three responses actually measured it.
+  const latencies = newest
+    .map((sample) => sample.firstTokenMs)
+    .filter((value): value is number => value !== undefined)
+  const firstTokenMs = latencies.length >= MIN_SAMPLES ? median(latencies) : undefined
+  return { tps, sampleCount: newest.length, ...(firstTokenMs === undefined ? {} : { firstTokenMs }), checkedAt }
 }
 
 /**
@@ -464,6 +479,7 @@ function aggregateLocalSpeedSamples(samples: readonly ExecutionTpsSample[], now:
       model: bucket[0].model,
       tps: estimate.tps,
       sampleCount: estimate.sampleCount,
+      ...(estimate.firstTokenMs === undefined ? {} : { firstTokenMs: estimate.firstTokenMs }),
       checkedAt: estimate.checkedAt,
     })
   }
@@ -666,6 +682,8 @@ interface ResponseSample {
   windows: ResponseWindow[]
   /** Sum of every window duration, the shared TPS denominator. */
   durationMs: number
+  /** Measured request-start-to-first-token latency, when timestamps allow it. */
+  firstTokenMs?: number
 }
 
 interface ResponseWindow {
@@ -704,15 +722,31 @@ function parseResponseSample(value: unknown, dispatchModel: string | null, provi
   let durationMs = 0
   for (const window of windows) durationMs += window.completedAtMs - window.firstTokenAtMs
   if (!Number.isSafeInteger(durationMs) || durationMs <= 0) return undefined
+  const firstTokenMs = firstTokenLatency(record.request_started_at_ms, windows[0])
   const normalized = {
     responseId: responseId.trim(),
     model: normalizeSampleModel(provider, model),
     outputTokens,
     windows,
     durationMs,
+    ...(firstTokenMs === undefined ? {} : { firstTokenMs }),
   }
   if (dispatchModel?.trim() !== normalized.model) return { responseId: normalized.responseId, mismatchedModel: true }
   return normalized
+}
+
+/**
+ * Derives a request-start-to-first-token latency from the earliest generation
+ * window. A sample without a request start, or whose latency is not a finite
+ * value in [0, 10 minutes], simply carries no measured latency and keeps
+ * contributing its TPS unchanged.
+ */
+function firstTokenLatency(requestStartedAtMs: unknown, earliest: ResponseWindow | undefined): number | undefined {
+  if (typeof requestStartedAtMs !== 'number' || !Number.isFinite(requestStartedAtMs)) return undefined
+  if (earliest === undefined) return undefined
+  const latency = earliest.firstTokenAtMs - requestStartedAtMs
+  if (!Number.isFinite(latency) || latency < 0 || latency > MAX_FIRST_TOKEN_MS) return undefined
+  return latency
 }
 
 /**

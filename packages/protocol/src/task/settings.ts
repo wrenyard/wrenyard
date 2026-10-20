@@ -268,6 +268,9 @@ export interface TaskRoutingTestRow {
   model: string
   model_name: string
   effective_tps: number | null
+  /** Measured median first-token latency used by scoring; null when rejected
+   *  or when no local sample measured it. */
+  first_token_ms?: number | null
   /** Actual weighted price contribution (`SCORE_WEIGHTS.P * priceFactor`). */
   price_score: number | null
   /** Actual weighted speed contribution (`SCORE_WEIGHTS.S * speedFactor`). */

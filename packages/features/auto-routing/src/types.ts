@@ -148,6 +148,9 @@ export interface CandidateInput {
   timeoutMs: number;
   minimumTps: number;
   effectiveTps: number;
+  /** Measured median first-token latency, when local samples provide it.
+   * Scoring only; never an admission gate. */
+  firstTokenMs?: number;
   /**
    * Optional task-declared expected TPS. It raises the speed saturation point
    * to SPEED_SATURATION_BASE_TPS + expectedTps; absent means the bare base. It

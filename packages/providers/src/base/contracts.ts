@@ -36,6 +36,8 @@ export interface SpeedEvidence {
   model?: string;
   checkedAt?: string;
   sampleCount?: number;
+  /** Median measured first-token latency, when local samples provide it. */
+  firstTokenMs?: number;
 }
 
 /**
@@ -158,6 +160,8 @@ export interface LocalSpeedSample {
   tps: number;
   sampleCount: number;
   checkedAt: string;
+  /** Median measured first-token latency, when enough samples provide it. */
+  firstTokenMs?: number;
 }
 
 export interface ClientDefinition {

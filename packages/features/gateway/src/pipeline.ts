@@ -230,6 +230,9 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       const protocol = module.protocol;
       const executionId = scoped.executionId;
       const startedAt = Date.now();
+      // The sampler measures first-token timestamps on the injected `now`
+      // clock, so the request start is captured on that same clock.
+      const requestStartedAtMs = options.now();
       const role = localHeader(request, GATEWAY_HEADERS.callRole);
       const sessionId = localHeader(request, GATEWAY_HEADERS.sessionId);
       /** The one completion event of this request, with its attribution. */
@@ -575,7 +578,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         // The selected protocol module translates its own generation events
         // into protocol-neutral signals for the shared TPS sampler; the sample
         // model is the requested canonical public model.
-        const sampler = new ResponseSampler({ now: options.now, model: registeredModel });
+        const sampler = new ResponseSampler({ now: options.now, model: registeredModel, requestStartedAtMs });
         const observer = module.createObserver();
         const translator = module.createTpsTranslator();
         const relayed = await raceAbort(relayResponse(repaired, response, {

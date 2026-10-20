@@ -915,6 +915,7 @@ const taskRoutingTestRowSchema = {
     model: { type: 'string', minLength: 1 },
     model_name: { type: 'string', minLength: 1 },
     effective_tps: { anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }] },
+    first_token_ms: { anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }] },
     price_score: { anyOf: [{ type: 'number' }, { type: 'null' }] },
     speed_score: { anyOf: [{ type: 'number' }, { type: 'null' }] },
     quota_score: { anyOf: [{ type: 'number' }, { type: 'null' }] },

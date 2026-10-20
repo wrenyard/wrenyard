@@ -285,7 +285,7 @@ function createSelector(
               : referencePrice.outputUsdPerMillion === undefined
                 ? {}
                 : { output_usd_per_million: referencePrice.outputUsdPerMillion },
-            speed: { effective_tps: speed.tps } },
+            speed: { effective_tps: speed.tps, ...(speed.firstTokenMs === undefined ? {} : { firstTokenMs: speed.firstTokenMs }) } },
           availability: availability[index],
         },
       });

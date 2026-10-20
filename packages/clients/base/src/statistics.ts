@@ -52,6 +52,8 @@ export interface AggregatedResponseTpsSample {
     model: string;
     output_tokens: number;
     generation_windows: GenerationWindow[];
+    /** When the request started, so a first-token latency can be derived. */
+    request_started_at_ms?: number;
 }
 
 /** Fixed tokenizer, created lazily on first use and shared process-wide. */

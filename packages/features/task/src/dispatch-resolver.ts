@@ -219,6 +219,7 @@ function toResolvedDispatch(
       sample_count: speed.sampleCount ?? 0,
       expected_tps_met: expectedTpsMet,
       ...(speed.checkedAt === undefined ? {} : { checked_at: speed.checkedAt }),
+      ...(speed.firstTokenMs === undefined ? {} : { firstTokenMs: speed.firstTokenMs }),
     },
     intelligence: model.intelligence as string,
     reference_pricing: toReferencePricing(model),
