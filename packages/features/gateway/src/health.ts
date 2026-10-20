@@ -73,6 +73,19 @@ export interface GatewayHealthRouteSnapshot {
   last24h: GatewayHealthWindowFigures;
 }
 
+export interface GatewayHealthProviderSnapshot {
+  provider: string;
+  last1h: GatewayHealthWindowFigures;
+  last24h: GatewayHealthWindowFigures;
+}
+
+export interface GatewayHealthPoolSnapshot {
+  provider: string;
+  pool: string;
+  last1h: GatewayHealthWindowFigures;
+  last24h: GatewayHealthWindowFigures;
+}
+
 interface MinuteBucket {
   minute: number;
   success: number;
@@ -100,6 +113,11 @@ export interface GatewayHealthRecordInput {
 export interface GatewayHealthStore {
   record(input: GatewayHealthRecordInput): void;
   snapshot(now?: number): GatewayHealthRouteSnapshot[];
+  /** Merge minute buckets for the given route keys; medians use pooled raw samples. */
+  aggregate(routeKeys: readonly string[], now?: number): {
+    last1h: GatewayHealthWindowFigures;
+    last24h: GatewayHealthWindowFigures;
+  };
 }
 
 function routeKey(provider: string, publicModel: string): string {
@@ -171,7 +189,8 @@ function applyBucket(bucket: MinuteBucket, input: GatewayHealthRecordInput): voi
   }
 }
 
-function mergeWindows(buckets: MinuteBucket[], sinceMs: number): GatewayHealthWindowFigures {
+/** Shared window rollup for one or more routes' minute buckets. */
+function windowFiguresFromBuckets(buckets: MinuteBucket[], sinceMs: number): GatewayHealthWindowFigures {
   const window = emptyWindow();
   const firstResponseSamples: number[] = [];
   const tpsSamples: number[] = [];
@@ -273,11 +292,26 @@ export function createGatewayHealthStore(now: () => number = Date.now): GatewayH
         result.push({
           provider,
           model,
-          last1h: mergeWindows(kept, oneHour),
-          last24h: mergeWindows(kept, twentyFourHours),
+          last1h: windowFiguresFromBuckets(kept, oneHour),
+          last24h: windowFiguresFromBuckets(kept, twentyFourHours),
         });
       }
       return result;
+    },
+
+    aggregate(routeKeys, at = now()) {
+      const oneHour = at - 60 * 60 * 1000;
+      const twentyFourHours = at - RETENTION_MS;
+      const merged: MinuteBucket[] = [];
+      for (const key of routeKeys) {
+        prune(key, at);
+        const kept = routes.get(key);
+        if (kept !== undefined) merged.push(...kept);
+      }
+      return {
+        last1h: windowFiguresFromBuckets(merged, oneHour),
+        last24h: windowFiguresFromBuckets(merged, twentyFourHours),
+      };
     },
   };
 }

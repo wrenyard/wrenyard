@@ -174,8 +174,8 @@ const gatewayHealthWindowSchema = {
     cancelled: { type: 'integer', minimum: 0 },
     callerErrors: { type: 'integer', minimum: 0 },
     admissionRefusals: { type: 'integer', minimum: 0 },
-    medianFirstResponseMs: { type: 'number', exclusiveMinimum: 0 },
-    medianTps: { type: 'number', exclusiveMinimum: 0 },
+    medianFirstResponseMs: { type: 'number', minimum: 0 },
+    medianTps: { type: 'number', minimum: 0 },
     lastSuccessAt: { type: 'string', minLength: 1 },
     lastFailure: gatewayHealthLastFailureSchema,
   },
@@ -198,9 +198,32 @@ export const gatewayHealthParamsSchema = {
   type: 'object', properties: {}, additionalProperties: false,
 } as const satisfies JsonSchema
 
+const gatewayHealthProviderSchema = {
+  type: 'object',
+  required: ['provider', 'last1h', 'last24h'],
+  additionalProperties: false,
+  properties: {
+    provider: { type: 'string', minLength: 1 },
+    last1h: gatewayHealthWindowSchema,
+    last24h: gatewayHealthWindowSchema,
+  },
+} as const satisfies JsonSchema
+
+const gatewayHealthPoolSchema = {
+  type: 'object',
+  required: ['provider', 'pool', 'last1h', 'last24h'],
+  additionalProperties: false,
+  properties: {
+    provider: { type: 'string', minLength: 1 },
+    pool: { type: 'string', minLength: 1 },
+    last1h: gatewayHealthWindowSchema,
+    last24h: gatewayHealthWindowSchema,
+  },
+} as const satisfies JsonSchema
+
 export const gatewayHealthResultSchema = {
   type: 'object',
-  required: ['generatedAt', 'routes'],
+  required: ['generatedAt', 'routes', 'providers', 'pools'],
   additionalProperties: false,
   properties: {
     generatedAt: { type: 'string', minLength: 1 },
@@ -219,5 +242,7 @@ export const gatewayHealthResultSchema = {
         },
       },
     },
+    providers: { type: 'array', items: gatewayHealthProviderSchema },
+    pools: { type: 'array', items: gatewayHealthPoolSchema },
   },
 } as const satisfies JsonSchema

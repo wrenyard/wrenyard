@@ -21,6 +21,8 @@ import type {
 } from '@wrenyard/session';
 import type { QuotaState } from '@wrenyard/auto-routing';
 import type {
+  GatewayHealthPool,
+  GatewayHealthProvider,
   GatewayHealthRoute,
   GatewayHealthWindow,
   GatewayHealthResult as WrenyardGatewayHealthResult,
@@ -122,6 +124,8 @@ import type {
 // re-exports them under the local names so the preload facade and the renderer
 // resolve them from `@/shell-contract` without importing the protocol directly.
 export type {
+  GatewayHealthPool,
+  GatewayHealthProvider,
   GatewayHealthRoute,
   GatewayHealthWindow,
   WrenyardGatewayHealthResult,

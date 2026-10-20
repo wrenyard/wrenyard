@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { QueryError } from '@/renderer/components/query-error';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import {
@@ -9,7 +9,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/renderer/components/ui/table';
-import type { GatewayHealthRoute, GatewayHealthWindow, WrenyardGatewayHealthResult } from '@/shell-contract';
+import type {
+  GatewayHealthPool,
+  GatewayHealthProvider,
+  GatewayHealthRoute,
+  GatewayHealthWindow,
+  WrenyardGatewayHealthResult,
+} from '@/shell-contract';
 import { formatDateTime } from '@/renderer/lib/format';
 import { useGatewayHealthQuery } from '../queries.js';
 
@@ -73,6 +79,41 @@ function hasRecentTraffic(result: WrenyardGatewayHealthResult): boolean {
   return result.routes.some((route) => route.last24h.requests > 0);
 }
 
+function providerTotal(
+  providers: GatewayHealthProvider[] | undefined,
+  provider: string,
+): GatewayHealthProvider | undefined {
+  return providers?.find((entry) => entry.provider === provider);
+}
+
+function renderWindowRowCells(window1h: GatewayHealthWindow, window24h: GatewayHealthWindow): ReactNode {
+  return (
+    <>
+      <TableCell className="text-right tabular-nums whitespace-nowrap">
+        {formatWindowCounts(window1h)}
+      </TableCell>
+      <TableCell className="text-right tabular-nums whitespace-nowrap">
+        <div>{formatWindowCounts(window24h)}</div>
+        {sumFailures(window24h) > 0 && (
+          <div className="text-xs text-muted-foreground">{formatFailureDetail(window24h)}</div>
+        )}
+      </TableCell>
+      <TableCell className="text-right tabular-nums whitespace-nowrap">
+        {formatMedianMs(window24h.medianFirstResponseMs)}
+      </TableCell>
+      <TableCell className="text-right tabular-nums whitespace-nowrap">
+        {formatMedianTps(window24h.medianTps)}
+      </TableCell>
+      <TableCell className="text-xs whitespace-nowrap">
+        {formatLastSuccess(window24h.lastSuccessAt)}
+      </TableCell>
+      <TableCell className="max-w-48 text-xs break-words">
+        {formatLastFailure(window24h)}
+      </TableCell>
+    </>
+  );
+}
+
 export interface GatewayHealthProps {
   /** True while the gateway supply tab is visible. */
   active: boolean;
@@ -120,6 +161,7 @@ export function GatewayHealth({ active }: GatewayHealthProps) {
   }
 
   const providers = [...grouped.keys()].sort((a, b) => a.localeCompare(b));
+  const poolEntries = (snapshot.pools ?? []).filter((entry) => entry.last24h.requests > 0);
 
   return (
     <section className="flex flex-col gap-4">
@@ -146,34 +188,56 @@ export function GatewayHealth({ active }: GatewayHealthProps) {
                 {routes.map((route) => (
                   <TableRow key={`${route.provider}/${route.model}`}>
                     <TableCell className="font-mono text-xs">{route.model}</TableCell>
-                    <TableCell className="text-right tabular-nums whitespace-nowrap">
-                      {formatWindowCounts(route.last1h)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums whitespace-nowrap">
-                      <div>{formatWindowCounts(route.last24h)}</div>
-                      {sumFailures(route.last24h) > 0 && (
-                        <div className="text-xs text-muted-foreground">{formatFailureDetail(route.last24h)}</div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums whitespace-nowrap">
-                      {formatMedianMs(route.last24h.medianFirstResponseMs)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums whitespace-nowrap">
-                      {formatMedianTps(route.last24h.medianTps)}
-                    </TableCell>
-                    <TableCell className="text-xs whitespace-nowrap">
-                      {formatLastSuccess(route.last24h.lastSuccessAt)}
-                    </TableCell>
-                    <TableCell className="max-w-48 text-xs break-words">
-                      {formatLastFailure(route.last24h)}
-                    </TableCell>
+                    {renderWindowRowCells(route.last1h, route.last24h)}
                   </TableRow>
                 ))}
+                {(() => {
+                  const total = providerTotal(snapshot.providers, provider);
+                  if (total === undefined || total.last24h.requests === 0) return null;
+                  return (
+                    <TableRow className="bg-muted/40 font-medium">
+                      <TableCell>合计</TableCell>
+                      {renderWindowRowCells(total.last1h, total.last24h)}
+                    </TableRow>
+                  );
+                })()}
               </TableBody>
             </Table>
           </div>
         );
       })}
+      {poolEntries.length > 0 && (
+        <div className="flex flex-col gap-2 overflow-hidden rounded-xl border bg-card">
+          <p className="border-b px-4 py-2 text-sm font-medium">额度池汇总</p>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>池</TableHead>
+                <TableHead className="text-right">最近 1 小时</TableHead>
+                <TableHead className="text-right">最近 24 小时</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {poolEntries
+                .sort((a, b) => a.provider.localeCompare(b.provider) || a.pool.localeCompare(b.pool))
+                .map((entry: GatewayHealthPool) => (
+                  <TableRow key={`${entry.provider}/${entry.pool}`}>
+                    <TableCell className="font-mono text-xs">{entry.pool}</TableCell>
+                    <TableCell className="text-right tabular-nums whitespace-nowrap">
+                      {formatWindowCounts(entry.last1h)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums whitespace-nowrap">
+                      <div>{formatWindowCounts(entry.last24h)}</div>
+                      {sumFailures(entry.last24h) > 0 && (
+                        <div className="text-xs text-muted-foreground">{formatFailureDetail(entry.last24h)}</div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
       {query.isFetching && (
         <p className="text-xs text-muted-foreground">正在刷新…</p>
       )}

@@ -52,13 +52,22 @@ function formatLastEvents(window: HealthWindow): string {
   return parts.join('; ')
 }
 
-function printHealthSummary(result: { generatedAt: string; routes: Array<{
-  provider: string
-  model: string
-  last1h: HealthWindow
-  last24h: HealthWindow
-  routeState?: { state: string; until: string }
-}> }): void {
+function printProviderOrPoolLine(prefix: string, window1h: HealthWindow, window24h: HealthWindow): void {
+  console.log(`  ${prefix}: ${formatWindowSummary('1h', window1h)} | ${formatWindowSummary('24h', window24h)}`)
+}
+
+function printHealthSummary(result: {
+  generatedAt: string
+  routes: Array<{
+    provider: string
+    model: string
+    last1h: HealthWindow
+    last24h: HealthWindow
+    routeState?: { state: string; until: string }
+  }>
+  providers: Array<{ provider: string; last1h: HealthWindow; last24h: HealthWindow }>
+  pools: Array<{ provider: string; pool: string; last1h: HealthWindow; last24h: HealthWindow }>
+}): void {
   console.log(`Gateway health as of ${result.generatedAt}`)
   if (result.routes.length === 0) {
     console.log('No routes with recent traffic.')
@@ -84,6 +93,22 @@ function printHealthSummary(result: { generatedAt: string; routes: Array<{
         line.push(`route state ${route.routeState.state} until ${route.routeState.until}`)
       }
       console.log(line.join(' | '))
+    }
+  }
+
+  const providers = (result.providers ?? []).filter((entry) => entry.last24h.requests > 0)
+  if (providers.length > 0) {
+    console.log('\nProvider totals')
+    for (const entry of providers.sort((a, b) => a.provider.localeCompare(b.provider))) {
+      printProviderOrPoolLine(entry.provider, entry.last1h, entry.last24h)
+    }
+  }
+
+  const pools = (result.pools ?? []).filter((entry) => entry.last24h.requests > 0)
+  if (pools.length > 0) {
+    console.log('\nPool totals')
+    for (const entry of pools.sort((a, b) => a.provider.localeCompare(b.provider) || a.pool.localeCompare(b.pool))) {
+      printProviderOrPoolLine(entry.pool, entry.last1h, entry.last24h)
     }
   }
 }

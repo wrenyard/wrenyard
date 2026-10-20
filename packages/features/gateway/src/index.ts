@@ -13,6 +13,8 @@ import {
   classifyGatewayOutcome,
   createGatewayHealthStore,
   type GatewayHealthOutcome,
+  type GatewayHealthPoolSnapshot,
+  type GatewayHealthProviderSnapshot,
   type GatewayHealthRouteSnapshot,
   type GatewayHealthWindowFigures,
 } from './health.ts';
@@ -21,12 +23,20 @@ export type { RouteStateChangedEvent, RouteStatus, CircuitPhase, ClientFaultKind
 export type { RouteFaultKind } from './route-failure.ts';
 export { classifyRouteFailure } from './route-failure.ts';
 export type { GatewayRequestCompletedEvent } from './pipeline.ts';
-export type { GatewayHealthOutcome, GatewayHealthRouteSnapshot, GatewayHealthWindowFigures } from './health.ts';
+export type {
+  GatewayHealthOutcome,
+  GatewayHealthPoolSnapshot,
+  GatewayHealthProviderSnapshot,
+  GatewayHealthRouteSnapshot,
+  GatewayHealthWindowFigures,
+} from './health.ts';
 export { classifyGatewayOutcome } from './health.ts';
 
 export interface GatewayHealthSnapshot {
   generatedAt: string;
   routes: Array<GatewayHealthRouteSnapshot & { routeState?: RouteStatus }>;
+  providers: GatewayHealthProviderSnapshot[];
+  pools: GatewayHealthPoolSnapshot[];
 }
 
 export interface GatewayHealthCompletionInput {
@@ -216,8 +226,9 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
   let closed = false;
   const nowFn = options.now ?? Date.now;
   const healthStore = createGatewayHealthStore(nowFn);
+  const quotaPoolsForRoute = options.providers.quotaPools ?? (() => []);
   const routeStates = new RouteStateStore(nowFn,
-    options.providers.quotaPools ?? (() => []),
+    quotaPoolsForRoute,
     event => { void Promise.resolve().then(() => options.onRouteStateChanged?.(event)).catch(() => undefined); });
 
   const routeStatus = (publicModel: string): RouteStatus | undefined => {
@@ -352,12 +363,41 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
     },
 
     health() {
-      const generatedAt = new Date(nowFn()).toISOString();
-      const routes = healthStore.snapshot(nowFn()).map((route) => ({
+      const at = nowFn();
+      const generatedAt = new Date(at).toISOString();
+      const routeSnapshots = healthStore.snapshot(at);
+      const routes = routeSnapshots.map((route) => ({
         ...route,
         routeState: routeStates.status(route.provider, route.model),
       }));
-      return { generatedAt, routes };
+
+      const keysByProvider = new Map<string, string[]>();
+      for (const route of routeSnapshots) {
+        const routeKey = `${route.provider}/${route.model}`;
+        const list = keysByProvider.get(route.provider);
+        if (list === undefined) keysByProvider.set(route.provider, [routeKey]);
+        else list.push(routeKey);
+      }
+      const providers: GatewayHealthProviderSnapshot[] = [...keysByProvider.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([provider, keys]) => ({ provider, ...healthStore.aggregate(keys, at) }));
+
+      // Pool membership is evaluated at snapshot time via the same quotaPools callback as route state.
+      const keysByPool = new Map<string, { provider: string; pool: string; keys: string[] }>();
+      for (const route of routeSnapshots) {
+        const routeKey = `${route.provider}/${route.model}`;
+        for (const pool of quotaPoolsForRoute(route.provider, route.model)) {
+          const compound = `${route.provider}\0${pool}`;
+          const entry = keysByPool.get(compound);
+          if (entry === undefined) keysByPool.set(compound, { provider: route.provider, pool, keys: [routeKey] });
+          else entry.keys.push(routeKey);
+        }
+      }
+      const pools: GatewayHealthPoolSnapshot[] = [...keysByPool.values()]
+        .sort((a, b) => a.provider.localeCompare(b.provider) || a.pool.localeCompare(b.pool))
+        .map(({ provider, pool, keys }) => ({ provider, pool, ...healthStore.aggregate(keys, at) }));
+
+      return { generatedAt, routes, providers, pools };
     },
 
     ingestHealthCompletion(input: GatewayHealthCompletionInput) {

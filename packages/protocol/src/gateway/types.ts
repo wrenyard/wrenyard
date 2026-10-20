@@ -162,6 +162,21 @@ export interface GatewayHealthRoute {
   routeState?: GatewayRouteStatus
 }
 
+/** Provider-level figures summed over its routes. */
+export interface GatewayHealthProvider {
+  provider: string
+  last1h: GatewayHealthWindow
+  last24h: GatewayHealthWindow
+}
+
+/** Quota-pool figures summed over member routes at snapshot time. */
+export interface GatewayHealthPool {
+  provider: string
+  pool: string
+  last1h: GatewayHealthWindow
+  last24h: GatewayHealthWindow
+}
+
 /** Params of `gateway.health` (empty object). */
 export interface GatewayHealthParams {}
 
@@ -169,4 +184,6 @@ export interface GatewayHealthParams {}
 export interface GatewayHealthResult {
   generatedAt: string
   routes: GatewayHealthRoute[]
+  providers: GatewayHealthProvider[]
+  pools: GatewayHealthPool[]
 }

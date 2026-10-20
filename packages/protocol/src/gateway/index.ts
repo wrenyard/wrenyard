@@ -3,6 +3,8 @@ export type {
   GatewayConnectionParams,
   GatewayEffectiveConnection,
   GatewayHealthParams,
+  GatewayHealthPool,
+  GatewayHealthProvider,
   GatewayHealthResult,
   GatewayHealthRoute,
   GatewayHealthWindow,
