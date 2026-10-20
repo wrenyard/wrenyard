@@ -122,6 +122,7 @@ function SessionUsageSectionBody({ turns }: { turns: ReturnType<typeof fold>['tu
         budget={data.budget}
         groups={data.groups}
         modelName={data.models.find((entry) => entry.publicId === data.modelId)?.displayName}
+        headerClassName="min-h-14 px-4 py-3"
       />
       <SessionUsagePanel
         clusters={data.clusters}
@@ -148,12 +149,14 @@ export function UsagePanel() {
     <div className="flex min-h-0 flex-1 flex-col" data-slot="usage-panel">
       <div className="min-h-0 flex-1 overflow-y-auto">
         {activeSession !== '' ? (
-          <section>
-            <SessionUsageSection sessionId={activeSession} />
-          </section>
+          <>
+            <section>
+              <SessionUsageSection sessionId={activeSession} />
+            </section>
+            <Separator />
+          </>
         ) : null}
-        <Separator />
-        <QuotaPanel firstProviderId={focus ?? undefined} scrollProviderId={scrollTarget} />
+        <QuotaPanel embedded firstProviderId={focus ?? undefined} scrollProviderId={scrollTarget} />
       </div>
       <Separator />
       <PanelFooterAction

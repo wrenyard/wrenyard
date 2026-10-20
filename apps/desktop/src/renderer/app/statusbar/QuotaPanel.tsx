@@ -56,9 +56,11 @@ export interface QuotaPanelProps {
   firstProviderId?: string;
   /** Provider scrolled into view once after mount or when the target changes. */
   scrollProviderId?: string;
+  /** Renders inside a hosting panel's scroll area without standalone chrome. */
+  embedded?: boolean;
 }
 
-export function QuotaPanel({ onClose, firstProviderId, scrollProviderId }: QuotaPanelProps = {}) {
+export function QuotaPanel({ onClose, firstProviderId, scrollProviderId, embedded = false }: QuotaPanelProps = {}) {
   const quota = useQuery(quotaQuery);
   const refresh = useQuotaRefresh();
   const now = useMinuteNow();
@@ -85,8 +87,8 @@ export function QuotaPanel({ onClose, firstProviderId, scrollProviderId }: Quota
   }, [scrollProviderId, providers]);
 
   return (
-    <div className="flex max-h-[560px] w-full min-w-0 flex-col">
-      <div className="flex items-center gap-2 px-4 py-3">
+    <div className={cn('w-full min-w-0', !embedded && 'flex max-h-[560px] flex-col')}>
+      <div className="flex min-h-14 items-center gap-2 px-4 py-3">
         <span className="text-sm font-medium">额度</span>
         <span className="text-xs text-muted-foreground">{updatedAgo(data?.refreshedAt, now)}</span>
         <Button
@@ -101,8 +103,8 @@ export function QuotaPanel({ onClose, firstProviderId, scrollProviderId }: Quota
           <RotateCw className={cn(refresh.isPending && 'animate-spin')} />
         </Button>
       </div>
-      <Separator />
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {!embedded && <Separator />}
+      <div className={cn(embedded ? '' : 'min-h-0 flex-1 overflow-y-auto')}>
         {providers.length === 0 ? (
           <p className="px-4 py-10 text-center text-xs text-muted-foreground">暂无额度数据</p>
         ) : (
@@ -115,14 +117,16 @@ export function QuotaPanel({ onClose, firstProviderId, scrollProviderId }: Quota
           </div>
         )}
       </div>
-      <Separator />
-      <PanelFooterAction
-        label="打开用量设置"
-        onClick={() => {
-          onClose?.();
-          executeCommand('settings.open', 'providers');
-        }}
-      />
+      {!embedded && <>
+        <Separator />
+        <PanelFooterAction
+          label="模型供应设置"
+          onClick={() => {
+            onClose?.();
+            executeCommand('settings.open', 'providers');
+          }}
+        />
+      </>}
     </div>
   );
 }

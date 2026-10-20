@@ -34,9 +34,11 @@ export interface ContextBreakdownProps {
   groups: UsageGroupView[];
   /** Display name of the reason model, for the overflow alert. */
   modelName?: string;
+  /** Optional header spacing override for compact panel compositions. */
+  headerClassName?: string;
 }
 
-export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBreakdownProps) {
+export function ContextBreakdown({ roles, budget, groups, modelName, headerClassName }: ContextBreakdownProps) {
   const [expanded, setExpanded] = useState(false);
   const segments: TokenBarSegment[] = groups.map((group) => ({
     id: group.id,
@@ -98,7 +100,7 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
   return (
     <div className="flex flex-col" data-slot="context-breakdown">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3 px-3 pt-3">
+      <div className={cn('flex items-center justify-between gap-3', headerClassName ?? 'px-3 pt-3')}>
         <span className="text-sm font-medium">会话上下文</span>
       </div>
 
