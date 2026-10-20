@@ -1308,6 +1308,7 @@ export const AGENT_METHODS = [
 ] as const;
 
 export type AgentMethod = (typeof AGENT_METHODS)[number];
+export type AgentMethodMap = AgentMethods & RoutineMethods;
 
 export type {
   AgentListResult,
