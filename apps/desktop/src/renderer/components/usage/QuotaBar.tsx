@@ -219,6 +219,8 @@ export interface QuotaBarProps {
    * adapts the track, pace tick, fill and muted text for the dark tooltip.
    */
   surface?: 'card' | 'inverse';
+  /** Single-line row: truncated label, bar, remaining %, reset tooltip; extras on `title`. */
+  compact?: boolean;
   className?: string;
 }
 
@@ -237,6 +239,7 @@ export function QuotaBar({
   stale = false,
   now: injectedNow,
   surface = 'card',
+  compact = false,
   className,
 }: QuotaBarProps) {
   const minuteNow = useMinuteNow();
@@ -266,6 +269,51 @@ export function QuotaBar({
   const stateView = state === undefined
     ? null
     : { label: QUOTA_POOL_STATE_LABEL[state], tone: quotaPoolStateTone(state) ?? mutedClass };
+
+  if (compact) {
+    // Single-row layout: details that would wrap stay on the row title.
+    const detailParts = [
+      stateView !== null ? stateView.label : exhausted ? '已耗尽' : pace !== null ? `${pace.word}（${pace.label}）` : null,
+      stale ? '数据过期' : null,
+    ].filter((part): part is string => part !== null);
+    return (
+      <div
+        className={cn('flex items-center gap-2 text-xs whitespace-nowrap', stale && 'opacity-60', className)}
+        data-slot="quota-bar"
+        title={detailParts.length > 0 ? detailParts.join(' · ') : undefined}
+      >
+        <span className={cn('max-w-24 min-w-0 truncate', mutedClass)}>{label}</span>
+        <div className="relative flex h-1 min-w-6 flex-1 items-center">
+          <ProgressPrimitive.Root
+            value={used}
+            aria-label={`${label} 已用 ${Math.floor(used)}%`}
+            className="w-full"
+          >
+            <ProgressTrack className={cn('h-1 w-full rounded-full', inverse && 'bg-background/20')}>
+              <ProgressIndicator className={fillClass} />
+            </ProgressTrack>
+          </ProgressPrimitive.Root>
+          {markerLeft !== null && (
+            <span
+              data-slot="quota-pace-marker"
+              className={cn(
+                'pointer-events-none absolute top-0 h-1 w-px -translate-x-1/2 rounded-full',
+                inverse ? 'bg-background' : 'bg-foreground',
+              )}
+              style={{ left: markerLeft }}
+            />
+          )}
+        </div>
+        <span className="shrink-0 tabular-nums">{Math.floor(bounded)}%</span>
+        {reset !== null && (
+          <Tooltip>
+            <TooltipTrigger render={<span className={cn('shrink-0 cursor-default', mutedClass)}>{reset.label}</span>} />
+            <TooltipContent>{reset.exact}</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className={cn('flex flex-col gap-1.5', stale && 'opacity-60', className)} data-slot="quota-bar">

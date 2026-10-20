@@ -65,6 +65,7 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
               resetsAt={window.resetsAt}
               state={window.state}
               stale={provider.stale}
+              compact
             />
           ))}
           {provider.balances.map((balance) => (

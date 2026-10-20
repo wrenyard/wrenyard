@@ -126,7 +126,7 @@ export function SessionInspector({ draft }: { draft: boolean }) {
             title="额度"
             actions={<QuotaCardActions />}
           >
-            <QuotaPanel embedded firstProviderId={focus ?? undefined} scrollProviderId={scrollTarget} />
+            <QuotaPanel firstProviderId={focus ?? undefined} scrollProviderId={scrollTarget} />
           </UsageCard>
         </div>
       </aside>
