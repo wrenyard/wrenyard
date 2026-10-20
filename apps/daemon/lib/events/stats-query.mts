@@ -1,4 +1,4 @@
-import { get as dbGet, getDb, query as dbQuery, run as dbRun } from '../db/connection.mts'
+import { get as dbGet, getDb, query as dbQuery, run as dbRun, tx as dbTx } from '../db/connection.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import { migrateProviderId } from '../config/chatgpt-migration.mts'
 import { AuxiliaryRunStore } from '../db/stores/auxiliary-run-store.mts'
@@ -325,22 +325,41 @@ function closedDayWindows(startAt: string, endBeforeIso: string): StatsDayWindow
   return days
 }
 
+const SQL_READ_SEALED_DAY_ROW = `SELECT day_key, dispatch_count, input_tokens, output_tokens, done_count, failed_count, cancelled_count, built_at
+     FROM stats_day_cache WHERE day_key = ?`
+
 function readSealedDayCacheRow(dayKey: string): StatsDayCacheRow | undefined {
-  return dbGet<StatsDayCacheRow>(
-    `SELECT day_key, dispatch_count, input_tokens, output_tokens, done_count, failed_count, cancelled_count, built_at
-     FROM stats_day_cache WHERE day_key = ?`,
-    dayKey,
+  return dbGet<StatsDayCacheRow>(SQL_READ_SEALED_DAY_ROW, dayKey)
+}
+
+/** Existing sealed day_key values in [firstDayKey, beforeDayKey), lexicographic local-day order. */
+function readSealedDayKeysInRange(firstDayKey: string, beforeDayKey: string): Set<string> {
+  const rows = dbQuery<{ day_key: string }>(
+    `SELECT day_key FROM stats_day_cache WHERE day_key >= ? AND day_key < ?`,
+    firstDayKey,
+    beforeDayKey,
   )
+  return new Set(rows.map((row) => row.day_key))
+}
+
+function readSealedDayCacheRowsInRange(firstDayKey: string, beforeDayKey: string): Map<string, StatsDayCacheRow> {
+  const rows = dbQuery<StatsDayCacheRow>(
+    `SELECT day_key, dispatch_count, input_tokens, output_tokens, done_count, failed_count, cancelled_count, built_at
+     FROM stats_day_cache WHERE day_key >= ? AND day_key < ?`,
+    firstDayKey,
+    beforeDayKey,
+  )
+  return new Map(rows.map((row) => [row.day_key, row]))
 }
 
 /** Missing closed day keys strictly before sealBeforeIso, oldest first, bounded to MAX_STATS_SUMMARY_DAYS. */
 export function listMissingSealedDayKeys(sealBeforeIso: string, now = new Date()): string[] {
   const oldestStart = localDayOffsetStartIso(now, -(MAX_STATS_SUMMARY_DAYS - 1))
-  const missing: string[] = []
-  for (const day of closedDayWindows(oldestStart, sealBeforeIso)) {
-    if (!readSealedDayCacheRow(day.dayKey)) missing.push(day.dayKey)
-  }
-  return missing
+  const windows = closedDayWindows(oldestStart, sealBeforeIso)
+  if (windows.length === 0) return []
+  const beforeDayKey = localDayKeyOf(sealBeforeIso)
+  const existing = readSealedDayKeysInRange(windows[0].dayKey, beforeDayKey)
+  return windows.filter((day) => !existing.has(day.dayKey)).map((day) => day.dayKey)
 }
 
 function dayWindowFromDayKey(dayKey: string): StatsDayWindow | undefined {
@@ -352,8 +371,24 @@ function dayWindowFromDayKey(dayKey: string): StatsDayWindow | undefined {
   return { dayKey, startAt: start.toISOString(), endAt: end.toISOString() }
 }
 
-/** Seal one local calendar day of dispatch/turn_usage totals and terminal task outcomes. */
-export function sealStatsDay(dayKey: string): void {
+const SQL_SEAL_EVENT_TOTALS = `SELECT COALESCE(SUM(CASE WHEN e.type = 'dispatch' THEN 1 ELSE 0 END), 0) AS dispatch_count,
+            COALESCE(SUM(${SQL_TURN_USAGE_INPUT} + ${SQL_TURN_USAGE_CACHED}), 0) AS input_tokens,
+            COALESCE(SUM(${SQL_TURN_USAGE_OUTPUT}), 0) AS output_tokens
+     FROM events e
+     WHERE e.type IN ('dispatch', 'turn_usage')
+       AND e.created_at >= ? AND e.created_at < ?`
+
+const SQL_SEAL_OUTCOME_TOTALS = `SELECT COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
+            COALESCE(SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_count,
+            COALESCE(SUM(CASE WHEN t.status IN ('cancelled', 'interrupted') THEN 1 ELSE 0 END), 0) AS cancelled_count
+     FROM tasks t
+     WHERE t.ended_at >= ? AND t.ended_at < ?
+       AND t.status IN ('done', 'failed', 'cancelled', 'interrupted')`
+
+const SQL_SEAL_UPSERT = `INSERT OR REPLACE INTO stats_day_cache (day_key, dispatch_count, input_tokens, output_tokens, done_count, failed_count, cancelled_count, built_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+
+function sealStatsDayInternal(dayKey: string): void {
   const window = dayWindowFromDayKey(dayKey)
   if (!window) return
   const { startAt, endAt } = window
@@ -362,33 +397,14 @@ export function sealStatsDay(dayKey: string): void {
     dispatch_count: number
     input_tokens: number
     output_tokens: number
-  }>(
-    `SELECT COALESCE(SUM(CASE WHEN e.type = 'dispatch' THEN 1 ELSE 0 END), 0) AS dispatch_count,
-            COALESCE(SUM(${SQL_TURN_USAGE_INPUT} + ${SQL_TURN_USAGE_CACHED}), 0) AS input_tokens,
-            COALESCE(SUM(${SQL_TURN_USAGE_OUTPUT}), 0) AS output_tokens
-     FROM events e
-     WHERE e.type IN ('dispatch', 'turn_usage')
-       AND e.created_at >= ? AND e.created_at < ?`,
-    startAt,
-    endAt,
-  )
+  }>(SQL_SEAL_EVENT_TOTALS, startAt, endAt)
   const outcomeTotals = dbGet<{
     done_count: number
     failed_count: number
     cancelled_count: number
-  }>(
-    `SELECT COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
-            COALESCE(SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_count,
-            COALESCE(SUM(CASE WHEN t.status IN ('cancelled', 'interrupted') THEN 1 ELSE 0 END), 0) AS cancelled_count
-     FROM tasks t
-     WHERE t.ended_at >= ? AND t.ended_at < ?
-       AND t.status IN ('done', 'failed', 'cancelled', 'interrupted')`,
-    startAt,
-    endAt,
-  )
+  }>(SQL_SEAL_OUTCOME_TOTALS, startAt, endAt)
   dbRun(
-    `INSERT OR REPLACE INTO stats_day_cache (day_key, dispatch_count, input_tokens, output_tokens, done_count, failed_count, cancelled_count, built_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    SQL_SEAL_UPSERT,
     dayKey,
     eventTotals?.dispatch_count ?? 0,
     eventTotals?.input_tokens ?? 0,
@@ -399,6 +415,20 @@ export function sealStatsDay(dayKey: string): void {
     builtAt,
   )
 }
+
+/** Seal one local calendar day of dispatch/turn_usage totals and terminal task outcomes. */
+export function sealStatsDay(dayKey: string): void {
+  sealStatsDayInternal(dayKey)
+}
+
+function sealStatsDaysInTransaction(dayKeys: string[]): void {
+  if (dayKeys.length === 0) return
+  dbTx(() => {
+    for (const dayKey of dayKeys) sealStatsDayInternal(dayKey)
+  })
+}
+
+const STATS_DAY_CACHE_SEAL_BATCH_SIZE = 32
 
 let statsDayCacheSealerStopped = false
 
@@ -413,10 +443,11 @@ export function startStatsDayCacheBackgroundSealer(options: { isShuttingDown: ()
     try {
       const sealBeforeIso = localDayOffsetStartIso(new Date(), -(31 - 1))
       const missing = listMissingSealedDayKeys(sealBeforeIso)
-      for (const dayKey of missing) {
+      for (let offset = 0; offset < missing.length; offset += STATS_DAY_CACHE_SEAL_BATCH_SIZE) {
         if (statsDayCacheSealerStopped || options.isShuttingDown()) return
+        const batch = missing.slice(offset, offset + STATS_DAY_CACHE_SEAL_BATCH_SIZE)
         try {
-          sealStatsDay(dayKey)
+          sealStatsDaysInTransaction(batch)
         } catch (error) {
           writeDaemonLogNonFatal('stats day cache seal failed', error)
         }
@@ -445,16 +476,6 @@ function applySealedTotalsToBucket(bucket: DailyBucket, row: StatsDayCacheRow): 
       cancelled: row.cancelled_count,
     }
   }
-}
-
-function ensureSealedDayForBucket(dayKey: string, sealBeforeDayKey: string): StatsDayCacheRow | undefined {
-  if (dayKey >= sealBeforeDayKey) return undefined
-  let row = readSealedDayCacheRow(dayKey)
-  if (!row) {
-    sealStatsDay(dayKey)
-    row = readSealedDayCacheRow(dayKey)
-  }
-  return row
 }
 
 export function readTodayStats(now = new Date()): DailyStatsResponse {
@@ -554,10 +575,18 @@ function readStatsSummaryUncached(
 
   // Daily chart days strictly before the 31-day live window are served from
   // sealed per-day totals (lazy seal on read); rankings and fixed windows stay live.
-  for (const bucket of dailyBuckets) {
-    if (bucket.dayKey >= sealBeforeDayKey) continue
-    const sealed = ensureSealedDayForBucket(bucket.dayKey, sealBeforeDayKey)
-    if (sealed) applySealedTotalsToBucket(bucket, sealed)
+  const sealedBucketKeys = dailyBuckets.filter((bucket) => bucket.dayKey < sealBeforeDayKey).map((b) => b.dayKey)
+  if (sealedBucketKeys.length > 0) {
+    const firstBucketKey = sealedBucketKeys[0]
+    const existingKeys = readSealedDayKeysInRange(firstBucketKey, sealBeforeDayKey)
+    const missingKeys = sealedBucketKeys.filter((dayKey) => !existingKeys.has(dayKey))
+    if (missingKeys.length > 0) sealStatsDaysInTransaction(missingKeys)
+    const sealedRows = readSealedDayCacheRowsInRange(firstBucketKey, sealBeforeDayKey)
+    for (const bucket of dailyBuckets) {
+      if (bucket.dayKey >= sealBeforeDayKey) continue
+      const sealed = sealedRows.get(bucket.dayKey)
+      if (sealed) applySealedTotalsToBucket(bucket, sealed)
+    }
   }
 
   // Bounded live event scan for the rolling 31-local-day window only. Token
