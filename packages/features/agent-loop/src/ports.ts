@@ -370,8 +370,4 @@ export interface LoopHelpers {
   escapeBody(text: string): string;
   /** Render the conversation events block of the auxiliary user message. */
   renderEventsBlock(events: readonly LedgerEvent[]): string;
-  /** Diagnose one tool observation. */
-  diagnoseToolObservation(observation: ToolCallObservation): ToolDiagnosis;
-  /** Record one verified, successful tool call. */
-  recordSuccessfulToolCall(record: ToolContractRecord): void;
 }

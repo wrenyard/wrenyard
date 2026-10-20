@@ -21,7 +21,6 @@ import { makeDocumentDraft, type DocContentDraft } from '../documents.ts';
 import { messageOf } from '../errors.ts';
 import type { LedgerEvent, LedgerEventDraft } from '../ledger/store.ts';
 import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';
-import { diagnoseToolObservation, recordSuccessfulToolCall } from './tool-contract.ts';
 
 /** Document kind to its directory under `docs/`. */
 const KIND_DIRECTORIES = {
@@ -52,8 +51,6 @@ export async function runDocumentAction(
       messageOf,
       escapeBody,
       renderEventsBlock,
-      diagnoseToolObservation,
-      recordSuccessfulToolCall,
     },
   };
   record.captureDocument = documentDraftHook(deps, ctx, record);

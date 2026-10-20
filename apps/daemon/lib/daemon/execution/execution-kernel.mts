@@ -371,12 +371,13 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     // Resolve selected features from config before launching an agent.
     // Invalid selections surface as deterministic task execution errors.
     const selectedFeatures = resolveFeatures(config.features, effectiveInput)
-    const writePaths = resolveTaskWritePaths(
+    const resolvedWritePaths = resolveTaskWritePaths(
       config,
       effectiveInput,
       executionOptions.workingDirectory ?? process.cwd(),
     )
-    const repoWriteLock = config.writeTargets !== undefined
+    const repoWriteLock = resolvedWritePaths !== undefined && resolvedWritePaths.length > 0
+    const writePaths = repoWriteLock ? resolvedWritePaths : undefined
     // AC-5 final state: definition output schemas are ZodType only. Pass the
     // original ZodType to collectStructuredOutput, which converts to draft-07
     // JSON Schema internally for validation. `normalizeSchema`/JSON conversion

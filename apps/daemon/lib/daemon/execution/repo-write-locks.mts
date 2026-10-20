@@ -122,8 +122,20 @@ export class RepoWriteLocks {
 
 function locksConflict(left: readonly string[] | null, right: readonly string[] | null): boolean {
   if (left === null || right === null) return true
-  const leftSet = new Set(left)
-  return right.some((target) => leftSet.has(target))
+  for (const a of left) {
+    for (const b of right) {
+      if (pathsOverlap(a, b)) return true
+    }
+  }
+  return false
+}
+
+function pathsOverlap(left: string, right: string): boolean {
+  const a = canonicalPath(left)
+  const b = canonicalPath(right)
+  if (a === b) return true
+  const sep = process.platform === 'win32' ? '\\' : '/'
+  return a.startsWith(`${b}${sep}`) || b.startsWith(`${a}${sep}`)
 }
 
 function canonicalPath(value: string): string {

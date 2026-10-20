@@ -16,9 +16,12 @@ import { readTaskArtifactErrors } from '@wrenyard/task'
 import { resolveFeatures } from '@wrenyard/task'
 import {
   TaskContextError,
+  resolveTaskWritePaths,
   splitTaskInputContext,
+  type TaskConfig,
   type TaskContext,
 } from '@wrenyard/task'
+import { findTaskWriteConflict as findRegisteredTaskWriteConflict } from '../../daemon/execution/task-write-targets.mts'
 
 type JsonRecord = Record<string, unknown>
 
@@ -116,6 +119,13 @@ export type TaskRunResponse =
   | TaskInputRequired
   | TaskInputValidationFailed
   | TaskDefinitionLoadFailed
+
+export interface TaskWriteConflictInfo {
+  runId: string
+  taskId: string
+  targets: readonly string[]
+  overlap: readonly string[]
+}
 
 export class TaskServiceError extends Error {
   readonly code: string
@@ -306,6 +316,12 @@ export class TaskService {
       )
     }
 
+    const resolvedWriteTargets = resolveTaskRunWriteTargets(
+      target.definition.config,
+      input,
+      workingDirectory,
+    )
+
     const accepted = await this.requireRunner().startTaskRun({
       definitionName: taskId,
       taskName: target.name,
@@ -319,10 +335,54 @@ export class TaskService {
       connectingId: params.connectingId,
       taskContext,
       invocationSettings: params.invocationSettings,
-    })
+      ...(resolvedWriteTargets !== undefined && resolvedWriteTargets.length > 0
+        ? { writeTargets: resolvedWriteTargets }
+        : {}),
+    } as import('../operations/types.mts').StartTaskRunOptions)
     return description.displayName === undefined
       ? accepted
       : { ...accepted, task_name: description.displayName }
+  }
+
+  async findTaskWriteConflict(params: {
+    project: string
+    worktree?: string
+    task: string
+    input: unknown
+  }): Promise<TaskWriteConflictInfo | null> {
+    const project = params.project.trim()
+    const taskId = params.task.trim()
+    if (!project || !taskId) return null
+
+    await this.workspace.ensureDiscovered()
+    this.requireRegisteredProject(project)
+
+    const target = this.workspace.tasks.resolve(taskId, project)
+    if (!target || target.definition.config.writeTargets === undefined) return null
+
+    if (params.input === undefined || params.input === null) return null
+
+    const description = await this.describe(taskId, project)
+    if (this.validateInput(description, params.input)) return null
+
+    let workingDirectory: string
+    try {
+      workingDirectory = this.resolveWorkingDirectory(project, params.worktree)
+    } catch {
+      return null
+    }
+
+    const resolved = resolveTaskRunWriteTargets(
+      target.definition.config,
+      params.input,
+      workingDirectory,
+    )
+    if (resolved === undefined || resolved.length === 0) return null
+
+    return findRegisteredTaskWriteConflict({
+      checkoutPath: workingDirectory,
+      targets: resolved,
+    })
   }
 
   async cancel(taskRunId: string): Promise<JsonRecord> {
@@ -675,6 +735,15 @@ export class TaskService {
     }
     return manager.resolveBasePath(project)
   }
+}
+
+function resolveTaskRunWriteTargets(
+  config: TaskConfig,
+  input: unknown,
+  workingDirectory: string,
+): readonly string[] | undefined {
+  if (config.writeTargets === undefined) return undefined
+  return resolveTaskWritePaths(config, input, workingDirectory)
 }
 
 function readTaskStatusRow(taskRunId: string): DbTaskStatusRow | null {

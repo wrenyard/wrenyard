@@ -212,7 +212,7 @@ const definition = {
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     // A declared empty target set means this mutation-capable task requires a
     // conservative repo-wide coordination lock.
-    writeTargets: () => [],
+    writeTargets: () => ['.'],
     features: testFeatureConfig,
     instructions: [shellUsage],
     input: TestInputSchema,

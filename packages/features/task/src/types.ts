@@ -70,11 +70,11 @@ export interface TaskConfigBase {
     pre?: TaskGate[]
     post?: TaskGate[]
   }
-  /** Marks a task as mutation-capable and, when non-empty, provides
-   *  deterministic exact file targets for scoped write-lock admission. Return
-   *  an empty list for repo-wide write protection; omit this field entirely
-   *  for observational tasks. The execution kernel resolves and bounds every
-   *  returned path inside the active checkout/worktree. */
+  /** Marks a task as mutation-capable and supplies deterministic write targets
+   *  for scoped admission. Omit for observational tasks (no task-level lock).
+   *  A declared resolver that returns an empty list also means no lock. Use
+   *  `'.'` for repository-wide scope under the active checkout. The execution
+   *  kernel resolves and bounds every returned path inside the checkout. */
   writeTargets?: (input: unknown) => readonly string[]
   /** Total wall-clock milliseconds budgeted for this task's model execution:
    *  one shared deadline covering the initial native-agent execution and every

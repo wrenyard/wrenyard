@@ -110,65 +110,6 @@ function createAsyncSnapshotCache<T>(ttlMs: number) {
   }
 }
 
-/**
- * Recent routes each session used through this daemon, kept in memory only.
- * Route-scoped notices are the only reason to reach an otherwise idle session,
- * so this stays bounded and is never persisted.
- */
-const sessionRouteUse = new Map<string, Set<string>>()
-const SESSION_ROUTE_USE_MAX_KEYS = 8
-const SESSION_ROUTE_USE_MAX_SESSIONS = 1024
-
-function trackSessionRouteUse(sessionId: string, provider: string, publicModel: string): void {
-  const routeKey = `${provider}/${publicModel}`
-  let routes = sessionRouteUse.get(sessionId)
-  if (routes === undefined) {
-    if (sessionRouteUse.size >= SESSION_ROUTE_USE_MAX_SESSIONS) {
-      const oldest = sessionRouteUse.keys().next()
-      if (!oldest.done) sessionRouteUse.delete(oldest.value)
-    }
-    routes = new Set<string>()
-    sessionRouteUse.set(sessionId, routes)
-  } else if (routes.has(routeKey)) {
-    return
-  }
-  if (routes.size >= SESSION_ROUTE_USE_MAX_KEYS) {
-    const oldest = routes.keys().next()
-    if (!oldest.done) routes.delete(oldest.value)
-  }
-  routes.add(routeKey)
-}
-
-/**
- * Best-effort broadcast of one real condition change to the session ledgers that
- * can act on it. Notices are delivered only to sessions with a running or
- * pending turn and, for route-scoped notices, also to sessions that used that
- * route through this daemon. A session that cannot record the event is skipped:
- * a diagnostic trigger must never fail the operation that observed the change.
- */
-async function broadcastConditionChange(
-  session: Session | undefined,
-  message: string,
-  route?: { provider: string; publicModel: string },
-): Promise<void> {
-  if (session === undefined) return
-  try {
-    const routeKey = route === undefined ? undefined : `${route.provider}/${route.publicModel}`
-    for (const summary of session.listSessions()) {
-      const active = summary.running === true || (summary.pendingTurns?.length ?? 0) > 0
-      const usedRoute = routeKey !== undefined && sessionRouteUse.get(summary.sessionId)?.has(routeKey) === true
-      if (!active && !usedRoute) continue
-      try {
-        await session.recordConditionChange(summary.sessionId, message)
-      } catch {
-        // Per-session failure is expected and ignored.
-      }
-    }
-  } catch {
-    // An unreadable session list is also a non-fatal diagnostic miss.
-  }
-}
-
 export interface RunningForemanDaemon {
   db: ForemanDatabase
   repoWriteLocks: RepoWriteLocks
@@ -478,10 +419,6 @@ export class ForemanDaemon implements RunningForemanDaemon {
       return
     }
     if (previous === version) return
-    await broadcastConditionChange(
-      resources.session,
-      `Daemon restarted on a new suite version (${previous} → ${version}).`,
-    )
     try {
       await writeFile(stampPath, `${version}\n`, { mode: 0o600 })
     } catch (error) {
@@ -926,10 +863,6 @@ async function createForemanDaemonResources(
   // for this process and never logged.
   const gatewayToken = config.gateway.token ?? persistGeneratedGatewayToken(authoritativeConfigPath)
   const runtimeAvailability = createRoutingAvailability({ catalog, providerRuntime, loadNativeProviderReadiness, loadCurrentCodeBuddySnapshot })
-  // The current workspace's session surface, used to record real condition
-  // changes for later dispatch gates. It is assigned once bindings exist and
-  // re-pointed on a workspace switch.
-  let conditionSession: Session | undefined
   const gatewayEventStore = new ForemanEventStore(runtime.db)
   const gateway = createModelGateway({
     catalog,
@@ -971,13 +904,6 @@ async function createForemanDaemonResources(
       }
       gatewayEventStore.append(foremanEvent)
       await getForemanEventBus().publish(foremanEvent)
-      if (event.state === 'available') {
-        void broadcastConditionChange(
-          conditionSession,
-          `Route recovered to available: ${event.provider}/${event.publicModel}.`,
-          { provider: event.provider, publicModel: event.publicModel },
-        )
-      }
     },
     onRequestCompleted: async (event) => {
       const foremanEvent: ForemanEvent = {
@@ -1013,9 +939,6 @@ async function createForemanDaemonResources(
         occurredAt: new Date().toISOString(),
       }
       gatewayEventStore.append(foremanEvent)
-      if (event.sessionId !== undefined && event.provider !== undefined && event.publicModel !== undefined) {
-        trackSessionRouteUse(event.sessionId, event.provider, event.publicModel)
-      }
       // The completion event is now persisted, so the attributed execution can
       // be re-read. A still-running execution yields no sample, and a late
       // completion replaces the client-derived sample with the gateway pair.
@@ -1112,7 +1035,6 @@ async function createForemanDaemonResources(
     invalidateProviderReadiness()
     providerServiceForInvalidation?.invalidateList()
     const snapshot = await gatewaySettingsSnapshot()
-    void broadcastConditionChange(conditionSession, 'Gateway routing settings changed.')
     return {
       ok: true,
       ...snapshot,
@@ -1370,7 +1292,6 @@ async function createForemanDaemonResources(
     coreOptions.taskSettings = bindings.taskSettingsService
     coreOptions.workspaceDocService = bindings.workspaceDocService
     coreOptions.workspaceTodoService = bindings.workspaceTodoService
-    conditionSession = bindings.session
   }
 
   /**
@@ -1388,7 +1309,6 @@ async function createForemanDaemonResources(
 
   let coreOptions: CoreRpcHandlerOptions
   let workspaceScoped = await createBindings(config.workspaceRoot)
-  conditionSession = workspaceScoped.session
   const providerService = new ProviderService({
     catalog, runtime: providerRuntime,
     // Live indirection: provider.list always reports the CURRENT workspace's

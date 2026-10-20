@@ -16,7 +16,6 @@ import { runAuxiliary, type AuxiliaryRecordPort, createLoopRecord } from '@wreny
 import { escapeBody, renderEventsBlock } from '../context/render.ts';
 import { messageOf } from '../errors.ts';
 import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';
-import { diagnoseToolObservation, recordSuccessfulToolCall } from './tool-contract.ts';
 
 /** Start one project session for a parsed action. */
 export async function runProjectAction(
@@ -30,8 +29,6 @@ export async function runProjectAction(
       messageOf,
       escapeBody,
       renderEventsBlock,
-      diagnoseToolObservation,
-      recordSuccessfulToolCall,
     },
   };
   return runAuxiliary('project', action.intent, {

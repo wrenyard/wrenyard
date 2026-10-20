@@ -18,6 +18,14 @@ import { DaemonTaskRunner } from './task-runner.mts'
 import type { SupervisorLogger } from './agent-supervisor.mts'
 import type { TaskDispatchResolver } from '@wrenyard/task'
 import { appendForemanEvent } from '../../events/event-store.mts'
+import {
+  registerTaskWriteTargets,
+  releaseTaskWriteTargets,
+} from './task-write-targets.mts'
+
+type StartTaskRunOptionsWithWriteTargets = StartTaskRunOptions & {
+  writeTargets?: readonly string[]
+}
 
 export interface TaskWorkflowRunnerOptions {
   db: ForemanDatabase
@@ -72,6 +80,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
 
   async startTaskRun(opts: StartTaskRunOptions): Promise<TaskRunAcceptedHandle> {
     const taskRunId = createTaskRunId()
+    const writeOpts = opts as StartTaskRunOptionsWithWriteTargets
 
     const createdAt = this.insertTaskPlaceholder({
       taskRunId,
@@ -81,6 +90,14 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
       worktree: opts.worktree,
       source: opts.source,
     })
+
+    if (writeOpts.writeTargets !== undefined && writeOpts.writeTargets.length > 0) {
+      registerTaskWriteTargets(taskRunId, {
+        taskId: opts.definitionName,
+        checkoutPath: opts.workingDirectory,
+        targets: writeOpts.writeTargets,
+      })
+    }
 
     void this.taskRunner.execute(opts.definitionName, opts.input, {
       workspaceRoot: opts.workspaceRoot,
@@ -106,6 +123,8 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
         taskErrorField(error, 'suggestion'),
         taskErrorField(error, 'error_message'),
       )
+    }).finally(() => {
+      releaseTaskWriteTargets(taskRunId)
     })
 
     return {
@@ -201,6 +220,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
       occurredAt: now,
     })
 
+    releaseTaskWriteTargets(taskRunId)
     return { ok: true, task_run_id: taskRunId, status: 'cancelled' }
   }
 

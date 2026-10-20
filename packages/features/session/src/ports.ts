@@ -116,6 +116,28 @@ export interface SessionHost {
    * named MCP server).
    */
   environmentTools?(): Promise<readonly string[]>;
+  findTaskWriteConflict(params: {
+    project: string;
+    worktree?: string;
+    task: string;
+    input: unknown;
+  }): Promise<{
+    runId: string;
+    taskId: string;
+    targets: readonly string[];
+    overlap: readonly string[];
+  } | null>;
+  findTaskWriteConflict(params: {
+    project: string;
+    worktree?: string;
+    task: string;
+    input: unknown;
+  }): Promise<{
+    runId: string;
+    taskId: string;
+    targets: readonly string[];
+    overlap: readonly string[];
+  } | null>;
   createTaskRun(params: {
     task: string;
     project?: string;
@@ -137,11 +159,6 @@ export interface SessionHost {
     artifactErrors?: string[];
   }>;
   cancelTaskRun(taskRunId: string): Promise<void>;
-  /**
-   * True while the task run exists and its status is still queued or running;
-   * null, unknown and terminal runs resolve false.
-   */
-  taskRunActive(taskRunId: string): Promise<boolean>;
   /**
    * Optional agent tool port for one session. When a host returns one, the
    * session's reason request uses the port's own system prompt and native tool
@@ -300,12 +317,6 @@ export interface Session {
    * page's; `hasMore` says whether another page follows.
    */
   readLedgerPage(sessionId: string, afterSeq: number, limit: number): LedgerPage;
-  /**
-   * Record a real condition change on the session's timeline so a later
-   * dispatch can be told apart from a blind repeat. It is not part of a turn,
-   * so the event carries no turn or step.
-   */
-  recordConditionChange(sessionId: string, message: string): Promise<void>;
   /**
    * Read-only, forward-looking inspection of the next main reasoning view.
    * Omitted `sessionId` inspects a new session (resident layers plus snapshot).

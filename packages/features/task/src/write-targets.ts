@@ -5,9 +5,9 @@ const MAX_WRITE_TARGETS = 128
 
 /**
  * Resolve a task's deterministic write targets into bounded checkout-local
- * absolute paths. An omitted declaration returns undefined (observational);
- * a declared empty result returns an empty list as the repo-wide write-lock
- * marker.
+ * absolute paths. An omitted declaration returns undefined (observational, no
+ * lock). A declared empty result is an empty list (no lock). Use `'.'` for
+ * repository-wide scope under the active checkout.
  */
 export function resolveTaskWritePaths(
   config: TaskConfig,
@@ -29,12 +29,16 @@ export function resolveTaskWritePaths(
     if (typeof value !== 'string' || !value.trim()) {
       throw new Error('Task writeTargets must return non-empty path strings')
     }
-    const absolute = resolve(root, value)
-    const fromRoot = relative(root, absolute)
-    if (!fromRoot || fromRoot === '..' || fromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(fromRoot)) {
-      throw new Error(`Task write target must be a file inside the active checkout: ${value}`)
+    const trimmed = value.trim()
+    const absolute = trimmed === '.' ? root : resolve(root, value)
+    if (trimmed !== '.') {
+      const fromRoot = relative(root, absolute)
+      const parentPrefix = `..${process.platform === 'win32' ? '\\' : '/'}`
+      if (fromRoot === '..' || fromRoot.startsWith(parentPrefix) || isAbsolute(fromRoot)) {
+        throw new Error(`Task write target must be a file inside the active checkout: ${value}`)
+      }
     }
     unique.add(absolute)
   }
-  return unique.size > 0 ? [...unique] : undefined
+  return [...unique]
 }

@@ -12,8 +12,6 @@ import { existsSync } from 'node:fs';
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 
 import { renderTaskResult } from './dispatch-result.ts';
-import { evaluateDispatchGate } from './dispatch-gate.ts';
-import { renderToolContracts, toolContractsFor } from './tool-contract.ts';
 import { fail, isObject, renderRunFiles } from './shared.ts';
 import { messageOf } from '../errors.ts';
 import {
@@ -373,25 +371,6 @@ export async function runDispatchAction(
   }
   if (compiled === undefined) return fail(compileError);
 
-  // A verified contract gets one extra compilation outside the bounded repair
-  // loop. Its failure cannot discard the already-valid compile result.
-  const renderedContracts = renderToolContracts(toolContractsFor({
-    project: compiled.project.id,
-    task: compiled.taskId,
-    ...(compiled.worktree === undefined ? {} : { worktree: compiled.worktree }),
-  }, ctx.snapshot.deviceName));
-  if (renderedContracts !== '') {
-    const contractOutcome = await runCompileCall(
-      deps,
-      buildCompile({ ...compileInput, contracts: renderedContracts }),
-      ctx,
-    );
-    if (contractOutcome.ok) {
-      const contractCompile = checkCompiled(contractOutcome.text, ctx, contracts);
-      if (contractCompile.ok) compiled = contractCompile;
-    }
-  }
-
   const { parsed, project, taskId, worktree, effectiveInput, fast } = compiled;
 
   // Capability gate: a task whose contract requires a capability no execution
@@ -435,25 +414,6 @@ export async function runDispatchAction(
     }
   }
 
-  // The convergence gate: refuse a repeat full implementation dispatch for the
-  // same target while it is still in flight or its failure has neither new
-  // evidence nor a condition change behind it.
-  let decision = evaluateDispatchGate(ctx.currentEvents(), {
-    project: project.id,
-    task: taskId,
-    ...(worktree === undefined ? {} : { worktree }),
-  });
-  if (!decision.allowed && decision.kind === 'in-flight') {
-    // An open ledger span alone does not prove a live run: the parent action
-    // may have died without closing. Only a task run the host confirms queued
-    // or running — or an open span whose run id is missing — really refuses;
-    // otherwise the dispatch proceeds.
-    const anyActive = decision.hasMissingTaskRunId
-      || (await Promise.all(decision.taskRunIds.map((id) => deps.host.taskRunActive(id)))).some(Boolean);
-    if (!anyActive) decision = { allowed: true };
-  }
-  if (!decision.allowed) return { status: 'failed', result: decision.message, deferred: [] };
-
   const rawTitle = typeof parsed.title === 'string' ? parsed.title.trim() : '';
   const title = rawTitle !== '' && rawTitle.length <= 40 ? rawTitle : '';
   if (title !== '') ctx.onTitle?.(title);
@@ -465,6 +425,22 @@ export async function runDispatchAction(
     taskCtx = buildTaskContext(ctx.currentEvents(), ctx.actionId, project);
   } catch (error) {
     return fail(messageOf(error));
+  }
+
+  try {
+    const conflict = await deps.host.findTaskWriteConflict({
+      project: project.id,
+      task: taskId,
+      input: effectiveInput,
+      ...(worktree === undefined ? {} : { worktree }),
+    })
+    if (conflict) {
+      return fail(
+        `cannot dispatch task '${taskId}': running task run '${conflict.runId}' (task '${conflict.taskId}') already holds overlapping write targets: ${conflict.overlap.join(', ')}`,
+      )
+    }
+  } catch (error) {
+    return fail(messageOf(error))
   }
 
   let taskRunId: string;
@@ -524,7 +500,7 @@ export async function runDispatchAction(
   const status: ActionStatus = waited === undefined
     ? (aborted ? 'cancelled' : 'failed')
     : mapTaskStatus(waited.status, aborted);
-  const taskStatus = waited?.status ?? (aborted ? 'cancelled' : 'executor-fault');
+  const taskStatus = waited?.status ?? (aborted ? 'cancelled' : 'failed');
   const deferred: LedgerEventDraft[] = [];
   let result = waited === undefined ? `waitTaskRun failed: ${messageOf(waitError)}` : renderTaskResult(waited.output);
 
