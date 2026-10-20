@@ -9,8 +9,11 @@
  * own result says so. Nothing here is a ledger event type; the store lives for
  * the process and is keyed by the same target identity as the dispatch gate.
  */
-import { targetKeyOf } from './dispatch-gate.ts';
 import { escapeBody } from '../context/render.ts';
+
+function targetKeyOf(target: { project: string; task: string; worktree?: string }): string {
+  return `${target.project}::${target.task}::${target.worktree ?? ''}`;
+}
 
 /** The target identity one verified contract was recorded for. */
 export interface ToolContractRecord {

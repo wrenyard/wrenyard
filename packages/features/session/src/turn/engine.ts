@@ -869,22 +869,6 @@ class Engine implements Session, SessionCallHost {
   }
 
   /**
-   * Record a real condition change on the session's timeline. This happens
-   * outside any turn, so the event carries neither a turn nor a step.
-   */
-  async recordConditionChange(sessionId: string, message: string): Promise<void> {
-    this.assertOpen();
-    await this.ready;
-    await this.ensureSession(sessionId);
-    await this.ports.ledger.append(sessionId, {
-      type: 'system.info',
-      source: 'system',
-      code: 'dispatch.condition-change',
-      message,
-    });
-  }
-
-  /**
    * Record that a session's active turn is waiting for recovery. The turn/call
    * path calls this whenever the wait is reported — at its start and whenever
    * its real expected retry time changes — and clears it on the next actual
@@ -1084,6 +1068,23 @@ class Engine implements Session, SessionCallHost {
       type: 'session.metadata',
       ...(patch.archived === undefined ? {} : { archived: patch.archived }),
       ...(patch.pinned === undefined ? {} : { pinned: patch.pinned }),
+    });
+  }
+
+  async recordWriteTargetsFree(sessionId: string, message: string): Promise<void> {
+    this.assertOpen();
+    await this.ready;
+    const session = await this.ensureSession(sessionId);
+    let latestTurn = 0;
+    for (const turn of session.turns.values()) latestTurn = Math.max(latestTurn, turn.turn);
+    for (const event of this.ports.ledger.read(sessionId)) latestTurn = Math.max(latestTurn, event.turn ?? 0);
+    await this.ports.ledger.append(sessionId, {
+      type: 'system.info',
+      turn: latestTurn,
+      ...(latestTurn > 0 ? { parent: turnId(latestTurn) } : {}),
+      source: 'system',
+      code: 'task.write-targets-free',
+      message,
     });
   }
 

@@ -376,7 +376,9 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       effectiveInput,
       executionOptions.workingDirectory ?? process.cwd(),
     )
-    const repoWriteLock = config.writeTargets !== undefined
+    const repoWriteLock = executionOptions.taskRunWriteLock === true
+      ? false
+      : (writePaths?.length ?? 0) > 0
     // AC-5 final state: definition output schemas are ZodType only. Pass the
     // original ZodType to collectStructuredOutput, which converts to draft-07
     // JSON Schema internally for validation. `normalizeSchema`/JSON conversion
@@ -405,6 +407,14 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     insertTaskLifecycleEvent(record, 'task.started')
     await recordTaskRunEvent(record, 'task.run.started', executionOptions)
     const primitives = mergePrimitives(executionOptions.primitives)
+    const agent = primitives.agent
+    primitives.agent = (profile, prompt, opts) => agent(profile, prompt, {
+      ...opts,
+      repoWriteLock: executionOptions.taskRunWriteLock === true
+        ? false
+        : opts?.repoWriteLock ?? repoWriteLock,
+      writePaths: opts?.writePaths,
+    })
     restore = installRuntimeGlobals({
       primitives,
     })
@@ -564,7 +574,9 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         }
         return primitives.agent(profile, prompt, {
           ...opts,
-          repoWriteLock: opts?.repoWriteLock ?? repoWriteLock,
+          repoWriteLock: executionOptions.taskRunWriteLock === true
+            ? false
+            : opts?.repoWriteLock ?? repoWriteLock,
           writePaths: opts?.writePaths,
         })
       }

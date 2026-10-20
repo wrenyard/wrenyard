@@ -327,6 +327,7 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
       const result = await taskService.run({
         taskId: params.task, project, input: params.input, ctx: params.ctx as TaskContext | undefined,
         ...(params.worktree === undefined ? {} : { worktree: params.worktree }),
+        ...(params.sessionId === undefined ? {} : { sessionId: params.sessionId }),
         ...(params.fast === undefined ? {} : { invocationSettings: { automatic: { fast: params.fast } } }),
       })
       if (isTaskRunRejection(result)) throw new Error(`Task run rejected: ${JSON.stringify(result)}`)
@@ -346,17 +347,6 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
       }
     },
     async cancelTaskRun(taskRunId) { await taskService.cancel(taskRunId) },
-    /**
-     * Liveness of one task run: true only while the run's row exists and its
-     * status is queued or running; null, unknown and terminal statuses are
-     * false, mirroring the task service's active-run definition.
-     */
-    async taskRunActive(taskRunId: string): Promise<boolean> {
-      const status = taskService.status(taskRunId)
-      if (status === null) return false
-      const value = status.status
-      return value === 'queued' || value === 'running'
-    },
     /**
      * Describe the allowlisted project methods a session may call, in request
      * order. During an auxiliary run the running definition's method list is

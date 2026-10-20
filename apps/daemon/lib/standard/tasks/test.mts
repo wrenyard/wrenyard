@@ -210,9 +210,7 @@ const definition = {
     description:
       'Generic verification runner. Interprets acceptance criteria, chooses reasonable verification actions, and reports evidence and assessments without proposing code edits. Supports browser verification through the agent-browser CLI and desktop-app verification through Cua Driver, using the operation components installed in Settings.',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
-    // A declared empty target set means this mutation-capable task requires a
-    // conservative repo-wide coordination lock.
-    writeTargets: () => [],
+    writeTargets: () => ['.'],
     features: testFeatureConfig,
     instructions: [shellUsage],
     input: TestInputSchema,

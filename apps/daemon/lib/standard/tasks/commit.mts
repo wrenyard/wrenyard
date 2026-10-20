@@ -225,9 +225,7 @@ const definition = {
     description:
       'Structured git commit agent. Stages only declared file changes and creates verified local commits. NEVER pushes — outbound push happens only via `wrenyard project push <project>`.',
     dispatch: COMMIT_DISPATCH_REQUIREMENTS,
-    // A declared empty target set means this mutation-capable task requires a
-    // conservative repo-wide coordination lock.
-    writeTargets: () => [],
+    writeTargets: () => ['.'],
     instructions: [commitRules, shellUsage],
     input: CommitRequestSchema,
     output: CommitReportSchema,

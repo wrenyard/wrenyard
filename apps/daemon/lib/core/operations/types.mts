@@ -164,6 +164,14 @@ export interface StartTaskRunOptions {
    *  only. Sits at the top of the field precedence chain and is never
    *  persisted by the daemon. */
   invocationSettings?: import('../../protocol/methods/task.mts').TaskSettingsLayer
+  /** Resolved checkout-local write targets for task-run admission; omitted when
+   *  the definition declares no write scope. */
+  writePaths?: readonly string[]
+  /** Originating session for session-directed runs; internal only. */
+  sessionId?: string
+  /** Conflict policy at task-run admission. `wait` is honored only on the
+   *  internal TaskGraph `allowLegacyTask` path; all other callers refuse. */
+  writeConflictPolicy?: 'wait' | 'refuse'
 }
 
 export interface TaskWorkflowRunHost {
