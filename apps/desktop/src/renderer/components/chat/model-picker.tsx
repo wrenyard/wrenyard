@@ -78,6 +78,10 @@ export interface ModelOption {
   quotaEvidence?: 'measured' | 'unknown_by_design' | 'not_obtained';
   /** Per-provider quota summary shown in the group header. */
   providerQuotaSummary?: string;
+  /** Catalog intelligence tier; absent when unknown. */
+  intelligence?: 'low' | 'mid' | 'high' | 'premium';
+  /** Short label shown when this route is currently faulted. */
+  routeNotice?: string;
   /** Explicit free supply: keeps the free badge and normal placement. */
   free?: boolean;
 }
@@ -92,11 +96,32 @@ function quotaTier(option: ModelOption): number {
   }
 }
 
-/** Stable within-tier order: abundant, sufficient, insufficient, exhausted. */
-function orderByQuota(items: readonly ModelOption[]): ModelOption[] {
+/** Intelligence tiers in picker order; an unknown tier ranks after mid. */
+function intelligenceTier(option: ModelOption): number {
+  switch (option.intelligence) {
+    case 'premium': return 0;
+    case 'high': return 1;
+    case 'mid': return 2;
+    default: return 3;
+  }
+}
+
+/** A route that carries a fault notice is ordered behind healthy ones. */
+function routeFaulted(option: ModelOption): boolean {
+  return option.routeNotice !== undefined;
+}
+
+/** Stable picker order: route health → intelligence → quota → input order. */
+function orderPickerItems(items: readonly ModelOption[]): ModelOption[] {
   return items
     .map((option, index) => ({ option, index }))
-    .sort((left, right) => quotaTier(left.option) - quotaTier(right.option) || left.index - right.index)
+    .sort(
+      (left, right) =>
+        Number(routeFaulted(left.option)) - Number(routeFaulted(right.option))
+        || intelligenceTier(left.option) - intelligenceTier(right.option)
+        || quotaTier(left.option) - quotaTier(right.option)
+        || left.index - right.index,
+    )
     .map(({ option }) => option);
 }
 
@@ -209,14 +234,30 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
       if (bucket) bucket.push(model);
       else map.set(model.group, [model]);
     }
-    return [...map.entries()].map(([group, items]) => {
-      const ordered = orderByQuota(items);
-      return {
-        value: group,
-        items: ordered,
-        quotaSummary: ordered.find((item) => item.providerQuotaSummary !== undefined)?.providerQuotaSummary,
-      };
-    });
+    return [...map.entries()]
+      .map(([group, items]) => {
+        const ordered = orderPickerItems(items);
+        return {
+          value: group,
+          items: ordered,
+          quotaSummary: ordered.find((item) => item.providerQuotaSummary !== undefined)?.providerQuotaSummary,
+        };
+      })
+      // Groups keep the same health → intelligence → quota ordering, keyed on
+      // each group's first item; input group order breaks the tie.
+      .map((group, index) => ({ group, index }))
+      .sort((left, right) => {
+        const a = left.group.items[0];
+        const b = right.group.items[0];
+        if (a === undefined || b === undefined) return left.index - right.index;
+        return (
+          Number(routeFaulted(a)) - Number(routeFaulted(b))
+          || intelligenceTier(a) - intelligenceTier(b)
+          || quotaTier(a) - quotaTier(b)
+          || left.index - right.index
+        );
+      })
+      .map(({ group }) => group);
   }, [models]);
 
   const toggleExhausted = (group: string): void => {
@@ -304,8 +345,8 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
   function renderOption(option: ModelOption) {
     const isCurrent = option.value === value;
     const checked = isCurrent ? effort : option.defaultEffort;
-    const muted = quotaMuted(option);
-    const notice = muted ? quotaNotice(option) : undefined;
+    const muted = quotaMuted(option) || routeFaulted(option);
+    const notice = option.routeNotice ?? (muted ? quotaNotice(option) : undefined);
     const rowClass = cn(
       isCurrent && 'bg-accent/60 font-medium',
       isCurrent && option.quotaState === 'exhausted' && 'text-destructive',

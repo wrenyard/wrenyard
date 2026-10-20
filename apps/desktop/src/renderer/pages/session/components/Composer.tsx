@@ -419,6 +419,13 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     .filter((entry) => isRouteCallable(entry))
     .map((entry) => ({
       value: entry.publicId,
+      // A non-gated provider's open route stays listed (it is not filtered
+      // above) but is currently faulted; surface its label as the notice.
+      ...(entry.routeState !== undefined && entry.routePhase === 'open'
+        && entry.routeUntil !== undefined && Date.parse(entry.routeUntil) > Date.now()
+        ? { routeNotice: routeUnavailableLabel(entry) }
+        : {}),
+      intelligence: entry.intelligence,
       label: isProbeEligible(entry) ? entry.displayName + RETRY_MARKER : entry.displayName,
       group: entry.providerDisplayName,
       badges: modelBadges(entry),

@@ -94,6 +94,9 @@ export function toModelEntries(
         ...(gatewayModel.routePhase === undefined ? {} : { routePhase: gatewayModel.routePhase }),
         ...(gatewayModel.routeUntil === undefined ? {} : { routeUntil: gatewayModel.routeUntil }),
         ...(gatewayModel.supportsFast === true ? { supportsFast: true } : {}),
+        // Intelligence tier likewise comes from the Gateway row's catalog data;
+        // it is omitted when the catalog genuinely does not know.
+        ...(gatewayModel.intelligence === undefined ? {} : { intelligence: gatewayModel.intelligence }),
       });
     }
   }

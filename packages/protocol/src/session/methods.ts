@@ -154,6 +154,8 @@ export interface SessionModelEntry {
   providerQuotaSummary?: string
   /** True when a verified, distinct upstream Fast mode exists for this route. */
   supportsFast?: boolean
+  /** Catalog intelligence tier of this offering; absent when genuinely unknown. */
+  intelligence?: 'low' | 'mid' | 'high' | 'premium'
   /** Circuit state of this model's own route; absent while the route is healthy. */
   routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'access_denied' | 'model_unavailable'
   /** Phase of the route: `open` while a fault blocks it. */
