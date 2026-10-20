@@ -1,7 +1,6 @@
 import { BrandIcon } from '@/renderer/components/brand-icon';
 import { QuotaBar, QUOTA_POOL_STATE_LABEL, quotaPoolStateTone } from '@/renderer/components/usage/QuotaBar';
 import { Button } from '@/renderer/components/ui/button';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { useDisplayCurrency, useQuotaRefresh } from '@/renderer/lib/queries';
 import { providerBrand } from '@/renderer/lib/model-brand';
 import { formatQuotaBalance, type QuotaProviderSnapshot } from '@/shell-contract';
@@ -15,27 +14,9 @@ import { cn } from 'cn';
  * structured snapshot fields.
  */
 
-type ProviderTone = 'success' | 'warning' | 'danger' | 'muted';
-
-const DOT_CLASS: Record<ProviderTone, string> = {
-  success: 'bg-success',
-  warning: 'bg-warning',
-  danger: 'bg-destructive',
-  muted: 'bg-muted-foreground',
-};
-
 const RETRY_LABEL = '重试';
 const NO_DATA_NOTE = '暂无可展示的额度数据。';
 const BALANCE_LABEL = '余额';
-
-/** Status-dot tone for a provider: failure, then stale, then idle statuses. */
-function providerTone(provider: QuotaProviderSnapshot): { tone: ProviderTone; label: string } {
-  if (provider.status === 'error') return { tone: 'danger', label: '失败' };
-  if (provider.stale) return { tone: 'warning', label: '数据过期' };
-  if (provider.status === 'ok') return { tone: 'success', label: '正常' };
-  if (provider.status === 'pending') return { tone: 'muted', label: '读取中' };
-  return { tone: 'muted', label: '不可用' };
-}
 
 export interface QuotaProviderBlockProps {
   provider: QuotaProviderSnapshot;
@@ -46,8 +27,6 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
   const refresh = useQuotaRefresh();
   const currency = useDisplayCurrency();
   const name = provider.label || provider.id;
-  const view = providerTone(provider);
-  const tooltip = provider.message ? `${view.label} · ${provider.message}` : view.label;
   const failed = provider.status === 'error' || provider.status === 'unavailable';
   const hasStructured = provider.windows.length > 0 || provider.balances.length > 0;
 
@@ -56,18 +35,13 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
       <div className="flex items-center gap-2">
         <BrandIcon brand={providerBrand(provider.id)} />
         <span className="truncate font-medium">{name}{provider.stale ? '（数据过期）' : ''}</span>
-        <Tooltip>
-          <TooltipTrigger
-            render={<span className={cn('size-2 shrink-0 rounded-full', DOT_CLASS[view.tone])} />}
-          />
-          <TooltipContent>{tooltip}</TooltipContent>
-        </Tooltip>
+        {provider.plan ? (
+          <span className="truncate text-xs text-muted-foreground">{provider.plan}</span>
+        ) : null}
       </div>
 
-      <span className="pl-6 text-xs text-muted-foreground">套餐：{provider.plan || '未知'}</span>
-
       {failed ? (
-        <div className="flex flex-wrap items-center gap-2 pl-6 text-xs text-destructive">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-destructive">
           <span>{provider.message ?? NO_DATA_NOTE}</span>
           <Button
             type="button"
@@ -80,7 +54,7 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
           </Button>
         </div>
       ) : (
-        <div className="flex flex-col gap-1.5 pl-6">
+        <div className="flex flex-col gap-1.5">
           {provider.windows.map((window) => (
             <QuotaBar
               key={window.name}
