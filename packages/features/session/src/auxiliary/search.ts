@@ -10,38 +10,31 @@ import { existsSync, statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { platform } from 'node:os';
 
+import {
+  bindCatalog,
+  createLoopRecord,
+  getAuxiliaryDefinition,
+  protocolTools,
+  runAuxiliaryLoop,
+  toActionOutcome,
+  type AuxiliaryRecordPort,
+  type MethodCatalogPort,
+  type MethodInfo,
+} from '@wrenyard/agent-loop';
+
 import { collectSessionFiles, type LedgerEvent, type LedgerEventDraft } from '../ledger/store.ts';
 import { makeDocumentDraft } from '../documents.ts';
-import { escapeAttr, escapeBody, tag, twoPartView } from '../context/render.ts';
+import { escapeAttr, escapeBody, renderEventsBlock, tag } from '../context/render.ts';
 import { fail, isObject, renderRunFiles } from './shared.ts';
 import { messageOf } from '../errors.ts';
 import type { DocCatalogEntry } from '../workspace.ts';
 import type { SessionFile } from '../media.ts';
-import type { BuiltView } from '../ports.ts';
 import type {
   ActionExecutionOutcome,
   ActionRunContext,
   ActionWorkflowDeps,
   ParsedAction,
 } from '../reasoning/actions.ts';
-
-// ─── Document-retriever view ────────────────────────────────────────────────
-
-const DOC_SEARCH_SYSTEM = `<wy-system>
-You are the document retriever. Based on the user intent and the loaded paths, pick the documents to read from the document catalog.
-Output strict JSON only: {"understanding":"one-sentence understanding of the intent","picks":[{"path":"…","reason":"…"}],"near":[{"path":"…","reason":"…"}]}
-Rules:
-- understanding is required. picks has at most 3 items and near at most 5 items.
-- path must come from the given catalog. Unknown paths are dropped.
-- near only gives paths as hints. Their bodies are not read.
-- directory-hints name directories the intent points to; prefer documents inside them, but you may pick relevant documents elsewhere.
-- Pick report or handoff documents when explicitly requested or when the intent is about progress or results.
-- A recent spec that is not deprecated is an acceptable default pick.
-- Output only JSON, with no code fence or extra explanation.
-</wy-system>
-<wy-role>
-Document retriever: pick workspace document paths only. Never write document bodies.
-</wy-role>`;
 
 export interface DocSearchViewInput {
   catalog: DocCatalogEntry[];
@@ -66,7 +59,7 @@ function newestSpec(catalog: readonly DocCatalogEntry[]): string | undefined {
   return best?.path;
 }
 
-export function buildDocSearch(input: DocSearchViewInput): BuiltView {
+export function buildDocSearchUser(input: DocSearchViewInput): string {
   const groups = new Map<string, DocCatalogEntry[]>();
   for (const entry of input.catalog) {
     const key = docCategory(entry.path);
@@ -94,7 +87,110 @@ export function buildDocSearch(input: DocSearchViewInput): BuiltView {
     tag('loaded-paths', [], loaded),
     tag('intent', [], escapeBody(input.intent)),
   ].join('\n');
-  return twoPartView(DOC_SEARCH_SYSTEM, tag('wy-doc-search', [], body), 'wy-doc-search');
+  return tag('wy-doc-search', [], body);
+}
+
+const SEARCH_PICK_METHOD: MethodInfo = {
+  name: 'search.pick',
+  description: 'Record the final document picks for this search intent.',
+  params: {
+    type: 'object',
+    properties: {
+      understanding: { type: 'string' },
+      picks: {
+        type: 'array',
+        maxItems: 3,
+        items: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            reason: { type: 'string' },
+          },
+          required: ['path', 'reason'],
+        },
+      },
+      near: {
+        type: 'array',
+        maxItems: 5,
+        items: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            reason: { type: 'string' },
+          },
+          required: ['path', 'reason'],
+        },
+      },
+    },
+    required: ['understanding', 'picks', 'near'],
+  },
+};
+
+type SearchPickState = {
+  understanding: string;
+  picks: { path: string; reason: string }[];
+  near: { path: string; title: string; reason: string }[];
+  notes: string[];
+};
+
+function createSearchCatalog(
+  host: ActionWorkflowDeps['host'],
+  catalog: readonly DocCatalogEntry[],
+  state: SearchPickState,
+): MethodCatalogPort {
+  const remote = bindCatalog(host, 'search');
+  const local = new Map([[SEARCH_PICK_METHOD.name, SEARCH_PICK_METHOD]]);
+  const known = new Map(catalog.map((entry) => [entry.path, entry]));
+  return {
+    async methods(names) {
+      const out: MethodInfo[] = [];
+      const delegated: string[] = [];
+      for (const name of names) {
+        const info = local.get(name);
+        if (info !== undefined) out.push(info);
+        else delegated.push(name);
+      }
+      if (delegated.length > 0) out.push(...await remote.methods(delegated));
+      return out;
+    },
+    async call(method, params, context) {
+      if (method === 'search.pick') {
+        if (!isObject(params) || typeof params.understanding !== 'string'
+          || !Array.isArray(params.picks) || !Array.isArray(params.near)) {
+          throw Object.assign(new Error('search.pick has an invalid shape'), { code: 'validation_failed' });
+        }
+        state.understanding = params.understanding;
+        state.picks = [];
+        state.near = [];
+        for (const raw of params.picks) {
+          if (!isObject(raw) || typeof raw.path !== 'string' || typeof raw.reason !== 'string') {
+            throw Object.assign(new Error('search.pick entry has an invalid shape'), { code: 'validation_failed' });
+          }
+          const entry = known.get(raw.path);
+          if (!entry) {
+            state.notes.push(`discarded unknown catalog path: ${raw.path}`);
+            continue;
+          }
+          state.picks.push({ path: entry.path, reason: raw.reason });
+          if (state.picks.length >= 3) break;
+        }
+        for (const raw of params.near) {
+          if (!isObject(raw) || typeof raw.path !== 'string' || typeof raw.reason !== 'string') {
+            throw Object.assign(new Error('search.pick near entry has an invalid shape'), { code: 'validation_failed' });
+          }
+          const entry = known.get(raw.path);
+          if (!entry) {
+            state.notes.push(`discarded unknown catalog path: ${raw.path}`);
+            continue;
+          }
+          state.near.push({ path: entry.path, title: entry.title, reason: raw.reason });
+          if (state.near.length >= 5) break;
+        }
+        return { ok: true };
+      }
+      return remote.call(method, params, context);
+    },
+  };
 }
 
 // ─── Read action ────────────────────────────────────────────────────────────
@@ -156,29 +252,64 @@ export async function runSearchAction(
 
   let picks: { path: string; reason: string }[] = [];
   if (needSearch) {
-    const view = buildDocSearch({ catalog, loadedPaths: [...loadedDocs], intent: action.intent, directoryHints });
-    const outcome = await runDocSearchCall(deps, view, ctx);
-    if (!outcome.ok) return fail(withMissing(`doc-search call failed: ${outcome.error}`, missing));
-    const parsed = parseDocSearch(outcome.text, catalog);
-    if (!parsed.ok) return fail(withMissing(parsed.reason, missing));
-    notes.push(...parsed.notes);
-    picks = parsed.picks;
-    const nearTitles = parsed.near.map((near) => `${near.path} (${near.title})`);
+    const pickState: SearchPickState = { understanding: '', picks: [], near: [], notes: [] };
+    const record: AuxiliaryRecordPort = {
+      ...createLoopRecord(),
+      helpers: { messageOf, escapeBody, renderEventsBlock },
+    };
+    record.observeToolResult = () => {
+      record.observations.push('search.pick');
+    };
+    const definition = getAuxiliaryDefinition('search');
+    if (definition === undefined) return fail(withMissing('search auxiliary definition is missing', missing));
+    const loopDeps = {
+      host: createSearchCatalog(deps.host, catalog, pickState),
+      calls: deps.calls,
+      helpers: record.helpers,
+    };
+    const tools = await protocolTools(
+      loopDeps.host,
+      record.helpers,
+      ctx,
+      record,
+      definition.methods,
+      definition.effects,
+    );
+    const loopResult = await runAuxiliaryLoop({
+      deps: loopDeps,
+      ctx,
+      role: 'search',
+      system: definition.buildSystemPrompt({ documentRules: () => '' }),
+      user: buildDocSearchUser({ catalog, loadedPaths: [...loadedDocs], intent: action.intent, directoryHints }),
+      tools,
+      maxRounds: definition.maxRounds,
+      spanIdPrefix: definition.spanIdPrefix,
+      record,
+    });
+    const searchOutcome = toActionOutcome(loopResult, record);
+    if (searchOutcome.status !== 'done') {
+      return fail(withMissing(searchOutcome.result, missing));
+    }
+    if (pickState.picks.length === 0 && pickState.understanding === '') {
+      return fail(withMissing('search did not record any document picks', missing));
+    }
+    notes.push(...pickState.notes);
+    picks = pickState.picks;
+    const nearTitles = pickState.near.map((near) => `${near.path} (${near.title})`);
     if (nearTitles.length > 0) notes.push(`near: ${nearTitles.join(', ')}`);
-    // First document-found draft, before any picked document content.
     deferred.push({
       type: 'document.found',
       turn: ctx.turn,
       step: ctx.step,
       parent: ctx.actionId,
-      understanding: parsed.understanding,
-      picks: parsed.picks.map((pick) => ({
+      understanding: pickState.understanding,
+      picks: pickState.picks.map((pick) => ({
         path: pick.path,
         title: catalog.find((entry) => entry.path === pick.path)?.title ?? pick.path,
         reason: pick.reason,
       })),
-      near: parsed.near.map((near) => ({ path: near.path, title: near.title, reason: near.reason })),
-      notes: parsed.notes,
+      near: pickState.near.map((near) => ({ path: near.path, title: near.title, reason: near.reason })),
+      notes: pickState.notes,
     });
   }
 
@@ -226,30 +357,6 @@ export async function runSearchAction(
 
 function withMissing(message: string, missing: readonly string[]): string {
   return missing.length === 0 ? message : `${message}\nmissing: ${missing.join(', ')}`;
-}
-
-/** One `doc-search` model call; a failure is returned, not thrown. */
-async function runDocSearchCall(
-  deps: ActionWorkflowDeps,
-  view: BuiltView,
-  ctx: ActionRunContext,
-): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
-  const spanId = deps.nextSpanId();
-  try {
-    const result = await deps.calls.run({
-      spanId,
-      parent: ctx.actionId,
-      role: 'search',
-      turn: ctx.turn,
-      step: ctx.step,
-      messages: view.messages,
-      layers: view.layers,
-      signal: ctx.signal,
-    });
-    return { ok: true, text: result.text };
-  } catch (error) {
-    return { ok: false, error: messageOf(error) };
-  }
 }
 
 async function readSessionFile(
@@ -402,63 +509,6 @@ async function recallProjectInstructions(
     });
     if (draft !== undefined) deferred.push(draft);
   }
-}
-
-// ─── Doc-search output parsing ──────────────────────────────────────────────
-
-interface ParsedDocSearch {
-  understanding: string;
-  picks: { path: string; reason: string }[];
-  near: { path: string; title: string; reason: string }[];
-  notes: string[];
-}
-
-function parseDocSearch(
-  text: string,
-  catalog: readonly DocCatalogEntry[],
-): ({ ok: true } & ParsedDocSearch) | { ok: false; reason: string } {
-  let value: unknown;
-  try {
-    value = JSON.parse(text.trim());
-  } catch (error) {
-    return { ok: false, reason: `doc-search output is not valid JSON: ${messageOf(error)}` };
-  }
-  if (!isObject(value)) return { ok: false, reason: 'doc-search output must be a JSON object' };
-  if (typeof value.understanding !== 'string') {
-    return { ok: false, reason: 'doc-search output is missing understanding' };
-  }
-  if (!Array.isArray(value.picks) || !Array.isArray(value.near)) {
-    return { ok: false, reason: 'doc-search output must contain picks and near arrays' };
-  }
-  const notes: string[] = [];
-  const known = new Map(catalog.map((entry) => [entry.path, entry]));
-  const picks: { path: string; reason: string }[] = [];
-  for (const raw of value.picks) {
-    if (!isObject(raw) || typeof raw.path !== 'string' || typeof raw.reason !== 'string') {
-      return { ok: false, reason: 'doc-search pick has an invalid shape' };
-    }
-    const entry = known.get(raw.path);
-    if (!entry) {
-      notes.push(`discarded unknown catalog path: ${raw.path}`);
-      continue;
-    }
-    picks.push({ path: entry.path, reason: raw.reason });
-    if (picks.length >= 3) break;
-  }
-  const near: { path: string; title: string; reason: string }[] = [];
-  for (const raw of value.near) {
-    if (!isObject(raw) || typeof raw.path !== 'string' || typeof raw.reason !== 'string') {
-      return { ok: false, reason: 'doc-search near entry has an invalid shape' };
-    }
-    const entry = known.get(raw.path);
-    if (!entry) {
-      notes.push(`discarded unknown catalog path: ${raw.path}`);
-      continue;
-    }
-    near.push({ path: entry.path, title: entry.title, reason: raw.reason });
-    if (near.length >= 5) break;
-  }
-  return { ok: true, understanding: value.understanding, picks, near, notes };
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

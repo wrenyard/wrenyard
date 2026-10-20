@@ -36,7 +36,7 @@ import type {
 import type { AuxiliaryRunRecordInput, TaskUsage } from '@wrenyard/protocol';
 
 /** Which auxiliary task is running; used for ledger call attribution. */
-export type LoopRole = 'document' | 'todo' | 'vcs' | 'project';
+export type LoopRole = 'document' | 'todo' | 'vcs' | 'project' | 'dispatch' | 'memory-search' | 'search';
 
 /**
  * The one tool every auxiliary task declares to finish. `status` is `done`

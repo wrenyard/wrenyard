@@ -13,7 +13,7 @@
 import type { LoopRecord, MethodEffect } from './loop.ts';
 
 /** The auxiliary definitions the package ships. */
-export type AuxiliaryDefinitionId = 'document' | 'todo' | 'vcs' | 'project';
+export type AuxiliaryDefinitionId = 'document' | 'todo' | 'vcs' | 'project' | 'dispatch' | 'memory-search' | 'search';
 
 /** Inputs a definition's system prompt may need from its host. */
 export interface DefinitionPorts {
@@ -270,6 +270,94 @@ function projectSystemPrompt(): string {
   ].join('\n');
 }
 
+// ─── Dispatch ───────────────────────────────────────────────────────────────
+
+/** Rounds the dispatch loop may run before it fails. */
+const DISPATCH_MAX_ROUNDS = 12;
+
+/** Protocol methods the dispatch loop exposes. */
+const DISPATCH_METHODS = [
+  'task.contract',
+  'task.create',
+];
+
+/** The system prompt: read a task contract, then create one task run. */
+function dispatchSystemPrompt(): string {
+  return [
+    'You are the task dispatcher of a Wrenyard session. You turn one dispatch intent into exactly one task run.',
+    '',
+    'Tools:',
+    '- task_contract: read the contract of one registered task (description, input schema, required capabilities and tools).',
+    '- task_create: create a task run after every gate passes; returns taskRunId on success.',
+    '',
+    'Rules:',
+    '- The intent is the sole authority. Use only registered project and task ids from the message.',
+    '- Read the task contract before calling task_create.',
+    '- task_create must name the same project and task the intent requires, with input matching the schema.',
+    '- When task_create returns an error, read the message, correct the call and try again inside this session.',
+    '- When worktree or fast preferences appear in the intent, pass them to task_create.',
+    '- Finish with done and a one-sentence summary once task_create succeeds, or done failed when the work cannot continue.',
+  ].join('\n');
+}
+
+// ─── Memory search ──────────────────────────────────────────────────────────
+
+/** Rounds the memory-search loop may run before it fails. */
+const MEMORY_SEARCH_MAX_ROUNDS = 4;
+
+/** Protocol methods the memory-search loop exposes. */
+const MEMORY_SEARCH_METHODS = [
+  'memory.index.read',
+  'memory.entry.read',
+];
+
+/** The system prompt: pick root memory files to load this step. */
+function memorySearchSystemPrompt(): string {
+  return [
+    'You are the memory retriever of a Wrenyard session. Pick at most three root memory files to load for this reasoning step.',
+    '',
+    'Tools:',
+    '- memory_index_read: read the current memory index and the list of valid root memory paths.',
+    '- memory_entry_read: read one root memory file by path.',
+    '',
+    'Rules:',
+    '- Pick only paths returned by memory_index_read.',
+    '- Pick at most three entries. Call done with an empty summary when nothing needs loading.',
+    '- Never answer the user request; only select memories.',
+    '- Finish with done and a short summary of which paths you read.',
+  ].join('\n');
+}
+
+// ─── Search ─────────────────────────────────────────────────────────────────
+
+/** Rounds the search loop may run before it fails. */
+const SEARCH_MAX_ROUNDS = 12;
+
+/** Protocol methods the search loop exposes. */
+const SEARCH_METHODS = [
+  'workspace.doc.list',
+  'workspace.doc.read',
+  'search.pick',
+];
+
+/** The system prompt: pick workspace documents to read for a read intent. */
+function searchSystemPrompt(): string {
+  return [
+    'You are the document retriever of a Wrenyard session. Pick workspace documents to read for the given intent.',
+    '',
+    'Tools:',
+    '- workspace_doc_list: list documents of one project.',
+    '- workspace_doc_read: read one document by project, kind and name.',
+    '- search_pick: record up to three document paths to load, with a one-sentence understanding and optional near hints.',
+    '',
+    'Rules:',
+    '- Paths must come from the catalog in the message or from workspace_doc_list.',
+    '- Call search_pick once with your final picks before done.',
+    '- near hints name related paths that are not read.',
+    '- Finish with done and a short summary.',
+  ].join('\n');
+}
+
 // ─── Registry ───────────────────────────────────────────────────────────────
 
 /** Every auxiliary definition, keyed by role. */
@@ -306,10 +394,34 @@ export const AUXILIARY_DEFINITIONS: Readonly<Record<AuxiliaryDefinitionId, Auxil
     spanIdPrefix: 'project',
     buildSystemPrompt: projectSystemPrompt,
   },
+  dispatch: {
+    role: 'dispatch',
+    methods: DISPATCH_METHODS,
+    effects: {},
+    maxRounds: DISPATCH_MAX_ROUNDS,
+    spanIdPrefix: 'dispatch',
+    buildSystemPrompt: dispatchSystemPrompt,
+  },
+  'memory-search': {
+    role: 'memory-search',
+    methods: MEMORY_SEARCH_METHODS,
+    effects: {},
+    maxRounds: MEMORY_SEARCH_MAX_ROUNDS,
+    spanIdPrefix: 'memory',
+    buildSystemPrompt: memorySearchSystemPrompt,
+  },
+  search: {
+    role: 'search',
+    methods: SEARCH_METHODS,
+    effects: {},
+    maxRounds: SEARCH_MAX_ROUNDS,
+    spanIdPrefix: 'search',
+    buildSystemPrompt: searchSystemPrompt,
+  },
 };
 
 /** The definition list in declaration order. */
-export const AUXILIARY_DEFINITION_IDS = ['document', 'todo', 'vcs', 'project'] as const;
+export const AUXILIARY_DEFINITION_IDS = ['document', 'todo', 'vcs', 'project', 'dispatch', 'memory-search', 'search'] as const;
 
 /** Look up one definition by id; undefined for an unknown id. */
 export function getAuxiliaryDefinition(id: string): AuxiliaryDefinition | undefined {

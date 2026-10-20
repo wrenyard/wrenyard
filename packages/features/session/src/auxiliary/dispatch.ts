@@ -19,8 +19,21 @@ export const DISPATCH_LADDER: readonly LadderStep[] = [
 
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 
+import {
+  bindCatalog,
+  createLoopRecord,
+  getAuxiliaryDefinition,
+  protocolTools,
+  runAuxiliaryLoop,
+  toActionOutcome,
+  type AuxiliaryRecordPort,
+  type LoopRecord,
+  type MethodCatalogPort,
+  type MethodInfo,
+} from '@wrenyard/agent-loop';
+
 import { renderTaskResult } from './dispatch-result.ts';
-import { fail, isObject, renderRunFiles, withAuxiliaryRetry } from './shared.ts';
+import { fail, isObject, renderRunFiles } from './shared.ts';
 import { messageOf } from '../errors.ts';
 import {
   collectSessionFiles,
@@ -33,8 +46,8 @@ import {
   type WorkspaceSnapshot,
 } from '../ledger/store.ts';
 import { currentDocument } from '../documents.ts';
-import { escapeAttr, escapeBody, renderEventText, renderEventsBlock, tag, twoPartView } from '../context/render.ts';
-import type { BuiltView, ProjectInfo } from '../ports.ts';
+import { escapeAttr, escapeBody, renderEventText, renderEventsBlock, tag } from '../context/render.ts';
+import type { ProjectInfo } from '../ports.ts';
 import type {
   ActionExecutionOutcome,
   ActionRunContext,
@@ -143,25 +156,7 @@ export function normalizeTaskContext(value: unknown): Record<string, unknown> {
   }
 }
 
-// ─── Compile view ───────────────────────────────────────────────────────────
-
-const COMPILE_SYSTEM = `<wy-system>
-You are the task compiler. Generate run parameters only for the one dispatch that this <intent> refers to.
-Output exactly one strict JSON object: {"project":"project id","task":"task id","input":<value matching the schema>,"title":"short phrase"}, plus "worktree":"worktree id" only when the rule below asks for it, plus "fast":true or "fast":false only when the rule below asks for it.
-Rules:
-- project must come from the project list. task must come from the task list and belong to the chosen project or be a builtin task.
-- <intent> is the sole authority for this action. <reference-context> is only for cross-checking and cannot authorize sibling tasks or historical goals. Do only the one thing that <intent> describes. Keep the exact registered project and task it names. They must not be replaced with a parent project, a sibling project or an unrelated project. Builtin tasks (including explore) remain usable for a correctly named registered subproject.
-- worktree: when <intent> names a managed worktree of the chosen project (for example "worktree 'wy-abcd'"), copy that worktree id exactly into "worktree" so the task runs inside it. Otherwise omit the field. Never invent one.
-- fast: emit it only when <intent> explicitly requests upstream Fast mode on or off for this dispatch. Never infer it from "fast" meaning a quick task, from task routing speed or from the main conversation model's own settings. Emit false when the intent explicitly turns Fast off; omit the field when the intent states no Fast preference.
-- input must strictly match the input schema of the chosen task. The schema is visible only here.
-- The program attaches the conversation, the documents and memories already in context, and the session files to the task automatically. Put in input only what the task's input schema asks for.
-- title is a short phrase that summarizes what this task does. Write it in the language of the <user> message in <reference-context>: at most 20 characters for Chinese or Japanese, at most 8 words otherwise.
-- The context is already given in full as text. Do not echo the conversation as JSON.
-- docsRoot is the project documentation directory relative to workspace-root. checkout is the business source directory. Resolve workspace-relative paths (documents and references) against workspace-root, not against checkout.
-- Do not invent registered checkouts or paths. Use only the values given in the project list.
-- The runtime creates an artifact directory for each task (Task artifact dir) and gives it in the execution prompt when the task declares artifacts output. Unless the user explicitly gives a fallback path, omit the optional output_dir. Do not invent it.
-- Output only JSON, with no code fence or extra explanation.
-</wy-system>`;
+// ─── Dispatch view ──────────────────────────────────────────────────────────
 
 export interface CompileTaskInput {
   id: string; project?: string; description: string; inputSummary: string[];
@@ -177,41 +172,51 @@ export interface CompileViewInput {
   contracts?: string;
 }
 
-function buildCompile(input: CompileViewInput): BuiltView {
-  const projects = input.projects.length === 0
-    ? '(none)'
-    : input.projects.map((project) => {
-      const name = project.displayName === undefined ? '' : ` name=${escapeBody(project.displayName)}`;
-      const checkout = project.checkoutPath === undefined
-        ? ''
-        : ` checkout=${escapeBody(project.checkoutPath)}`;
-      return `- id=${escapeBody(project.id)} docsRoot=${escapeBody(project.workspaceDir)}${checkout}${name}`;
-    }).join('\n');
-  const tasks = input.tasks.length === 0
-    ? '(none)'
-    : input.tasks.map((task) => {
-      const project = task.project === undefined ? '' : ` project=${escapeBody(task.project)}`;
-      const capabilities = (task.requiredCapabilities ?? []).join(',');
-      const inner = [
-        tag('description', [], escapeBody(task.description)),
-        tag('input-summary', [], escapeBody(task.inputSummary.join('; '))),
-        tag('input-schema', [], escapeBody(JSON.stringify(task.inputSchema))),
-      ].join('\n');
-      return `<task id="${escapeAttr(task.id)}"${project} capabilities="${escapeAttr(capabilities)}">\n${inner}\n</task>`;
-    }).join('\n');
+function renderDispatchProjects(
+  projects: CompileViewInput['projects'],
+): string {
+  if (projects.length === 0) return '(none)';
+  return projects.map((project) => {
+    const name = project.displayName === undefined ? '' : ` name=${escapeBody(project.displayName)}`;
+    const checkout = project.checkoutPath === undefined
+      ? ''
+      : ` checkout=${escapeBody(project.checkoutPath)}`;
+    return `- id=${escapeBody(project.id)} docsRoot=${escapeBody(project.workspaceDir)}${checkout}${name}`;
+  }).join('\n');
+}
+
+function renderDispatchTasks(tasks: CompileTaskInput[]): string {
+  if (tasks.length === 0) return '(none)';
+  return tasks.map((task) => {
+    const project = task.project === undefined ? '' : ` project=${escapeBody(task.project)}`;
+    const capabilities = (task.requiredCapabilities ?? []).join(',');
+    const inner = [
+      tag('description', [], escapeBody(task.description)),
+      tag('input-summary', [], escapeBody(task.inputSummary.join('; '))),
+      tag('input-schema', [], escapeBody(JSON.stringify(task.inputSchema))),
+    ].join('\n');
+    return `<task id="${escapeAttr(task.id)}"${project} capabilities="${escapeAttr(capabilities)}">\n${inner}\n</task>`;
+  }).join('\n');
+}
+
+function buildDispatchUser(
+  ctx: ActionRunContext,
+  intent: string,
+  events: readonly LedgerEvent[],
+  input: Omit<CompileViewInput, 'kind' | 'intent' | 'events' | 'userText'>,
+): string {
   const body = [
-    tag('kind', [], escapeBody(input.kind)),
-    tag('workspace-root', [], escapeBody(input.workspaceRoot)),
-    tag('projects', [], projects),
-    tag('tasks', [], tasks),
+    tag('workspace-root', [], escapeBody(ctx.workspaceRoot)),
+    tag('projects', [], renderDispatchProjects(input.projects)),
+    tag('tasks', [], renderDispatchTasks(input.tasks)),
     '<reference-context>',
-    tag('user', [], escapeBody(input.userText)),
-    renderEventsBlock(input.events),
+    tag('user', [], escapeBody(ctx.userText)),
+    renderEventsBlock(events),
     '</reference-context>',
     ...(input.contracts === undefined || input.contracts === '' ? [] : [input.contracts]),
-    tag('intent', [], escapeBody(input.intent)),
+    tag('intent', [], escapeBody(intent)),
   ].join('\n');
-  return twoPartView(COMPILE_SYSTEM, tag('wy-compile', [], body), 'wy-compile');
+  return tag('wy-dispatch', [], body);
 }
 
 /**
@@ -291,6 +296,246 @@ function boundCompileEvents(
   return events.filter((_, index) => kept.has(index));
 }
 
+// ─── Dispatch protocol catalog (session-local) ──────────────────────────────
+
+const DISPATCH_METHOD_INFOS: readonly MethodInfo[] = [
+  {
+    name: 'task.contract',
+    description: 'Read one registered task contract: description, input schema, required capabilities and tools.',
+    params: {
+      type: 'object',
+      properties: {
+        project: { type: 'string', description: 'Registered project id.' },
+        task: { type: 'string', description: 'Task id within the project or a builtin task.' },
+      },
+      required: ['project', 'task'],
+    },
+  },
+  {
+    name: 'task.create',
+    description: 'Create one task run after validation. Returns taskRunId on success.',
+    params: {
+      type: 'object',
+      properties: {
+        project: { type: 'string' },
+        task: { type: 'string' },
+        input: { description: 'Task input matching the task schema.' },
+        worktree: { type: 'string', description: 'Optional managed worktree id.' },
+        fast: { type: 'boolean', description: 'Optional explicit Fast preference.' },
+        title: { type: 'string', description: 'Optional short title, at most 40 characters.' },
+      },
+      required: ['project', 'task', 'input'],
+    },
+  },
+];
+
+type DispatchCreateResult = {
+  taskRunId: string;
+  taskId: string;
+  project: ProjectInfo;
+  title: string;
+  worktree?: string;
+};
+
+function createDispatchCatalog(
+  deps: ActionWorkflowDeps,
+  ctx: ActionRunContext,
+  contracts: readonly CompileContract[],
+  record: LoopRecord,
+  onCreated: (result: DispatchCreateResult) => void,
+): MethodCatalogPort {
+  const local = new Map(DISPATCH_METHOD_INFOS.map((info) => [info.name, info]));
+  return {
+    async methods(names) {
+      const out: MethodInfo[] = [];
+      const remote: string[] = [];
+      for (const name of names) {
+        const info = local.get(name);
+        if (info !== undefined) out.push(info);
+        else remote.push(name);
+      }
+      if (remote.length > 0) out.push(...await deps.host.methods(remote));
+      return out;
+    },
+    async call(method, params, context) {
+      if (method === 'task.contract') return readTaskContract(params, contracts);
+      if (method === 'task.create') {
+        const created = await createTaskRunFromTool(deps, ctx, contracts, params);
+        if (!created.ok) throw Object.assign(new Error(created.error), { code: 'validation_failed' });
+        onCreated(created.value);
+        record.observations.push(created.value.taskRunId);
+        return { taskRunId: created.value.taskRunId };
+      }
+      return deps.host.call(method, params, context);
+    },
+  };
+}
+
+function readTaskContract(params: unknown, contracts: readonly CompileContract[]): Record<string, unknown> {
+  if (!isObject(params)) throw new Error('task.contract params must be an object');
+  const projectId = params.project;
+  const taskId = params.task;
+  if (typeof projectId !== 'string' || typeof taskId !== 'string') {
+    throw new Error('task.contract requires project and task strings');
+  }
+  const contract = contracts.find((candidate) => candidate.id === taskId
+    && (candidate.project === undefined || candidate.project === projectId));
+  if (contract === undefined) throw new Error(`unknown task '${taskId}' for project ${projectId}`);
+  return {
+    project: projectId,
+    task: taskId,
+    description: contract.description,
+    inputSummary: contract.inputSummary,
+    inputSchema: contract.inputSchema,
+    requiredCapabilities: contract.requiredCapabilities,
+    requiredTools: contract.requiredTools,
+  };
+}
+
+async function createTaskRunFromTool(
+  deps: ActionWorkflowDeps,
+  ctx: ActionRunContext,
+  contracts: readonly CompileContract[],
+  params: unknown,
+): Promise<{ ok: true; value: DispatchCreateResult } | { ok: false; error: string }> {
+  if (!isObject(params)) return { ok: false, error: 'task.create params must be an object' };
+  const validated = validateTaskCreate(params, ctx, contracts);
+  if (!validated.ok) return validated;
+  const { project, taskId, worktree, effectiveInput, fast, title } = validated.value;
+  const resolvedContract = contracts.find((candidate) => candidate.id === taskId
+    && (candidate.project === undefined || candidate.project === project.id));
+  const unsupported = (resolvedContract?.requiredCapabilities ?? [])
+    .filter((capability) => capability !== 'text' && capability !== 'image');
+  if (unsupported.length > 0) {
+    return {
+      ok: false,
+      error: `cannot dispatch task '${taskId}': no execution environment provides required capabilities: ${unsupported.join(', ')}`,
+    };
+  }
+  let requiredTools = resolvedContract?.requiredTools ?? [];
+  if (deps.host.mountedTaskTools !== undefined) {
+    try {
+      requiredTools = await deps.host.mountedTaskTools(taskId, project.id, effectiveInput);
+    } catch (error) {
+      return { ok: false, error: messageOf(error) };
+    }
+  }
+  if (requiredTools.length > 0) {
+    let available: readonly string[];
+    try {
+      available = deps.host.environmentTools === undefined ? [] : await deps.host.environmentTools();
+    } catch (error) {
+      return { ok: false, error: messageOf(error) };
+    }
+    const missing = requiredTools
+      .map((tool) => TOOL_ID_ALIASES[tool] ?? tool)
+      .filter((tool) => !available.includes(tool));
+    if (missing.length > 0) {
+      return {
+        ok: false,
+        error: `cannot dispatch task '${taskId}': this execution environment does not provide the required tools: ${missing.join(', ')} (available: ${available.length === 0 ? 'none' : available.join(', ')})`,
+      };
+    }
+  }
+  let taskCtx: Record<string, unknown>;
+  try {
+    taskCtx = buildTaskContext(ctx.currentEvents(), ctx.actionId, project);
+  } catch (error) {
+    return { ok: false, error: messageOf(error) };
+  }
+  try {
+    const conflict = await deps.host.findTaskWriteConflict({
+      project: project.id,
+      task: taskId,
+      input: effectiveInput,
+      ...(worktree === undefined ? {} : { worktree }),
+    });
+    if (conflict) {
+      return {
+        ok: false,
+        error: `Its write targets overlap running task run '${conflict.runId}' (task '${conflict.taskId}'): ${conflict.overlap.join(', ')}`,
+      };
+    }
+  } catch (error) {
+    return { ok: false, error: messageOf(error) };
+  }
+  try {
+    const createParams: Parameters<ActionWorkflowDeps['host']['createTaskRun']>[0] & { title?: string } = {
+      task: taskId,
+      project: project.id,
+      ...(worktree === undefined ? {} : { worktree }),
+      input: effectiveInput,
+      ctx: taskCtx,
+      ...(fast === undefined ? {} : { fast }),
+      ...(title === '' ? {} : { title }),
+    };
+    const run = await deps.host.createTaskRun(createParams);
+    return {
+      ok: true,
+      value: {
+        taskRunId: run.taskRunId,
+        taskId,
+        project,
+        title,
+        ...(worktree === undefined ? {} : { worktree }),
+      },
+    };
+  } catch (error) {
+    return { ok: false, error: `createTaskRun failed: ${messageOf(error)}` };
+  }
+}
+
+function validateTaskCreate(
+  parsed: Record<string, unknown>,
+  ctx: ActionRunContext,
+  contracts: readonly CompileContract[],
+): { ok: true; value: {
+  project: ProjectInfo;
+  taskId: string;
+  worktree?: string;
+  effectiveInput: unknown;
+  fast?: boolean;
+  title: string;
+} } | { ok: false; error: string } {
+  const bad = (error: string): { ok: false; error: string } => ({ ok: false, error });
+  const projectId = parsed.project;
+  const taskId = parsed.task;
+  if (typeof projectId !== 'string' || typeof taskId !== 'string') {
+    return bad('task.create must name a project and a task');
+  }
+  const project = ctx.projects.find((candidate) => candidate.id === projectId);
+  if (!project) return bad(`unknown project: ${projectId}`);
+  const contract = contracts.find((candidate) => candidate.id === taskId
+    && (candidate.project === undefined || candidate.project === projectId));
+  if (!contract) return bad(`unknown task '${taskId}' for project ${projectId}`);
+  const worktree = parsed.worktree;
+  if (worktree !== undefined && (typeof worktree !== 'string' || worktree.trim() === '')) {
+    return bad('worktree must be a non-empty worktree id when present');
+  }
+  const fast = parsed.fast;
+  if (fast !== undefined && typeof fast !== 'boolean') return bad('fast must be a boolean when present');
+  const missingPath = findMissingAbsolutePath(parsed.input);
+  if (missingPath !== undefined) return bad(`input references a missing path: ${missingPath}`);
+  const effectiveInput: unknown = parsed.input;
+  const validation = validateJsonSchema(contract.inputSchema, effectiveInput);
+  if (!validation.ok) {
+    return bad(`input does not satisfy the task schema: ${validation.errors.join('; ')}`);
+  }
+  const rawTitle = typeof parsed.title === 'string' ? parsed.title.trim() : '';
+  const title = rawTitle !== '' && rawTitle.length <= 40 ? rawTitle : '';
+  return {
+    ok: true,
+    value: {
+      project,
+      taskId,
+      ...(worktree === undefined ? {} : { worktree: worktree.trim() }),
+      effectiveInput,
+      ...(fast === undefined ? {} : { fast }),
+      title,
+    },
+  };
+}
+
 // ─── Dispatch action ────────────────────────────────────────────────────────
 
 /**
@@ -335,11 +580,7 @@ export async function runDispatchAction(
     if (action.intent.includes(contract.id)) focus.add(contract.id);
   }
 
-  const compileInput: CompileViewInput = {
-    kind: 'dispatch',
-    intent: action.intent,
-    userText: ctx.userText,
-    events: boundCompileEvents(ctx.currentEvents(), focus, ctx.turn),
+  const dispatchView = {
     workspaceRoot: ctx.workspaceRoot,
     projects: ctx.projects.map((project) => ({
       id: project.id,
@@ -349,117 +590,58 @@ export async function runDispatchAction(
     })),
     tasks: contracts,
   };
-  const view = buildCompile(compileInput);
-  // A failed call or unusable output is a system fault, not a decision of
-  // the reasoning model. It is retried by the shared auxiliary retry: an
-  // unusable output is sent back with the reason it was rejected.
-  let attemptView = view;
-  const compiledOutcome = await withAuxiliaryRetry<Extract<ReturnType<typeof checkCompiled>, { ok: true }>, { error: string }>(async () => {
-    const outcome = await runCompileCall(deps, attemptView, ctx);
-    if (!outcome.ok) return { ok: false, error: `compile call failed: ${outcome.error}` };
-    const checked = checkCompiled(outcome.text, ctx, contracts);
-    if (checked.ok) return { ok: true, value: checked };
-    attemptView = {
-      ...attemptView,
-      messages: [
-        ...attemptView.messages,
-        { role: 'assistant', content: outcome.text },
-        { role: 'user', content: `The previous output cannot be used: ${checked.error}\nOutput only the corrected complete JSON.` },
-      ],
-    };
-    return { ok: false, error: checked.error };
-  }, ctx.signal);
-  if (!compiledOutcome.ok) return notDispatched(compiledOutcome.error);
-  const compiled = compiledOutcome.value;
-
-  const { parsed, project, taskId, worktree, effectiveInput, fast } = compiled;
-
-  // Capability gate: a task whose contract requires a capability no execution
-  // environment provides must not open a run at all. Only the built-in text and
-  // image capabilities are serviceable today.
-  const resolvedContract = contracts.find((candidate) => candidate.id === taskId
-    && (candidate.project === undefined || candidate.project === project.id));
-  const unsupported = (resolvedContract?.requiredCapabilities ?? [])
-    .filter((capability) => capability !== 'text' && capability !== 'image');
-  if (unsupported.length > 0) {
-    return notDispatched(`cannot dispatch task '${taskId}': no execution environment provides required capabilities: ${unsupported.join(', ')}`);
+  const referenceEvents = boundCompileEvents(ctx.currentEvents(), focus, ctx.turn);
+  let taskRunId: string | undefined;
+  let dispatchedTaskId = '';
+  let dispatchedProject: ProjectInfo | undefined;
+  let dispatchedWorktree: string | undefined;
+  const record: AuxiliaryRecordPort = {
+    ...createLoopRecord(),
+    helpers: {
+      messageOf,
+      escapeBody,
+      renderEventsBlock,
+    },
+  };
+  const definition = getAuxiliaryDefinition('dispatch');
+  if (definition === undefined) return notDispatched('dispatch auxiliary definition is missing');
+  const catalog = createDispatchCatalog(deps, ctx, contracts, record, (created) => {
+    taskRunId = created.taskRunId;
+    dispatchedTaskId = created.taskId;
+    dispatchedProject = created.project;
+    dispatchedWorktree = created.worktree;
+    if (created.title !== '') ctx.onTitle?.(created.title);
+  });
+  const loopDeps = {
+    host: bindCatalog(catalog, 'dispatch'),
+    calls: deps.calls,
+    helpers: record.helpers,
+  };
+  const tools = await protocolTools(
+    loopDeps.host,
+    record.helpers,
+    ctx,
+    record,
+    definition.methods,
+    definition.effects,
+  );
+  const loopResult = await runAuxiliaryLoop({
+    deps: loopDeps,
+    ctx,
+    role: 'dispatch',
+    system: definition.buildSystemPrompt({ documentRules: () => '' }),
+    user: buildDispatchUser(ctx, action.intent, referenceEvents, dispatchView),
+    tools,
+    maxRounds: definition.maxRounds,
+    spanIdPrefix: definition.spanIdPrefix,
+    record,
+  });
+  const loopOutcome = toActionOutcome(loopResult, record);
+  if (loopOutcome.status !== 'done' || taskRunId === undefined || dispatchedProject === undefined) {
+    return notDispatched(loopOutcome.result);
   }
-
-  // Execution-environment tool gate: the gate requires only the execution tools
-  // this compiled input will mount, resolved from the task's feature selection
-  // by the host. The declared ids are mapped through the local alias table
-  // before comparing, so for example `computer-use` matches the environment's
-  // `desktop`.
-  let requiredTools = resolvedContract?.requiredTools ?? [];
-  if (deps.host.mountedTaskTools !== undefined) {
-    try {
-      requiredTools = await deps.host.mountedTaskTools(taskId, project.id, effectiveInput);
-    } catch (error) {
-      return notDispatched(messageOf(error));
-    }
-  }
-  if (requiredTools.length > 0) {
-    let available: readonly string[];
-    try {
-      available = deps.host.environmentTools === undefined ? [] : await deps.host.environmentTools();
-    } catch (error) {
-      return notDispatched(messageOf(error));
-    }
-    const missing = requiredTools
-      .map((tool) => TOOL_ID_ALIASES[tool] ?? tool)
-      .filter((tool) => !available.includes(tool));
-    if (missing.length > 0) {
-      return notDispatched(
-        `cannot dispatch task '${taskId}': this execution environment does not provide the required tools: ${missing.join(', ')} (available: ${available.length === 0 ? 'none' : available.join(', ')})`,
-      );
-    }
-  }
-
-  const rawTitle = typeof parsed.title === 'string' ? parsed.title.trim() : '';
-  const title = rawTitle !== '' && rawTitle.length <= 40 ? rawTitle : '';
-  if (title !== '') ctx.onTitle?.(title);
-
-  // The program — not the compile model — attaches the shared context to the
-  // task. It is built from the ledger alone: no model call and no disk read.
-  let taskCtx: Record<string, unknown>;
-  try {
-    taskCtx = buildTaskContext(ctx.currentEvents(), ctx.actionId, project);
-  } catch (error) {
-    return notDispatched(messageOf(error));
-  }
-
-  try {
-    const conflict = await deps.host.findTaskWriteConflict({
-      project: project.id,
-      task: taskId,
-      input: effectiveInput,
-      ...(worktree === undefined ? {} : { worktree }),
-    })
-    if (conflict) {
-      return notDispatched(
-        `Its write targets overlap running task run '${conflict.runId}' (task '${conflict.taskId}'): ${conflict.overlap.join(', ')}`,
-      )
-    }
-  } catch (error) {
-    return notDispatched(messageOf(error))
-  }
-
-  let taskRunId: string;
-  try {
-    const createParams: Parameters<ActionWorkflowDeps['host']['createTaskRun']>[0] & { title?: string } = {
-      task: taskId,
-      project: project.id,
-      ...(worktree === undefined ? {} : { worktree }),
-      input: effectiveInput,
-      ctx: taskCtx,
-      ...(fast === undefined ? {} : { fast }),
-      ...(title === '' ? {} : { title }),
-    };
-    const run = await deps.host.createTaskRun(createParams);
-    taskRunId = run.taskRunId;
-  } catch (error) {
-    return notDispatched(`createTaskRun failed: ${messageOf(error)}`);
-  }
+  const project = dispatchedProject;
+  const taskId = dispatchedTaskId;
 
   // The task run is recorded as its own observational span, opened as soon as
   // the run exists and closed when the wait ends.
@@ -474,7 +656,7 @@ export async function runDispatchAction(
     request: {
       task: taskId,
       project: project.id,
-      ...(worktree === undefined ? {} : { worktree }),
+      ...(dispatchedWorktree === undefined ? {} : { worktree: dispatchedWorktree }),
       taskRunId,
     },
   });
@@ -555,79 +737,6 @@ export async function runDispatchAction(
   if (waited?.artifactErrors !== undefined) result = appendDiagnostics(result, waited.artifactErrors);
 
   return { status, result, taskRunId, taskStatus, task: taskId, deferred };
-}
-
-/** One compile model call; a failure is returned, not thrown. */
-async function runCompileCall(
-  deps: ActionWorkflowDeps,
-  view: BuiltView,
-  ctx: ActionRunContext,
-): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
-  const spanId = deps.nextSpanId();
-  try {
-    const result = await deps.calls.run({
-      spanId,
-      parent: ctx.actionId,
-      role: 'dispatch',
-      turn: ctx.turn,
-      step: ctx.step,
-      messages: view.messages,
-      layers: view.layers,
-      signal: ctx.signal,
-    });
-    return { ok: true, text: result.text };
-  } catch (error) {
-    return { ok: false, error: messageOf(error) };
-  }
-}
-
-/** Parse one compile output and validate it up to the task's input schema. */
-function checkCompiled(
-  text: string,
-  ctx: ActionRunContext,
-  contracts: readonly CompileContract[],
-): { ok: true; parsed: Record<string, unknown>; project: ProjectInfo; taskId: string; worktree?: string; effectiveInput: unknown; fast?: boolean }
-  | { ok: false; error: string } {
-  const bad = (error: string): { ok: false; error: string } => ({ ok: false, error });
-  let parsed: Record<string, unknown>;
-  try {
-    const value: unknown = JSON.parse(text.trim());
-    if (!isObject(value)) return bad('compile output must be a single JSON object');
-    parsed = value;
-  } catch (error) {
-    return bad(`compile output is not valid JSON: ${messageOf(error)}`);
-  }
-  const projectId = parsed.project;
-  const taskId = parsed.task;
-  if (typeof projectId !== 'string' || typeof taskId !== 'string') {
-    return bad('compile output must name a project and a task');
-  }
-  const project = ctx.projects.find((candidate) => candidate.id === projectId);
-  if (!project) return bad(`unknown project: ${projectId}`);
-  const contract = contracts.find((candidate) => candidate.id === taskId
-    && (candidate.project === undefined || candidate.project === projectId));
-  if (!contract) return bad(`unknown task '${taskId}' for project ${projectId}`);
-  const worktree = parsed.worktree;
-  if (worktree !== undefined && (typeof worktree !== 'string' || worktree.trim() === '')) {
-    return bad('worktree must be a non-empty worktree id when present');
-  }
-  // Optional generic Fast preference; an invalid type is rejected, an absent
-  // value means the task run gets no preference.
-  const fast = parsed.fast;
-  if (fast !== undefined && typeof fast !== 'boolean') {
-    return bad('fast must be a boolean when present');
-  }
-
-  // Reject a model-provided absolute input path that does not exist on disk.
-  const missingPath = findMissingAbsolutePath(parsed.input);
-  if (missingPath !== undefined) return bad(`input references a missing path: ${missingPath}`);
-
-  const effectiveInput: unknown = parsed.input;
-  const validation = validateJsonSchema(contract.inputSchema, effectiveInput);
-  if (!validation.ok) {
-    return bad(`input does not satisfy the task schema: ${validation.errors.join('; ')}`);
-  }
-  return { ok: true, parsed, project, taskId, ...(worktree === undefined ? {} : { worktree: worktree.trim() }), effectiveInput, ...(fast === undefined ? {} : { fast }) };
 }
 
 // ─── Task context builder ───────────────────────────────────────────────────
