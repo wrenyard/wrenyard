@@ -92,21 +92,12 @@ async function runGates(
   phase: 'pre' | 'post',
 ): Promise<void> {
   for (const gate of gates) {
-    let lastFail: GateFail | undefined
-    const maxAttempts = gate.retry?.maxAttempts ?? 1
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      const result = await gate.run(gateCtx)
-      if (result.ok) {
-        lastFail = undefined
-        break // gate passed
-      }
-      lastFail = result
-    }
-    if (lastFail) {
-      throw new GateFailureError(phase, gate.id, lastFail.expected, lastFail.actual, {
-        evidence: lastFail.evidence,
-        remediation: lastFail.remediation,
-        retryable: lastFail.retryable,
+    const result = await gate.run(gateCtx)
+    if (!result.ok) {
+      throw new GateFailureError(phase, gate.id, result.expected, result.actual, {
+        evidence: result.evidence,
+        remediation: result.remediation,
+        retryable: result.retryable,
       })
     }
   }

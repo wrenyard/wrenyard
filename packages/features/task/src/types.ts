@@ -261,8 +261,4 @@ export interface TaskGate<I = unknown, O = unknown> {
   id: string
   description?: string
   run: (ctx: GateContext<I, O>) => Promise<GatePass | GateFail> | GatePass | GateFail
-  retry?: {
-    maxAttempts: number
-    appendReportToPrompt?: boolean
-  }
 }
