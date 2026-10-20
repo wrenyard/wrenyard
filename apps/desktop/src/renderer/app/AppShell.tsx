@@ -126,7 +126,9 @@ export function AppShell() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
-  const activityInFlow = !mini && !isMobile && viewportWidth - activityResize.width >= 560;
+  // The left sidebar collapses fully off-canvas, so a closed sidebar occupies 0.
+  const leftSidebarWidth = shellSidebarOpen ? sidebarResize.width : 0;
+  const activityInFlow = !mini && !isMobile && viewportWidth - activityResize.width - leftSidebarWidth >= 560;
 
   useEffect(() => {
     if (page === shown) return;
@@ -163,9 +165,12 @@ export function AppShell() {
       }}
     >
       <TitleBar />
-      <div className="relative flex min-h-0 flex-1">
+      <div
+        className="relative flex min-h-0 flex-1"
+        style={{ '--activity-panel-width': `${activityResize.width}px` } as CSSProperties}
+      >
         <SidebarProvider
-          className="h-full min-h-0"
+          className="h-full min-h-0 min-w-0"
           open={shellSidebarOpen}
           onOpenChange={active === 'settings' ? setSettingsSidebarOpen : setSidebarOpen}
           data-shell-resizing={sidebarResize.resizing ? 'true' : undefined}
@@ -226,7 +231,6 @@ export function AppShell() {
               <div {...activityResize.handleProps} />
               <aside
                 className="flex w-(--activity-panel-width) min-h-0 shrink-0 flex-col border-l bg-background"
-                style={{ '--activity-panel-width': `${activityResize.width}px` } as CSSProperties}
                 data-activity-panel
               >
                 <ActivityPanel scopeSession={activityPanel.scopeSession} />
@@ -238,6 +242,7 @@ export function AppShell() {
                 className="absolute inset-0 z-30 bg-black/20"
                 onMouseDown={() => closeActivityPanel()}
               />
+              <div {...activityResize.handleProps} />
               <aside
                 className="absolute inset-y-0 right-0 z-40 flex min-h-0 flex-col border-l bg-background shadow-lg"
                 style={{ width: `min(${activityResize.width}px, 100%)` }}

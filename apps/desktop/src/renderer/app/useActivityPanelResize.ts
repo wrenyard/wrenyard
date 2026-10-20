@@ -199,7 +199,7 @@ export function useActivityPanelResize(enabled: boolean): ActivityPanelResize {
     'aria-valuetext': `${Math.round(width)} 像素`,
     tabIndex: enabled ? 0 : -1,
     className: cn(
-      'fixed z-20 w-1.5 touch-none select-none bg-transparent outline-none',
+      'fixed z-50 w-1.5 touch-none select-none bg-transparent outline-none',
       'cursor-col-resize [-webkit-app-region:no-drag] [app-region:no-drag]',
       'hover:bg-sidebar-border/60 focus-visible:bg-sidebar-border/80',
       resizing && 'bg-sidebar-border/80',
