@@ -184,6 +184,7 @@ export async function withVersion(status: ClientStatus, options?: InspectOptions
     const env = options?.env ?? process.env;
     const version = await new Promise<string | undefined>((resolve) => {
         let output = '';
+        let errorOutput = '';
         let settled = false;
         const finish = (value: string | undefined): void => {
             if (settled)
@@ -194,7 +195,7 @@ export async function withVersion(status: ClientStatus, options?: InspectOptions
         };
         let child: ReturnType<typeof spawn>;
         try {
-            child = spawn(executable, ['--version'], { env, stdio: ['ignore', 'pipe', 'ignore'] });
+            child = spawn(executable, ['--version'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
         }
         catch {
             resolve(undefined);
@@ -208,9 +209,15 @@ export async function withVersion(status: ClientStatus, options?: InspectOptions
             if (output.length < 4_096)
                 output += chunk.toString('utf8').slice(0, 4_096 - output.length);
         });
+        // Some clients (e.g. Pi) print their version on stderr; stdout wins when both do.
+        child.stderr?.on('data', (chunk: Buffer) => {
+            if (errorOutput.length < 4_096)
+                errorOutput += chunk.toString('utf8').slice(0, 4_096 - errorOutput.length);
+        });
         child.on('error', () => finish(undefined));
         child.on('close', (code) => {
-            const match = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/.exec(output);
+            const pattern = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/;
+            const match = pattern.exec(output) ?? pattern.exec(errorOutput);
             finish(code === 0 ? match?.[0] : undefined);
         });
     });
