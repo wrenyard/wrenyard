@@ -27,6 +27,7 @@ import type { ModelErrorKind } from '../transport/errors.ts';
 export type LedgerEventType =
   | 'session.created'
   | 'turn.started'
+  | 'turn.steered'
   | 'turn.finished'
   | 'turn.interrupted'
   | 'turn.attention'
@@ -183,6 +184,15 @@ export interface TurnStartedEvent extends LedgerEventBase {
    * Bot provenance of the send that opened this turn. Absent on ordinary user
    * sends; existing ledgers therefore keep their exact event shape.
    */
+  sender?: { botId: string };
+}
+
+/** Additional user input delivered to a turn that is already running. */
+export interface TurnSteeredEvent extends LedgerEventBase {
+  type: 'turn.steered';
+  id: string;
+  turn: number;
+  text: string;
   sender?: { botId: string };
 }
 
@@ -709,6 +719,7 @@ export interface SystemNoticeEvent extends LedgerEventBase {
 export type LedgerEvent =
   | SessionCreatedEvent
   | TurnStartedEvent
+  | TurnSteeredEvent
   | TurnFinishedEvent
   | TurnInterruptedEvent
   | TurnAttentionEvent

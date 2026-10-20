@@ -235,6 +235,11 @@ export interface Session {
       sender?: { botId: string };
     },
   ): Promise<{ turn: number }>;
+  /** Deliver text to the active turn, or return undefined when the session is idle. */
+  steer(
+    sessionId: string,
+    input: { text: string; sender?: { botId: string } },
+  ): Promise<{ turn: number } | undefined>;
   interrupt(sessionId: string, turn: number): Promise<void>;
   /**
    * Resolve one ledger-known session file (by its exact canonical path) to its

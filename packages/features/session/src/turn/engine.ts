@@ -567,6 +567,25 @@ class Engine implements Session, SessionCallHost {
     return false;
   }
 
+  async steer(
+    sessionId: string,
+    input: { text: string; sender?: { botId: string } },
+  ): Promise<{ turn: number } | undefined> {
+    const session = await this.ensureSession(sessionId);
+    const running = [...session.turns.entries()].find(([, turn]) => !turn.durableTerminal);
+    if (running === undefined) return undefined;
+    const [turnNumber, turn] = running;
+    if (turn.durableTerminal) return undefined;
+    await this.ports.ledger.append(sessionId, {
+      type: 'turn.steered',
+      turn: turnNumber,
+      id: turnId(turnNumber),
+      text: input.text,
+      ...(input.sender === undefined ? {} : { sender: input.sender }),
+    });
+    return { turn: turnNumber };
+  }
+
   async send(
     sessionId: string,
     input: {

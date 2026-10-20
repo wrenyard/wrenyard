@@ -232,6 +232,8 @@ export function renderEventText(
     case 'turn.started':
       // A user message is a requirement; it is never reduced.
       return tag('message', [['turn', event.turn], ['role', 'user'], ['at', event.at]], escapeBody(event.text));
+    case 'turn.steered':
+      return tag('message', [['turn', event.turn], ['role', 'user'], ['at', event.at]], escapeBody(event.text));
     case 'step.started':
       // The per-request facts of one reasoning step, fixed once written.
       return tag('wy-info', [

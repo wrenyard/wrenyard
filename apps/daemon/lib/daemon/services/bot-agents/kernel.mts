@@ -1520,6 +1520,22 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   ): Promise<void> {
     subscribeGroupReplies(botId, sessionId)
     holdModel(botId, route)
+    const steered = await contextSession().steer(sessionId, { text: wake.text, sender: { botId } })
+    if (steered !== undefined) {
+      removePendingWake(botId, wake.id)
+      if (wake.meta !== undefined) markWakeKeys(ensureBotState(botId), sessionWakeKeys(wake.meta))
+      persist()
+      trackTurn(botId, sessionId, steered.turn, outcome => {
+        if (outcome.status === 'failed' && fallback !== undefined && !stopped) {
+          const retry = retryWake(botId, wake, sessionId, steered.turn, fallback)
+          admissions.add(retry)
+          void retry.finally(() => admissions.delete(retry))
+          return
+        }
+        finishWakeTurn(botId, wake, sessionId, outcome)
+      })
+      return
+    }
     const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route, sender: { botId } })
     removePendingWake(botId, wake.id)
     if (wake.meta !== undefined) markWakeKeys(ensureBotState(botId), sessionWakeKeys(wake.meta))
