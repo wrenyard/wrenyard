@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { lstat, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawnProcess } from './process.ts';
 import { killProcessTree } from './process.ts';
