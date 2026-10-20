@@ -13,7 +13,7 @@ import type { ListedDefinition } from '../../workspace/definition-registry.mts'
 import { readTaskRunMetadata } from '@wrenyard/task'
 import { taskRunMetadataDeps } from './run-metadata-source.mts'
 import { readTaskArtifactErrors } from '@wrenyard/task'
-import { resolveFeatures, resolveTaskWritePaths } from '@wrenyard/task'
+import { resolveFeatures } from '@wrenyard/task'
 import {
   TaskContextError,
   splitTaskInputContext,
@@ -213,8 +213,6 @@ export class TaskService {
     /** Internal compatibility path used only by TaskGraph dispatch so a
      *  persisted graph can resume a legacy definition. */
     allowLegacyTask?: boolean
-    /** Internal: originating session for task-run write-lock metadata. */
-    sessionId?: string
     /** Optional one-shot public snake_case invocation settings layer for this run
      *  only. Forwarded unchanged to execution-time settings resolution; never
      *  merged or persisted here. */
@@ -308,20 +306,6 @@ export class TaskService {
       )
     }
 
-    let writePaths: readonly string[] | undefined
-    try {
-      writePaths = resolveTaskWritePaths(target.definition.config, input, workingDirectory)
-    } catch (error) {
-      throw new TaskServiceError(
-        'invalid_write_targets',
-        `Task '${taskId}' writeTargets failed: ${errorMessage(error)}`,
-        400,
-        { task: taskId },
-      )
-    }
-
-    const writeConflictPolicy = params.allowLegacyTask === true ? 'wait' : 'refuse'
-
     const accepted = await this.requireRunner().startTaskRun({
       definitionName: taskId,
       taskName: target.name,
@@ -335,9 +319,6 @@ export class TaskService {
       connectingId: params.connectingId,
       taskContext,
       invocationSettings: params.invocationSettings,
-      ...(writePaths === undefined ? {} : { writePaths }),
-      ...(params.sessionId === undefined ? {} : { sessionId: params.sessionId }),
-      writeConflictPolicy,
     })
     return description.displayName === undefined
       ? accepted

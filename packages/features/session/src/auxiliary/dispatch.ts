@@ -12,6 +12,7 @@ import { existsSync } from 'node:fs';
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 
 import { renderTaskResult } from './dispatch-result.ts';
+import { evaluateDispatchGate } from './dispatch-gate.ts';
 import { renderToolContracts, toolContractsFor } from './tool-contract.ts';
 import { fail, isObject, renderRunFiles } from './shared.ts';
 import { messageOf } from '../errors.ts';
@@ -434,6 +435,25 @@ export async function runDispatchAction(
     }
   }
 
+  // The convergence gate: refuse a repeat full implementation dispatch for the
+  // same target while it is still in flight or its failure has neither new
+  // evidence nor a condition change behind it.
+  let decision = evaluateDispatchGate(ctx.currentEvents(), {
+    project: project.id,
+    task: taskId,
+    ...(worktree === undefined ? {} : { worktree }),
+  });
+  if (!decision.allowed && decision.kind === 'in-flight') {
+    // An open ledger span alone does not prove a live run: the parent action
+    // may have died without closing. Only a task run the host confirms queued
+    // or running — or an open span whose run id is missing — really refuses;
+    // otherwise the dispatch proceeds.
+    const anyActive = decision.hasMissingTaskRunId
+      || (await Promise.all(decision.taskRunIds.map((id) => deps.host.taskRunActive(id)))).some(Boolean);
+    if (!anyActive) decision = { allowed: true };
+  }
+  if (!decision.allowed) return { status: 'failed', result: decision.message, deferred: [] };
+
   const rawTitle = typeof parsed.title === 'string' ? parsed.title.trim() : '';
   const title = rawTitle !== '' && rawTitle.length <= 40 ? rawTitle : '';
   if (title !== '') ctx.onTitle?.(title);
@@ -452,7 +472,6 @@ export async function runDispatchAction(
     const createParams: Parameters<ActionWorkflowDeps['host']['createTaskRun']>[0] & { title?: string } = {
       task: taskId,
       project: project.id,
-      sessionId: ctx.sessionId,
       ...(worktree === undefined ? {} : { worktree }),
       input: effectiveInput,
       ctx: taskCtx,
@@ -505,7 +524,7 @@ export async function runDispatchAction(
   const status: ActionStatus = waited === undefined
     ? (aborted ? 'cancelled' : 'failed')
     : mapTaskStatus(waited.status, aborted);
-  const taskStatus = waited?.status ?? (aborted ? 'cancelled' : 'failed');
+  const taskStatus = waited?.status ?? (aborted ? 'cancelled' : 'executor-fault');
   const deferred: LedgerEventDraft[] = [];
   let result = waited === undefined ? `waitTaskRun failed: ${messageOf(waitError)}` : renderTaskResult(waited.output);
 

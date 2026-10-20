@@ -153,8 +153,6 @@ export interface ExecutionOptions {
   /** Non-persistent invocation-layer settings carried to execution-time
    *  settings resolution. Never persisted by the daemon. */
   invocationSettings?: TaskSettingsLayer
-  /** Internal marker: task-run-scoped repo write-lock admission (next wiring). */
-  taskRunWriteLock?: boolean
 }
 
 /**

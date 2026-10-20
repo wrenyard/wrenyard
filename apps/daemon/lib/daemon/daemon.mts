@@ -112,6 +112,65 @@ function createAsyncSnapshotCache<T>(ttlMs: number) {
   }
 }
 
+/**
+ * Recent routes each session used through this daemon, kept in memory only.
+ * Route-scoped notices are the only reason to reach an otherwise idle session,
+ * so this stays bounded and is never persisted.
+ */
+const sessionRouteUse = new Map<string, Set<string>>()
+const SESSION_ROUTE_USE_MAX_KEYS = 8
+const SESSION_ROUTE_USE_MAX_SESSIONS = 1024
+
+function trackSessionRouteUse(sessionId: string, provider: string, publicModel: string): void {
+  const routeKey = `${provider}/${publicModel}`
+  let routes = sessionRouteUse.get(sessionId)
+  if (routes === undefined) {
+    if (sessionRouteUse.size >= SESSION_ROUTE_USE_MAX_SESSIONS) {
+      const oldest = sessionRouteUse.keys().next()
+      if (!oldest.done) sessionRouteUse.delete(oldest.value)
+    }
+    routes = new Set<string>()
+    sessionRouteUse.set(sessionId, routes)
+  } else if (routes.has(routeKey)) {
+    return
+  }
+  if (routes.size >= SESSION_ROUTE_USE_MAX_KEYS) {
+    const oldest = routes.keys().next()
+    if (!oldest.done) routes.delete(oldest.value)
+  }
+  routes.add(routeKey)
+}
+
+/**
+ * Best-effort broadcast of one real condition change to the session ledgers that
+ * can act on it. Notices are delivered only to sessions with a running or
+ * pending turn and, for route-scoped notices, also to sessions that used that
+ * route through this daemon. A session that cannot record the event is skipped:
+ * a diagnostic trigger must never fail the operation that observed the change.
+ */
+async function broadcastConditionChange(
+  session: Session | undefined,
+  message: string,
+  route?: { provider: string; publicModel: string },
+): Promise<void> {
+  if (session === undefined) return
+  try {
+    const routeKey = route === undefined ? undefined : `${route.provider}/${route.publicModel}`
+    for (const summary of session.listSessions()) {
+      const active = summary.running === true || (summary.pendingTurns?.length ?? 0) > 0
+      const usedRoute = routeKey !== undefined && sessionRouteUse.get(summary.sessionId)?.has(routeKey) === true
+      if (!active && !usedRoute) continue
+      try {
+        await session.recordConditionChange(summary.sessionId, message)
+      } catch {
+        // Per-session failure is expected and ignored.
+      }
+    }
+  } catch {
+    // An unreadable session list is also a non-fatal diagnostic miss.
+  }
+}
+
 export interface RunningForemanDaemon {
   db: ForemanDatabase
   repoWriteLocks: RepoWriteLocks
@@ -391,7 +450,6 @@ export class ForemanDaemon implements RunningForemanDaemon {
         // are logged by the teardown; its aggregate is swallowed so a cleanup
         // failure can never replace the original startup error the caller sees.
         await teardownDaemonResources({
-          runner: runtime.runner,
           supervisor: runtime.supervisor,
           execService: runtime.execService,
           releaseDb: releaseDaemonDb,
@@ -400,7 +458,45 @@ export class ForemanDaemon implements RunningForemanDaemon {
       throw error
     }
     const resources = this.resources
+    if (resources) void this.broadcastSuiteVersionChange().catch(() => {})
     if (resources && this.onStarted) this.onStarted({ ipcPath: resources.ipcPath })
+  }
+
+  /**
+   * Best-effort startup record of a suite-version change. The first start on a
+   * state root only writes the baseline; a later start on a different version
+   * broadcasts a real condition change before rewriting the stamp.
+   */
+  private async broadcastSuiteVersionChange(): Promise<void> {
+    const resources = this.resources
+    if (!resources) return
+    const version = readProcessIdentity().version
+    const stampPath = join(foremanStateRoot(), 'dispatch-condition', 'suite-version')
+    let previous: string | undefined
+    try {
+      previous = (await readFile(stampPath, 'utf8')).trim()
+    } catch {
+      previous = undefined
+    }
+    if (previous === undefined || previous === '') {
+      try {
+        await mkdir(dirname(stampPath), { recursive: true, mode: 0o700 })
+        await writeFile(stampPath, `${version}\n`, { mode: 0o600 })
+      } catch (error) {
+        writeDaemonLog('warn', 'suite version baseline write failed', error)
+      }
+      return
+    }
+    if (previous === version) return
+    await broadcastConditionChange(
+      resources.session,
+      `Daemon restarted on a new suite version (${previous} → ${version}).`,
+    )
+    try {
+      await writeFile(stampPath, `${version}\n`, { mode: 0o600 })
+    } catch (error) {
+      writeDaemonLog('warn', 'suite version stamp write failed', error)
+    }
   }
 
   /**
@@ -601,7 +697,6 @@ export class ForemanDaemon implements RunningForemanDaemon {
     try {
       if (resources) {
         await teardownDaemonResources({
-          runner: resources.runtime.runner,
           httpServer: resources.httpServer,
           session: resources.session,
           scheduler: resources.scheduler,
@@ -848,6 +943,10 @@ async function createForemanDaemonResources(
   // for this process and never logged.
   const gatewayToken = config.gateway.token ?? persistGeneratedGatewayToken(authoritativeConfigPath)
   const runtimeAvailability = createRoutingAvailability({ catalog, providerRuntime, loadNativeProviderReadiness, loadCurrentCodeBuddySnapshot })
+  // The current workspace's session surface, used to record real condition
+  // changes for later dispatch gates. It is assigned once bindings exist and
+  // re-pointed on a workspace switch.
+  let conditionSession: Session | undefined
   const gatewayEventStore = new ForemanEventStore(runtime.db)
   const gateway = createModelGateway({
     catalog,
@@ -889,6 +988,13 @@ async function createForemanDaemonResources(
       }
       gatewayEventStore.append(foremanEvent)
       await getForemanEventBus().publish(foremanEvent)
+      if (event.state === 'available') {
+        void broadcastConditionChange(
+          conditionSession,
+          `Route recovered to available: ${event.provider}/${event.publicModel}.`,
+          { provider: event.provider, publicModel: event.publicModel },
+        )
+      }
     },
     onRequestCompleted: async (event) => {
       const foremanEvent: ForemanEvent = {
@@ -924,6 +1030,9 @@ async function createForemanDaemonResources(
         occurredAt: new Date().toISOString(),
       }
       gatewayEventStore.append(foremanEvent)
+      if (event.sessionId !== undefined && event.provider !== undefined && event.publicModel !== undefined) {
+        trackSessionRouteUse(event.sessionId, event.provider, event.publicModel)
+      }
       // The completion event is now persisted, so the attributed execution can
       // be re-read. A still-running execution yields no sample, and a late
       // completion replaces the client-derived sample with the gateway pair.
@@ -1020,6 +1129,7 @@ async function createForemanDaemonResources(
     invalidateProviderReadiness()
     providerServiceForInvalidation?.invalidateList()
     const snapshot = await gatewaySettingsSnapshot()
+    void broadcastConditionChange(conditionSession, 'Gateway routing settings changed.')
     return {
       ok: true,
       ...snapshot,
@@ -1076,16 +1186,6 @@ async function createForemanDaemonResources(
       return gateway.reportNativeRouteFault(provider, bareModel, failure, guard)
     },
     faultState: (provider, model) => sharedRouteFaultState(gateway, provider, model),
-  }
-
-  const bindWriteTargetNotifier = (session: Session): void => {
-    runtime.runner.setRefusedSessionWriteTargetNotifier(async (sessionId, scope) => {
-      const targetNames = scope.writePaths.length > 0 ? scope.writePaths.join('、') : scope.workingDirectory
-      await session.recordWriteTargetsFree(
-        sessionId,
-        `项目「${scope.project}」的任务「${scope.taskName}」写入目标「${targetNames}」现已可用。`,
-      )
-    })
   }
 
   /**
@@ -1380,6 +1480,7 @@ async function createForemanDaemonResources(
     coreOptions.taskSettings = bindings.taskSettingsService
     coreOptions.workspaceDocService = bindings.workspaceDocService
     coreOptions.workspaceTodoService = bindings.workspaceTodoService
+    conditionSession = bindings.session
   }
 
   /**
@@ -1398,7 +1499,7 @@ async function createForemanDaemonResources(
 
   let coreOptions: CoreRpcHandlerOptions
   let workspaceScoped = await createBindings(config.workspaceRoot)
-  bindWriteTargetNotifier(workspaceScoped.session)
+  conditionSession = workspaceScoped.session
   const providerService = new ProviderService({
     catalog, runtime: providerRuntime,
     // Live indirection: provider.list always reports the CURRENT workspace's
@@ -1995,7 +2096,6 @@ async function createForemanDaemonResources(
     // teardown; its aggregate is swallowed so it can never replace the original
     // startup error the caller sees.
     await teardownDaemonResources({
-      runner: runtime.runner,
       httpServer,
       session: workspaceScoped.session,
       gateway,
@@ -2113,8 +2213,6 @@ async function createForemanDaemonResources(
     // Publish synchronously — no await between here and the swap, so no request
     // observes a half-switched daemon. The previous scheduler is still alive but
     // its admission callback suppresses ticks while the switch gate is held.
-    runtime.runner.disposeRefusedSessionWriteTargetNotices()
-    bindWriteTargetNotifier(staged.session)
     workspaceScoped = staged
     invalidateProviderReadiness()
     providerServiceForInvalidation?.invalidateList()
@@ -2344,7 +2442,6 @@ interface DaemonResourceTeardownHandles {
   /** Started first, awaited last: its async handle teardown overlaps the rest. */
   httpServer?: Server
   session?: Session
-  runner?: TaskWorkflowRunner
   /** Stopped before the session so no scheduled fire starts a new turn during teardown. */
   scheduler?: Scheduler
   /** Stopped with the scheduler so no bot agent turn starts during teardown. */
@@ -2378,7 +2475,6 @@ async function teardownDaemonResources(handles: DaemonResourceTeardownHandles): 
       firstError = error
     }
   }
-  handles.runner?.disposeRefusedSessionWriteTargetNotices()
   // Start the HTTP close first so its async handle teardown overlaps the
   // synchronous resource shutdowns below; it is awaited near the end.
   const httpClose = handles.httpServer
@@ -2751,7 +2847,6 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
       agentExecutionHost: supervisor,
       logger: createDaemonSupervisorLogger(),
       taskDispatchResolver,
-      repoWriteLocks,
     })
     await supervisor.markInterruptedOnStartup()
     // Reclaim the run-scoped client data of runs that are provably dead. This
