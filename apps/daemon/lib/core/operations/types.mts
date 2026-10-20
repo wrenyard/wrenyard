@@ -38,7 +38,7 @@ import type { TaskResolvedDispatch } from '@wrenyard/protocol'
 
 export type TaskDispatchSnapshot = TaskResolvedDispatch
 
-import type { AgentFailureClass } from '@wrenyard/task'
+import type { AgentFailureClass, TaskUpstreamError } from '@wrenyard/task'
 export type ExecutionStatus =
   | 'queued'
   | 'starting'
@@ -89,6 +89,8 @@ export interface ExecutionResult {
   killReason?: string | null
   /** Canonical agent-runtime failure class captured from `run_finished`, if present. */
   failureClass?: AgentFailureClass | string | null
+  /** Upstream HTTP status and error identity from a failed native client, when reported. */
+  upstreamError?: TaskUpstreamError | null
 }
 
 export interface ExecutionHandle {

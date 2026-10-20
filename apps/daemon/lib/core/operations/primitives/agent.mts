@@ -55,6 +55,7 @@ export interface AgentResult {
   dispatchSnapshot?: TaskDispatchSnapshot | null
   /** Canonical agent-runtime failure class captured from `run_finished`, if present. */
   failureClass?: string | null
+  upstreamError?: ExecutionResult['upstreamError']
 }
 
 let agentExecutionHost: AgentExecutionHost | undefined
@@ -149,6 +150,7 @@ function toAgentResult(result: ExecutionResult, record: ExecutionRecord | undefi
     resolvedProfile: record?.resolved_profile ?? undefined,
     requestedAgentRuntime: record?.requested_agent_runtime ?? undefined,
     queueWaitMs: queueWaitMs(record),
+    upstreamError: result.upstreamError ?? undefined,
   }
 }
 
