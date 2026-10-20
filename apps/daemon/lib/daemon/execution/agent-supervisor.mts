@@ -15,6 +15,7 @@ import { killProcessTree } from '../../adapters/shell/process.mts'
 import { redactDiagnosticText, redactEvent, redactJsonString } from './redaction.mts'
 import { extractForemanTaskOutputSummary } from '@wrenyard/task'
 import { RepoWriteLocks } from './repo-write-locks.mts'
+import { minimalRunFactsForTaskRun } from './run-facts.mts'
 import { desktopLane, DesktopLaneClosedError, toOperationIds, OperationAdapter, type PreparedOperations } from './operation-adapter.mts'
 import { parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { createBuiltinCatalog } from '@wrenyard/providers'
@@ -605,6 +606,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
             status: 'interrupted',
             error: 'interrupted on startup',
             endedAt: timestamp,
+            facts: minimalRunFactsForTaskRun(target.taskId, 'interrupted'),
           })
         }
         this.repoWriteLocks.releaseByExecution(target.id)
@@ -620,6 +622,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         status: 'interrupted',
         error: 'interrupted on startup',
         endedAt: timestamp,
+        facts: minimalRunFactsForTaskRun(task.id, 'interrupted'),
       })
     }
 
@@ -1349,6 +1352,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
             status: 'failed',
             error: message,
             endedAt,
+            facts: minimalRunFactsForTaskRun(entry.taskId, 'failed'),
           })
         }
       })
@@ -1422,6 +1426,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
             status: mapTaskStatus(status),
             error,
             endedAt,
+            facts: minimalRunFactsForTaskRun(entry.taskId, mapTaskStatus(status)),
           })
         }
       })
@@ -1709,6 +1714,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           status: 'cancelled',
           error: 'cancelled',
           endedAt,
+          facts: minimalRunFactsForTaskRun(row.task_id, 'cancelled'),
         })
       }
     })

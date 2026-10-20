@@ -67,6 +67,7 @@ interface DbTaskStatusRow {
   failure_category: string | null
   suggestion: string | null
   error_message: string | null
+  facts: string | null
   requested_agent_runtime: string | null
   resolved_profile: string | null
 }
@@ -533,6 +534,7 @@ export class TaskService {
       ...taskFailureFields(row),
       ...(metadata.resolved ? { resolved: metadata.resolved } : {}),
       usage: metadata.usage,
+      ...taskFactsField(row.facts),
       ...(row.execution_pid === null ? {} : { pid: row.execution_pid }),
       _meta: artifactErrors.length > 0 ? { ...meta, artifactErrors } : meta,
     }
@@ -751,7 +753,7 @@ function readTaskStatusRow(taskRunId: string): DbTaskStatusRow | null {
     `SELECT
       t.id, t.template, t.project, t.worktree, t.output, t.summary, t.error,
       t.status, t.structured, t.execution_id, t.created_at, t.started_at, t.updated_at, t.ended_at,
-      t.failure_category, t.suggestion, t.error_message,
+      t.failure_category, t.suggestion, t.error_message, t.facts,
       e.status AS execution_status, e.output AS execution_output, e.error AS execution_error,
       e.pid AS execution_pid, e.exit_code, e.kill_reason,
       e.requested_agent_runtime, e.resolved_profile
@@ -779,6 +781,7 @@ function taskStatusRowToJson(row: DbTaskStatusRow): JsonRecord {
     ...(metadata.resolved ? { resolved: metadata.resolved } : {}),
     ...(metadata.recorded ? { recorded: metadata.recorded } : {}),
     usage: metadata.usage,
+    ...taskFactsField(row.facts),
     ...(row.execution_pid === null ? {} : { pid: row.execution_pid }),
     _meta: taskRowMeta(row),
   }
@@ -811,6 +814,15 @@ function parseJsonValue(value: string | null): unknown | undefined {
   } catch {
     return undefined
   }
+}
+
+function taskFactsField(value: string | null | undefined): JsonRecord {
+  if (!value) return {}
+  const parsed = parseJsonValue(value)
+  if (parsed === undefined || typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return {}
+  }
+  return { facts: parsed }
 }
 
 function compactRecord(value: JsonRecord): JsonRecord {

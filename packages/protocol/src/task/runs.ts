@@ -13,6 +13,28 @@ export const taskRunStatusValues = [
 
 export type TaskRunStatus = typeof taskRunStatusValues[number]
 
+export interface TaskRunFactsCommit {
+  sha: string
+  subject: string
+}
+
+export interface TaskRunFactsArtifactFile {
+  path: string
+  bytes: number
+}
+
+export interface TaskRunFacts {
+  status: TaskRunStatus | string
+  failure_category?: string
+  duration_ms: number | null
+  timed_out: boolean
+  checkout_path?: string
+  worktree_id?: string
+  changed_files: string[]
+  commits: TaskRunFactsCommit[]
+  artifact_files: TaskRunFactsArtifactFile[]
+}
+
 export interface TaskRunCreateParams {
   task_id: string
   project: string
@@ -91,6 +113,7 @@ export interface TaskRunStatusResult {
   suggestion?: string
   error_message?: string
   has_output?: boolean
+  facts?: TaskRunFacts
   pid?: number
   _meta?: JsonRecord
 }
@@ -114,6 +137,7 @@ export interface TaskRunOutputResult {
   failure_category?: string
   suggestion?: string
   error_message?: string
+  facts?: TaskRunFacts
   pid?: number
   _meta?: JsonRecord
 }

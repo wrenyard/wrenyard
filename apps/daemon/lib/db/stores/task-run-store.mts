@@ -41,6 +41,7 @@ export interface TerminalTaskRunWrite {
   failureCategory?: string | null
   suggestion?: string | null
   errorMessage?: string | null
+  facts?: string | null
 }
 
 export class TaskRunStore {
@@ -116,6 +117,7 @@ export class TaskRunStore {
       `UPDATE tasks
       SET status = ?, output = ?, summary = ?, error = ?,
         failure_category = ?, suggestion = ?, error_message = ?,
+        facts = COALESCE(?, facts),
         ended_at = ?, updated_at = ?
       WHERE id = ? AND status IN ('queued', 'running')`,
       write.status,
@@ -125,6 +127,7 @@ export class TaskRunStore {
       write.failureCategory ?? null,
       write.suggestion ?? null,
       write.errorMessage ?? null,
+      write.facts ?? null,
       write.endedAt,
       write.endedAt,
       write.taskRunId,

@@ -22,6 +22,7 @@ import {
   registerTaskWriteTargets,
   releaseTaskWriteTargets,
 } from './task-write-targets.mts'
+import { minimalRunFactsForTaskRun, minimalRunFactsJson } from './run-facts.mts'
 
 type StartTaskRunOptionsWithWriteTargets = StartTaskRunOptions & {
   writeTargets?: readonly string[]
@@ -138,8 +139,8 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
   }
 
   async cancelTaskRun(taskRunId: string): Promise<Record<string, unknown>> {
-    const row = this.get<{ execution_id: string | null; status: string; project: string | null }>(
-      `SELECT execution_id, status, project FROM tasks WHERE id = ?`,
+    const row = this.get<{ execution_id: string | null; status: string; project: string | null; worktree: string | null }>(
+      `SELECT execution_id, status, project, worktree FROM tasks WHERE id = ?`,
       taskRunId,
     )
     if (!row) throw new Error(`Task run '${taskRunId}' not found`)
@@ -192,6 +193,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
       summary: undefined,
       error: 'Task run cancelled',
       endedAt: now,
+      facts: minimalRunFactsJson({ status: 'cancelled', worktreeId: row.worktree }),
     })
     if (!changed) {
       const current = this.get<{ status: string }>(
@@ -272,6 +274,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
       failureCategory,
       suggestion,
       errorMessage: detailMessage,
+      facts: minimalRunFactsForTaskRun(taskRunId, 'failed'),
     })
     const row = this.get<{ status: string; project: string | null; error: string | null }>(
       'SELECT status, project, error FROM tasks WHERE id = ?', taskRunId,

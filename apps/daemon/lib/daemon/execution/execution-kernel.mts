@@ -48,6 +48,12 @@ import { buildTaskPrompt } from '@wrenyard/task'
 import { splitTaskInputContext } from '@wrenyard/task'
 import { resolveTaskWritePaths } from '@wrenyard/task'
 import {
+  captureRunBaseline,
+  collectTerminalRunFactsJson,
+  isTaskRunTimedOut,
+  readTaskRowFactsContext,
+} from './run-facts.mts'
+import {
   extractGateFailure,
   GateFailureError,
   isGateError,
@@ -179,6 +185,7 @@ function updateTaskRowTerminal(
   failureCategory?: string,
   suggestion?: string,
   errorMessage?: string,
+  facts?: string | null,
 ): boolean {
   if (status === 'running') throw new Error('running task status is not terminal')
   return taskRuns().markTerminal({
@@ -191,6 +198,7 @@ function updateTaskRowTerminal(
     failureCategory,
     suggestion,
     errorMessage,
+    facts,
   })
 }
 
@@ -358,6 +366,8 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     let runTimeLimitMs: number | undefined
     const effectiveInput = validateInput(config.input, taskInputContext.input, `Invalid input for task '${target.name}'`)
     const executionOptions = options
+    const runCheckoutPath = executionOptions.workingDirectory ?? process.cwd()
+    await captureRunBaseline(taskId, runCheckoutPath)
     // Resolve selected features from config before launching an agent.
     // Invalid selections surface as deterministic task execution errors.
     const selectedFeatures = resolveFeatures(config.features, effectiveInput)
@@ -661,7 +671,29 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       record.output = output
       record.summary = structuredSummary ?? taskSummaryFromOutput(output) ?? null
       record.finishedAt = new Date().toISOString()
-      const terminalUpdated = updateTaskRowTerminal(taskId, 'done', output, record.summary, null, record.finishedAt)
+      const factsContext = readTaskRowFactsContext(taskId)
+      const factsJson = await collectTerminalRunFactsJson({
+        taskRunId: taskId,
+        status: 'done',
+        failureCategory: null,
+        startedAt: factsContext.startedAt,
+        endedAt: record.finishedAt,
+        timedOut: isTaskRunTimedOut(factsContext),
+        checkoutPath: runCheckoutPath,
+        worktreeId: executionOptions.worktreeId ?? factsContext.worktree,
+      })
+      const terminalUpdated = updateTaskRowTerminal(
+        taskId,
+        'done',
+        output,
+        record.summary,
+        null,
+        record.finishedAt,
+        undefined,
+        undefined,
+        undefined,
+        factsJson,
+      )
       if (terminalUpdated) {
         insertTaskLifecycleEvent(record, 'task.done')
         await recordTaskRunEvent(record, 'task.run.completed', executionOptions)
@@ -742,6 +774,17 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     }
     record.finishedAt = new Date().toISOString()
     if (taskRowPersisted) {
+      const factsContext = readTaskRowFactsContext(record.task_id)
+      const factsJson = await collectTerminalRunFactsJson({
+        taskRunId: record.task_id,
+        status: record.status,
+        failureCategory: record.failure_category,
+        startedAt: factsContext.startedAt,
+        endedAt: record.finishedAt,
+        timedOut: isTaskRunTimedOut(factsContext, record.status),
+        checkoutPath: options.workingDirectory ?? process.cwd(),
+        worktreeId: options.worktreeId ?? factsContext.worktree,
+      })
       const terminalUpdated = updateTaskRowTerminal(
         record.task_id,
         record.status,
@@ -752,6 +795,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         record.failure_category,
         record.suggestion,
         record.error_message,
+        factsJson,
       )
       if (terminalUpdated) {
         // Publish exactly one final task lifecycle event matching the terminal

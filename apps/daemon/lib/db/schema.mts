@@ -17,6 +17,7 @@ export function bootstrapSchema(database: ForemanDatabase): void {
   reconcileTaskgraphNodeSlipColumn(database)
   reconcileTaskDefinitionSourceColumn(database)
   reconcileTaskStartedAtColumn(database)
+  reconcileTaskFactsColumn(database)
   dropFwaTranscriptAfterMigration(database)
   reconcileAgentEventKinds(database)
   reconcileAgentTurnOriginColumns(database)
@@ -808,6 +809,18 @@ function reconcileTaskStartedAtColumn(database: ForemanDatabase): void {
     .all()
     .map((column) => column.name))
   if (!columns.has('started_at')) database.prepare('ALTER TABLE tasks ADD COLUMN started_at TEXT').run()
+}
+
+/**
+ * `tasks.facts`: daemon-collected run facts as JSON text. NULL for runs that
+ * predated collection or paths that did not persist facts. Additive and idempotent.
+ */
+function reconcileTaskFactsColumn(database: ForemanDatabase): void {
+  const columns = new Set(database
+    .prepare<[], { name: string }>('PRAGMA table_info(tasks)')
+    .all()
+    .map((column) => column.name))
+  if (!columns.has('facts')) database.prepare('ALTER TABLE tasks ADD COLUMN facts TEXT').run()
 }
 
 /**
