@@ -1,4 +1,5 @@
 import { get as dbGet, getDb, query as dbQuery } from '../db/connection.mts'
+import type { ForemanDatabase } from '../db/types.mts'
 import { migrateProviderId } from '../config/chatgpt-migration.mts'
 import { AuxiliaryRunStore } from '../db/stores/auxiliary-run-store.mts'
 import { MAX_STATS_SUMMARY_DAYS } from '../protocol/methods/stats.mts'
@@ -23,7 +24,10 @@ export type JsonRecord = Record<string, unknown>
 
 interface StatsEventRow {
   type: string
-  data: string | null
+  /** Guarded json_extract sums for turn_usage rows; always 0 for dispatch. */
+  u_input: number
+  u_cached: number
+  u_output: number
   created_at: string
   profile: string | null
   resolved_profile: string | null
@@ -242,6 +246,37 @@ function applyModelDisplay(source: ModelRankAccumulator | WindowModelAccumulator
  */
 const RECENT_RUNS_CAP = 25
 
+/**
+ * Short-lived response cache for stats.summary, keyed per database handle so a
+ * reopened or isolated database never inherits another database's entries. Each
+ * entry is keyed by days, limit and the local day (the daily buckets and all
+ * local-calendar windows depend on it). An entry is served only when a cheap
+ * stamp query of per-table rowid maxima matches and the entry is younger than
+ * SUMMARY_CACHE_MAX_AGE_MS; both the stored and returned values are cloned so a
+ * caller can never mutate a cached snapshot. Failures are never cached.
+ */
+const SUMMARY_CACHE_MAX_AGE_MS = 30_000
+
+interface SummaryCacheEntry {
+  stamp: string
+  cachedAtMs: number
+  result: StatsSummaryResult
+}
+
+const summaryCache = new WeakMap<ForemanDatabase, Map<string, SummaryCacheEntry>>()
+
+/** One indexed-max probe per table the summary reads; NULL-safe on empty tables. total_changes() counts every insert/update/delete on the connection, covering in-place updates that leave row maxima unchanged. */
+function readSummaryStamp(): string {
+  const row = dbGet<{ e: number; t: number; x: number; a: number; c: number }>(
+    `SELECT (SELECT COALESCE(MAX(id), 0) FROM events) AS e,
+            (SELECT COALESCE(MAX(rowid), 0) FROM tasks) AS t,
+            (SELECT COALESCE(MAX(rowid), 0) FROM executions) AS x,
+            (SELECT COALESCE(MAX(rowid), 0) FROM auxiliary_runs) AS a,
+            (SELECT total_changes()) AS c`,
+  )
+  return row ? `${row.e}/${row.t}/${row.x}/${row.a}/${row.c}` : ''
+}
+
 export function readTodayStats(now = new Date()): DailyStatsResponse {
   const window = localDayWindow(now)
   const dispatchRow = dbGet<{ count: number }>(
@@ -299,7 +334,35 @@ export function readStatsSummary(
     throw new Error(`Invalid limit: ${limit}. Must be an integer between 1 and 50.`)
   }
 
+  const database = getDb()
   const todayWindow = localDayWindow(now)
+  const cacheKey = `${days}:${limit}:${todayWindow.dayKey}`
+  let byKey = summaryCache.get(database)
+  if (!byKey) {
+    byKey = new Map()
+    summaryCache.set(database, byKey)
+  }
+  const stamp = readSummaryStamp()
+  const hit = byKey.get(cacheKey)
+  if (hit && hit.stamp === stamp && now.getTime() - hit.cachedAtMs < SUMMARY_CACHE_MAX_AGE_MS) {
+    return structuredClone(hit.result)
+  }
+
+  const result = readStatsSummaryUncached(params, now, options, todayWindow)
+  byKey.set(cacheKey, { stamp, cachedAtMs: now.getTime(), result: structuredClone(result) })
+  return result
+}
+
+function readStatsSummaryUncached(
+  params: { days?: number; limit?: number },
+  now: Date,
+  options: StatsQueryOptions,
+  todayWindow: { dayKey: string; startAt: string; endAt: string },
+): StatsSummaryResult {
+  const days = params.days ?? 7
+  const limit = params.limit ?? 20
+
+
   const dailyBuckets = buildDailyBuckets(now, days)
 
   // Keep the fixed 31-local-day period window while allowing the daily
@@ -309,10 +372,30 @@ export function readStatsSummary(
   const fullStartIso = days > 31 ? dailyStartIso : windowsStartIso
   const fullEndIso = todayWindow.endAt
 
-  // One bounded events query over the longest requested projection.
+  // One bounded events query over the longest requested projection. Token
+  // fields are extracted in SQL under json_valid so the event `data` blob never
+  // crosses to JS; each guard preserves the exact nonNegativeNumber semantics
+  // (missing, non-numeric or non-positive JSON values all contribute 0), and a
+  // NULL/malformed/non-object payload yields three zeroes just like the skipped
+  // JS parse did. Dispatch rows carry no usable payload and select no data.
   const allEventsRows = dbQuery<StatsEventRow>(
-    `SELECT e.type, e.data, e.created_at, ex.profile, ex.resolved_profile, COALESCE(t.template, ex_t.template) AS template,
-            tra.provider AS provider, tra.model AS model, tra.model_id AS model_id
+    `SELECT e.type, e.created_at, ex.profile, ex.resolved_profile, COALESCE(t.template, ex_t.template) AS template,
+            tra.provider AS provider, tra.model AS model, tra.model_id AS model_id,
+            CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
+                      AND json_type(e.data, '$.input_tokens') IN ('integer','real')
+                      AND json_extract(e.data, '$.input_tokens') > 0
+                      AND json_extract(e.data, '$.input_tokens') < 1e308
+                 THEN json_extract(e.data, '$.input_tokens') ELSE 0 END AS u_input,
+            CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
+                      AND json_type(e.data, '$.cached_input_tokens') IN ('integer','real')
+                      AND json_extract(e.data, '$.cached_input_tokens') > 0
+                      AND json_extract(e.data, '$.cached_input_tokens') < 1e308
+                 THEN json_extract(e.data, '$.cached_input_tokens') ELSE 0 END AS u_cached,
+            CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
+                      AND json_type(e.data, '$.output_tokens') IN ('integer','real')
+                      AND json_extract(e.data, '$.output_tokens') > 0
+                      AND json_extract(e.data, '$.output_tokens') < 1e308
+                 THEN json_extract(e.data, '$.output_tokens') ELSE 0 END AS u_output
      FROM events e
      LEFT JOIN executions ex ON e.execution_id = ex.id
      LEFT JOIN tasks t ON e.task_id = t.id
@@ -347,24 +430,31 @@ export function readStatsSummary(
   )
 
   // One bounded cohort scan over canonical executions (never events). Each
-  // task's EARLIEST execution created_at, grouped by task_id (idx_exec_task),
-  // decides its first-dispatch day: queued executions are included and retries
-  // collapse across all days, so a task first dispatched yesterday but retried
-  // today stays in yesterday's cohort. `done` is the current tasks.status of
-  // that exact cohort — never a completion-date total and never clamped.
+  // task's EARLIEST execution created_at (via idx_exec_task_meta) decides its
+  // first-dispatch day: queued executions are included and retries collapse
+  // across all days, so a task first dispatched yesterday but retried today
+  // stays in yesterday's cohort. `done` is the current tasks.status of that
+  // exact cohort — never a completion-date total and never clamped.
   const todayDispatchCohort = dbGet<{ count: number; done: number }>(
+    // Equivalent to grouping executions by task_id and keeping groups whose
+    // MIN(created_at) falls in today's window: a task first dispatched today
+    // has at least one execution in the window (EXISTS) and none before it
+    // (NOT EXISTS). Both probes hit idx_exec_task_meta per candidate task
+    // instead of aggregating every execution row ever written.
     `SELECT COUNT(*) AS count,
             COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0) AS done
-     FROM (
-       SELECT task_id, MIN(created_at) AS first_dispatched_at
-       FROM executions
-       WHERE task_id IS NOT NULL
-       GROUP BY task_id
-     ) e
-     INNER JOIN tasks t ON t.id = e.task_id
-     WHERE e.first_dispatched_at >= ? AND e.first_dispatched_at < ?`,
+     FROM tasks t
+     WHERE EXISTS (
+       SELECT 1 FROM executions e
+       WHERE e.task_id = t.id AND e.created_at >= ? AND e.created_at < ?
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM executions e
+       WHERE e.task_id = t.id AND e.created_at < ?
+     )`,
     todayWindow.startAt,
     todayWindow.endAt,
+    todayWindow.startAt,
   )
 
   // Partition events into daily buckets by local calendar day
@@ -381,10 +471,8 @@ export function readStatsSummary(
     if (row.type === 'dispatch') {
       bucket.dispatchCount++
     } else if (row.type === 'turn_usage') {
-      const data = parseJsonValue(row.data)
-      if (!data || typeof data !== 'object' || Array.isArray(data)) continue
-      bucket.inputTokens += fullInputTokens(data as JsonRecord)
-      bucket.outputTokens += nonNegativeNumber((data as JsonRecord).output_tokens)
+      bucket.inputTokens += row.u_input + row.u_cached
+      bucket.outputTokens += row.u_output
     }
   }
 
@@ -467,10 +555,8 @@ export function readStatsSummary(
     if (row.type === 'dispatch') {
       g.dispatchCount++
     } else if (row.type === 'turn_usage') {
-      const data = parseJsonValue(row.data)
-      if (!data || typeof data !== 'object' || Array.isArray(data)) continue
-      g.inputTokens += fullInputTokens(data as JsonRecord)
-      g.outputTokens += nonNegativeNumber((data as JsonRecord).output_tokens)
+      g.inputTokens += row.u_input + row.u_cached
+      g.outputTokens += row.u_output
     }
   }
 
@@ -506,10 +592,8 @@ export function readStatsSummary(
     if (row.type === 'dispatch') {
       g.dispatchCount++
     } else if (row.type === 'turn_usage') {
-      const data = parseJsonValue(row.data)
-      if (!data || typeof data !== 'object' || Array.isArray(data)) continue
-      g.inputTokens += fullInputTokens(data as JsonRecord)
-      g.outputTokens += nonNegativeNumber((data as JsonRecord).output_tokens)
+      g.inputTokens += row.u_input + row.u_cached
+      g.outputTokens += row.u_output
     }
   }
 
@@ -597,17 +681,24 @@ function readRecentTaskRunLedger(
     resolved_profile: string | null
     summary: string | null
   }>(
+    // The MIN(started_at) probe runs per already-selected recent task row via
+    // idx_exec_task_meta instead of grouping every execution in the table; the
+    // inner SELECT fixes the same ORDER BY + LIMIT candidate set first, and the
+    // outer ORDER BY restores it because subquery ordering is not guaranteed to
+    // propagate through the joins.
     `SELECT t.id AS id, t.template AS template, t.project AS project, t.status AS status,
             t.created_at AS created_at, t.ended_at AS ended_at, t.definition_source AS definition_source,
             t.summary AS summary,
-            ex.started_at AS started_at,
+            (SELECT MIN(e2.started_at) FROM executions e2 WHERE e2.task_id = t.id) AS started_at,
             exe.resolved_profile AS resolved_profile
-     FROM tasks t
-     LEFT JOIN (SELECT task_id, MIN(started_at) AS started_at FROM executions GROUP BY task_id) ex
-       ON ex.task_id = t.id
+     FROM (
+       SELECT id, template, project, status, created_at, ended_at, definition_source, summary, execution_id
+       FROM tasks
+       ORDER BY COALESCE(ended_at, created_at) DESC, created_at DESC
+       LIMIT ?
+     ) t
      LEFT JOIN executions exe ON exe.id = t.execution_id
-     ORDER BY COALESCE(t.ended_at, t.created_at) DESC, t.created_at DESC
-     LIMIT ?`,
+     ORDER BY COALESCE(t.ended_at, t.created_at) DESC, t.created_at DESC`,
     recentLimit,
   )
 
@@ -888,11 +979,8 @@ function buildWindow(
       recordModelDisplay(g, identity)
       g.runCount++
     } else if (row.type === 'turn_usage') {
-      const data = parseJsonValue(row.data)
-      if (!data || typeof data !== 'object' || Array.isArray(data)) continue
-      const record = data as JsonRecord
-      const inputTokens = fullInputTokens(record)
-      const outputTokens = nonNegativeNumber(record.output_tokens)
+      const inputTokens = row.u_input + row.u_cached
+      const outputTokens = row.u_output
       totalTokens += inputTokens + outputTokens
       if (!persisted) continue
       const identity = resolveStatsModelIdentity(persisted, options.resolveDisplayNames)
