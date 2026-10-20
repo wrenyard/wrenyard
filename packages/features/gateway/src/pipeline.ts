@@ -628,19 +628,29 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         // a plain cancellation, even though the Gateway only saw a disconnect.
         const clientTimedOut = aborted && clientDeadline !== undefined && options.now() >= clientDeadline;
         const routeTimedOut = timedOut || clientTimedOut;
-        const status = aborted ? (routeTimedOut ? 504 : 499) : 502;
+        const err = error as Error & { code?: unknown; cause?: { code?: unknown } };
+        // Record 499 without a route fault only when the controller was not
+        // aborted, we did not time out, the error is an AbortError, and the
+        // inbound request or outbound response shows the caller disconnected.
+        // AbortError without that evidence remains a transport fault (502).
+        const callerCancelled =
+          !aborted &&
+          !routeTimedOut &&
+          err.name === 'AbortError' &&
+          (request.readableAborted || response.destroyed);
+        const cancelled = aborted || callerCancelled;
+        const status = cancelled ? (routeTimedOut ? 504 : 499) : 502;
         let faultFact: Partial<GatewayRequestCompletedEvent> = {};
         if (routeTimedOut) {
           const state = recordFault(clientTimeoutFailure(), status);
           faultFact = state === undefined ? {} : { routeState: state.state, routeUntil: state.until, faultReason: state.faultKind, routePhase: state.phase };
-        } else if (!aborted) {
+        } else if (!cancelled) {
           const sanitizeFaultField = (value: unknown): string | undefined => {
             if (value === undefined || value === null) return undefined;
             const collapsed = String(value).replace(/\s+/g, ' ').trim();
             if (!collapsed) return undefined;
             return collapsed.length > 200 ? collapsed.slice(0, 200) : collapsed;
           };
-          const err = error as Error & { code?: unknown; cause?: { code?: unknown } };
           const faultCause: GatewayRequestCompletedEvent['faultCause'] = {};
           const name = sanitizeFaultField(err.name);
           const message = sanitizeFaultField(err.message);
@@ -654,7 +664,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           };
         }
         if (!response.headersSent) {
-          const message = aborted ? (routeTimedOut ? 'Provider request timed out' : 'Request cancelled') : 'Provider request failed';
+          const message = cancelled ? (routeTimedOut ? 'Provider request timed out' : 'Request cancelled') : 'Provider request failed';
           json(response, status, gatewayErrorBody(module, status, message));
         } else {
           response.destroy();
