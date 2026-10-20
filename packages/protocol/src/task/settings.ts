@@ -196,8 +196,9 @@ export interface TaskSettingsTaskRow {
   /** Persisted per-task user layer for this identity. */
   user_task: TaskSettingsLayer
   effective: TaskSettingsEffective
-/** Present when a selection resolved; exposes the selected automatic
- *  dispatch and safe reason. */
+  /** Automatic routing preview (selected dispatch and safe reason). Present
+   *  only on scoped `task_id` detail snapshot rows; omitted from unscoped list
+   *  responses. */
   automatic_selection?: TaskSettingsAutomaticSelection
   /** Base→effective inheritance chain; present only when this row's effective
    *  definition was resolved from an inherited declaration. */

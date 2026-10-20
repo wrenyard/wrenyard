@@ -1452,18 +1452,11 @@ export class TaskSettingsService {
     const projectName = kind === 'project' ? summary.project ?? project : undefined
     const automatic = toEffectiveAutomatic(effective.dispatch, effective.sources.dispatch)
 
-    // Automatic-mode row: selected resolved dispatch + safe reason, exposed
-    // through minimal additive optional fields (keeps the Task page layout).
     let automaticSelection: TaskSettingsAutomaticSelection | undefined
-    {
-      // Automatic preview shares the exact automatic-selection helper used by
-      // automatic runs (same availability/free/cap/client policy, same
-      // immutable ranking), but never falls back. All automatic rows in one
-      // snapshot request reuse the request-scoped preview memo — one immutable
-      // quota snapshot, one readiness probe per canonical runtime, and one
-      // shared result per identical selection input — so rows stay
-      // deterministic without repeating quota/credential reads. A failure
-      // surfaces as a structured issue.
+    let builtin: TaskSettingsTaskRow['builtin'] | undefined
+    let inheritanceChain = summary.inheritanceChain
+    if (includeBuiltinMetadata) {
+      // Scoped detail rows only: automatic-selection preview and builtin payload.
       try {
         const selection = await this.previewAutomaticSelection(previewMemo, {
           taskName: summary.name,
@@ -1472,8 +1465,6 @@ export class TaskSettingsService {
           routingWeights: effective.routingWeights,
         })
         if (selection.ok) {
-          // Attach the paired authoritative Catalog display labels to the
-          // selected automatic dispatch; canonical ids stay authoritative.
           const labels = this.displayLabelsOf(selection.dispatch)
           automaticSelection = {
             exact_runtime: selection.exactAgentRuntime,
@@ -1487,8 +1478,6 @@ export class TaskSettingsService {
             reason: selection.reason,
           }
         } else {
-          // One closed deterministic failure: the exact code the real gate
-          // recorded plus its safe Chinese message — never resolver error text.
           const failure = taskResolutionFailure(selection.error.resolutionFailureCode)
           issues.push({
             code: 'automatic_dispatch_unavailable',
@@ -1504,13 +1493,7 @@ export class TaskSettingsService {
           resolutionFailure: failure,
         })
       }
-    }
 
-    // The builtin prompt payload is assembled only when the snapshot carries
-    // builtin metadata (the scoped task detail); unscoped list rows omit it.
-    let builtin: TaskSettingsTaskRow['builtin'] | undefined
-    let inheritanceChain = summary.inheritanceChain
-    if (includeBuiltinMetadata) {
       const detail = await this.definitionDetailOrUndefined(summary, project)
       const source = summary.source ?? detail?.source ?? ''
       const description = summary.description ?? detail?.description
