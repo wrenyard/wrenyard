@@ -63,6 +63,7 @@ export type LedgerEventType =
  */
 export const CONTEXT_EVENT_TYPES: ReadonlySet<LedgerEventType> = new Set<LedgerEventType>([
   'turn.started',
+  'turn.steered',
   'turn.interrupted',
   'step.started',
   'action.started',

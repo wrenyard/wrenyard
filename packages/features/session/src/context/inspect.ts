@@ -136,6 +136,7 @@ export function findCreated(events: readonly LedgerEvent[]): SessionCreatedEvent
 function itemKind(event: LedgerEvent): ContextItemKind | undefined {
   switch (event.type) {
     case 'turn.started':
+    case 'turn.steered':
       return 'user';
     case 'reasoning.completed':
       return 'assistant';
@@ -167,6 +168,7 @@ function itemKind(event: LedgerEvent): ContextItemKind | undefined {
 function itemLabel(event: LedgerEvent): string {
   switch (event.type) {
     case 'turn.started':
+    case 'turn.steered':
     case 'reasoning.completed':
     case 'reasoning.thinking':
       return firstLine(event.text);
