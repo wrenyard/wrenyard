@@ -25,6 +25,28 @@ const NODE_INSPECT_CONCURRENCY = 12;
 const TASKGRAPH_EVENT_PAGE_SIZE = 1_000;
 const MAX_TASKGRAPH_EVENT_PAGES = 100;
 
+/**
+ * "<client> · <model>" label of the resolved dispatch, mirroring
+ * session/ipc.ts taskRuntimeLabel — the reasoning effort is appended as
+ * " · <effort>" when the resolved snapshot carries one.
+ */
+function resolvedRuntimeLabel(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const stringField = (key: string): string | undefined =>
+    typeof record[key] === 'string' && (record[key] as string).length > 0
+      ? record[key] as string
+      : undefined;
+  const client = stringField('client_display_name')
+    ?? stringField('client') ?? stringField('provider_display_name') ?? stringField('provider');
+  const model = stringField('model_display_name') ?? stringField('model');
+  const effort = stringField('clientReasoningEffort') ?? stringField('reasoningEffort');
+  const suffix = effort !== undefined ? ` · ${effort}` : '';
+  if (client !== undefined && model !== undefined) return `${client} · ${model}${suffix}`;
+  const runtime = stringField('runtime');
+  return runtime === undefined ? undefined : `${runtime}${suffix}`;
+}
+
 export interface TaskGraphSnapshot {
   list: TaskGraphListResult;
   inspect: TaskGraphInspectResult;
@@ -307,10 +329,27 @@ export class ForemanTaskGraphReader {
     const name = typeof record.task_name === 'string'
       ? record.task_name.replace(/\s+/g, ' ').trim().slice(0, 80)
       : '';
-    return {
+    const info: TranscriptRunInfo = {
       status: record.status.slice(0, 40),
       ...(name ? { task_name: name } : {}),
     };
+    const runtime = resolvedRuntimeLabel(record.resolved);
+    if (runtime !== undefined) info.runtime = runtime;
+    if (typeof record.created_at === 'string') info.created_at = record.created_at;
+    if (typeof record.started_at === 'string') info.started_at = record.started_at;
+    const meta = record._meta;
+    const endedAt = typeof record.ended_at === 'string'
+      ? record.ended_at
+      : (typeof meta === 'object' && meta !== null && !Array.isArray(meta)
+          ? (meta as Record<string, unknown>).ended_at
+          : undefined);
+    if (typeof endedAt === 'string') info.ended_at = endedAt;
+    const usage = record.usage;
+    if (typeof usage === 'object' && usage !== null && !Array.isArray(usage)) {
+      const totalTokens = (usage as Record<string, unknown>).total_tokens;
+      if (typeof totalTokens === 'number' && Number.isFinite(totalTokens)) info.total_tokens = totalTokens;
+    }
+    return info;
   }
 
   async taskRunIsTerminal(taskRunId: string): Promise<boolean> {

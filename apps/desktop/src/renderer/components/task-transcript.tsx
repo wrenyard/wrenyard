@@ -28,7 +28,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/renderer/
 import { Message, MessageContent, MessageHeader } from '@/renderer/components/ui/message';
 import { Spinner } from '@/renderer/components/ui/spinner';
 import { Markdown } from '@/renderer/components/markdown';
-import { formatClockSeconds, formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
+import { elapsedBetween, formatClockSeconds, formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
 import type { SafeTaskRunEventsResult, SafeTranscriptEventData, TranscriptRunInfo } from '@/pet/shared/taskgraph';
 import {
   fileReference,
@@ -566,9 +566,42 @@ function renderRow(row: RenderedEvent, appearance: RowAppearance, live: boolean)
   }
 }
 
+// ── Run header ───────────────────────────────────────────────────────
+
+interface RunHeaderView {
+  name: string;
+  status?: { label: string; tone: string };
+  runtime: string;
+  time: string;
+  tokens?: string;
+}
+
+/**
+ * One-line header from the authoritative run facts: task name, status,
+ * resolved runtime (muted 未解析 while the dispatch has not resolved), the
+ * elapsed or total duration, and the run's total token count.
+ */
+function runHeader(run: TranscriptRunInfo | null | undefined): RunHeaderView | null {
+  if (run === null || run === undefined) return null;
+  const status = runStatusView(run.status);
+  const start = run.started_at ?? run.created_at;
+  const time = start === undefined
+    ? '—'
+    : formatElapsedMs(elapsedBetween(start, run.ended_at, Date.now()));
+  return {
+    name: run.task_name ?? '任务对话',
+    ...(status === undefined ? {} : { status: { label: status.label, tone: status.tone } }),
+    runtime: run.runtime ?? '未解析',
+    time,
+    ...(run.total_tokens === undefined ? {} : { tokens: formatTokenCount(run.total_tokens) }),
+  };
+}
+
 // ── Stream (presentational) ──────────────────────────────────────────
 
 export interface TaskTranscriptStreamProps {
+  /** Authoritative run facts for the header line, when known. */
+  run?: TranscriptRunInfo | null;
   /** Already loaded safe events, in order. */
   events: SafeTranscriptEventData[];
   /** True while the run is live (drives the 运行中 tail row). */
@@ -593,6 +626,7 @@ export interface TaskTranscriptStreamProps {
  * error overlays (anchored to this element, never to the viewport).
  */
 export function TaskTranscriptStream({
+  run,
   events,
   live,
   loading,
@@ -618,9 +652,26 @@ export function TaskTranscriptStream({
     [dark, onOpenExternal],
   );
   const showEmpty = !loading && !error && rows.length === 0;
+  const header = useMemo(() => runHeader(run), [run]);
 
   return (
     <div className={cn('relative flex min-h-0 flex-1 flex-col bg-background text-xs text-foreground', className)}>
+      {header !== null && (
+        <div className="flex shrink-0 items-center gap-1.5 border-b px-3 py-1.5 text-xs text-muted-foreground">
+          <span className="min-w-0 truncate font-medium text-foreground" title={header.name}>{header.name}</span>
+          {header.status !== undefined && <span className={cn('shrink-0', header.status.tone)}>{header.status.label}</span>}
+          <span className="shrink-0 text-muted-foreground/60">·</span>
+          <span className="min-w-0 truncate" title={header.runtime}>{header.runtime}</span>
+          <span className="shrink-0 text-muted-foreground/60">·</span>
+          <span className="shrink-0 tabular-nums">{header.time}</span>
+          {header.tokens !== undefined && (
+            <>
+              <span className="shrink-0 text-muted-foreground/60">·</span>
+              <span className="shrink-0 tabular-nums">{header.tokens}</span>
+            </>
+          )}
+        </div>
+      )}
       <div
         ref={streamRef}
         role="log"
@@ -684,6 +735,7 @@ export interface TaskTranscriptProps {
  */
 export function TaskTranscript({ taskRunId, loader, dark, onOpenExternal, className }: TaskTranscriptProps): ReactElement {
   const [events, setEvents] = useState<SafeTranscriptEventData[]>([]);
+  const [run, setRun] = useState<TranscriptRunInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [live, setLive] = useState(true);
@@ -707,6 +759,7 @@ export function TaskTranscript({ taskRunId, loader, dark, onOpenExternal, classN
         setLoading(false);
         setError(null);
         if (result.run !== undefined) {
+          setRun(result.run);
           setLive(!TERMINAL_RUN_STATUSES.has(result.run.status));
         }
         if (result.events.length > 0) setEvents((current) => [...current, ...result.events]);
@@ -743,6 +796,7 @@ export function TaskTranscript({ taskRunId, loader, dark, onOpenExternal, classN
 
   return (
     <TaskTranscriptStream
+      run={run}
       events={events}
       live={live}
       loading={loading}

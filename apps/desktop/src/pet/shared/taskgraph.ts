@@ -258,6 +258,14 @@ export interface TaskRunEventsResult {
 export interface TranscriptRunInfo {
   status: string;
   task_name?: string;
+  /** Resolved client · model label (reasoning effort appended when known). */
+  runtime?: string;
+  /** Run timestamps; `started_at` is absent while the run is still queued. */
+  created_at?: string;
+  started_at?: string;
+  ended_at?: string;
+  /** Authoritative total token count of the run, when the daemon reports one. */
+  total_tokens?: number;
 }
 
 export interface SafeTaskRunEventsResult {

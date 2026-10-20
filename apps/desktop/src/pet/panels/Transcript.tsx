@@ -155,6 +155,7 @@ export function Transcript(): ReactElement {
       </header>
 
       <TaskTranscriptStream
+        run={run}
         events={events}
         live={live}
         loading={loading}

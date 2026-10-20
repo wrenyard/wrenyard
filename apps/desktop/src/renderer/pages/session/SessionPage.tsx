@@ -75,18 +75,21 @@ function FollowSentMessage({ pendingId }: { pendingId: string | undefined }) {
   return null;
 }
 
-function RunningDispatchTasks({ api, turns, setTasks }: {
+function RunningDispatchTasks({ api, turns, tasks, setTasks }: {
   api: ReturnType<typeof getSessionApi>;
   turns: ReturnType<typeof fold>['turns'];
+  tasks: Record<string, SessionBridgeTaskBrief>;
   setTasks: (tasks: Record<string, SessionBridgeTaskBrief>) => void;
 }) {
+  // Every dispatch that opened a task run needs its brief once — finished and
+  // older turns included — while the hook polls only the still-running runs.
   const actions = useMemo(
-    () => turns.flatMap((turn) => turn.status === 'running'
-      ? turn.actions.filter((action): action is ActionModel & { taskRunId: string } => action.kind === 'dispatch' && action.status === 'running' && action.taskRunId !== undefined)
-      : []),
+    () => turns.flatMap((turn) => turn.actions.filter(
+      (action): action is ActionModel & { taskRunId: string } => action.kind === 'dispatch' && action.taskRunId !== undefined,
+    )),
     [turns],
   );
-  useTaskStatus(api, actions, setTasks);
+  useTaskStatus(api, actions, tasks, setTasks);
   return null;
 }
 
@@ -341,7 +344,7 @@ export function SessionPage() {
         turns={model.turns}
         ledgerReady={draft || state.ledgerLoaded}
       >
-        <RunningDispatchTasks api={api} turns={model.turns} setTasks={setTasks} />
+        <RunningDispatchTasks api={api} turns={model.turns} tasks={state.tasks} setTasks={setTasks} />
         <div className="relative flex min-h-0 flex-1 flex-col">
           {empty ? (
             <EmptySession>

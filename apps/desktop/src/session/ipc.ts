@@ -187,8 +187,11 @@ function taskRuntimeLabel(value: unknown): string | undefined {
   const client = readString(record.client_display_name)
     ?? readString(record.client) ?? readString(record.provider_display_name) ?? readString(record.provider);
   const model = readString(record.model_display_name) ?? readString(record.model);
-  if (client !== undefined && model !== undefined) return `${client} · ${model}`;
-  return readString(record.runtime);
+  const effort = readString(record.clientReasoningEffort) ?? readString(record.reasoningEffort);
+  const suffix = effort !== undefined ? ` · ${effort}` : '';
+  if (client !== undefined && model !== undefined) return `${client} · ${model}${suffix}`;
+  const runtime = readString(record.runtime);
+  return runtime === undefined ? undefined : `${runtime}${suffix}`;
 }
 
 /**
@@ -550,10 +553,25 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     }
     let run: TranscriptRunInfo | undefined;
     if (typeof statusResult === 'object' && statusResult !== null) {
-      const status = readString((statusResult as Record<string, unknown>).status);
+      const record = statusResult as Record<string, unknown>;
+      const status = readString(record.status);
       if (status !== undefined) {
-        const name = readString((statusResult as Record<string, unknown>).task_name);
-        run = { status: status.slice(0, 40), ...(name ? { task_name: name.slice(0, 80) } : {}) };
+        run = { status: status.slice(0, 40) };
+        const name = readString(record.task_name);
+        if (name !== undefined) run.task_name = name.slice(0, 80);
+        const runtime = taskRuntimeLabel(record.resolved);
+        if (runtime !== undefined) run.runtime = runtime;
+        const createdAt = readString(record.created_at);
+        if (createdAt !== undefined) run.created_at = createdAt;
+        const startedAt = readString(record.started_at);
+        if (startedAt !== undefined) run.started_at = startedAt;
+        const endedAt = readString(record.ended_at)
+          ?? (typeof record._meta === 'object' && record._meta !== null
+            ? readString((record._meta as Record<string, unknown>).ended_at)
+            : undefined);
+        if (endedAt !== undefined) run.ended_at = endedAt;
+        const totalTokens = taskUsage(record.usage)?.totalTokens;
+        if (totalTokens !== undefined) run.total_tokens = totalTokens;
       }
     }
     const result: SafeTaskRunEventsResult = {
