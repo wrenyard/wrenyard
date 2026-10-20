@@ -3,12 +3,11 @@
  * calls, loaded context, the dispatched task with its transcript and cancel
  * controls, its writes, the files it produced, and its result.
  */
-import { useState } from 'react';
 import { ExternalLink, FilePenLine, ListTodo, Square } from 'lucide-react';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { Button } from '@/renderer/components/ui/button';
-import { Spinner } from '@/renderer/components/ui/spinner';
+import { useTaskCancellation } from '@/renderer/hooks/use-task-cancellation';
 import { shell } from '@/renderer/lib/desktop';
 import { formatTokenCount } from '@/renderer/lib/format';
 import { ACTION_KIND_LABEL, statusView, stepName } from '../../model/describe.js';
@@ -20,22 +19,22 @@ import { ContextItems } from './ToolCard.js';
 
 /** Dispatched task row: name, runtime, status, tokens, transcript and cancel. */
 function TaskRow({ action, onCancelTask }: { action: ActionModel; onCancelTask: (taskRunId: string) => Promise<void> }) {
-  const [cancelling, setCancelling] = useState(false);
+  const { cancelledTasks, cancelTask } = useTaskCancellation();
   const task = action.task;
+  const taskRunId = action.taskRunId;
+  const locallyCancelled = taskRunId !== undefined && cancelledTasks.has(taskRunId);
   const total = task?.usage?.totalTokens;
+  const statusLabel = locallyCancelled ? '已取消' : statusView(task?.status).label;
   const cancel = (): void => {
-    if (action.taskRunId === undefined || cancelling) return;
-    setCancelling(true);
-    // Keep the spinner up on success; the action's own status settles it. A
-    // rejected cancel clears the local flag and is swallowed here on purpose.
-    onCancelTask(action.taskRunId).catch(() => setCancelling(false));
+    if (taskRunId === undefined || locallyCancelled) return;
+    void cancelTask(taskRunId, onCancelTask);
   };
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs">
       <ListTodo className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="font-medium">{task?.taskName ?? '任务'}</span>
       {task?.runtime !== undefined && <span className="text-muted-foreground">{task.runtime}</span>}
-      <span className="text-muted-foreground">{statusView(task?.status).label}</span>
+      <span className="text-muted-foreground">{statusLabel}</span>
       {total !== undefined && <span className="tabular-nums text-muted-foreground">{formatTokenCount(total)} tokens</span>}
       <span className="flex-1" />
       <Button
@@ -46,9 +45,9 @@ function TaskRow({ action, onCancelTask }: { action: ActionModel; onCancelTask: 
         <ExternalLink />
         查看任务对话
       </Button>
-      {action.status === 'running' && (
-        <Button variant="ghost" size="xs" className="text-destructive" disabled={cancelling} onClick={cancel}>
-          {cancelling ? <Spinner /> : <Square />}
+      {action.status === 'running' && !locallyCancelled && (
+        <Button variant="ghost" size="xs" className="text-destructive" onClick={cancel}>
+          <Square />
           取消任务
         </Button>
       )}
