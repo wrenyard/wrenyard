@@ -480,9 +480,11 @@ function terminalReasonOutput(
 
 /**
  * The terminal answer of a communication call that sent no reply tool text.
- * The first nonempty candidate wins: the call's own plain text, the turn's
- * last reasoning output, the last finished action's textual result, and a
- * closing line built from turn facts. The closing line is never empty, so a
+ * The first nonempty candidate wins: the call's own plain text, and for
+ * non-failed turns the turn's last reasoning output and the last finished
+ * action's textual result. Failed terminal requests do not reuse pre-failure
+ * reasoning drafts or action results: after the call's own text they go
+ * directly to the closing error line. The closing line is never empty, so a
  * terminal turn always records an answer. The order is `REPLY_FALLBACK_SOURCES`
  * (ledger/events.ts), the canonical list shared with the Desktop derivation.
  */
@@ -492,13 +494,13 @@ function terminalFallback(
   callText: string,
 ): { text: string; source: Exclude<ReplySource, 'tool'> } {
   if (callText.trim() !== '') return { text: callText, source: 'reply-text' };
+  if (request.status === 'failed') {
+    return { text: `出错了：${request.error ?? '未知错误'}`, source: 'closing' };
+  }
   const reasoning = lastTurnReasonText(events, request.turn);
   if (reasoning !== undefined) return { text: reasoning, source: 'reasoning' };
   const result = lastActionResult(events, request.turn);
   if (result !== undefined) return { text: result, source: 'action-result' };
-  if (request.status === 'failed') {
-    return { text: `出错了：${request.error ?? '未知错误'}`, source: 'closing' };
-  }
   const actions = finishedActionCount(events, request.turn);
   return { text: `本轮已完成，执行了 ${actions} 个操作，未生成文字说明。`, source: 'closing' };
 }
