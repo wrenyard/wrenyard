@@ -26,24 +26,35 @@ const TASKGRAPH_EVENT_PAGE_SIZE = 1_000;
 const MAX_TASKGRAPH_EVENT_PAGES = 100;
 
 /**
- * "<client> · <model>" label of the resolved dispatch, mirroring
- * session/ipc.ts taskRuntimeLabel — the reasoning effort is appended as
- * " · <effort>" when the resolved snapshot carries one.
+ * Runtime label from the full `task.run.status` record, mirroring
+ * session/ipc.ts taskRuntimeLabel — resolved dispatch first, then recorded
+ * provider/model, then raw runtime; reasoning effort appended when present.
  */
 function resolvedRuntimeLabel(value: unknown): string | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  const stringField = (key: string): string | undefined =>
-    typeof record[key] === 'string' && (record[key] as string).length > 0
-      ? record[key] as string
+  const stringField = (obj: Record<string, unknown>, key: string): string | undefined =>
+    typeof obj[key] === 'string' && (obj[key] as string).length > 0
+      ? obj[key] as string
       : undefined;
-  const client = stringField('client_display_name')
-    ?? stringField('client') ?? stringField('provider_display_name') ?? stringField('provider');
-  const model = stringField('model_display_name') ?? stringField('model');
-  const effort = stringField('clientReasoningEffort') ?? stringField('reasoningEffort');
+  const resolved = typeof record.resolved === 'object' && record.resolved !== null && !Array.isArray(record.resolved)
+    ? record.resolved as Record<string, unknown>
+    : {};
+  const client = stringField(resolved, 'client_display_name')
+    ?? stringField(resolved, 'client') ?? stringField(resolved, 'provider_display_name') ?? stringField(resolved, 'provider');
+  const model = stringField(resolved, 'model_display_name') ?? stringField(resolved, 'model');
+  const effort = stringField(resolved, 'clientReasoningEffort') ?? stringField(resolved, 'reasoningEffort');
   const suffix = effort !== undefined ? ` · ${effort}` : '';
   if (client !== undefined && model !== undefined) return `${client} · ${model}${suffix}`;
-  const runtime = stringField('runtime');
+  const recorded = typeof record.recorded === 'object' && record.recorded !== null && !Array.isArray(record.recorded)
+    ? record.recorded as Record<string, unknown>
+    : undefined;
+  const recordedProvider = recorded === undefined ? undefined : stringField(recorded, 'provider');
+  const recordedModel = recorded === undefined ? undefined : stringField(recorded, 'model');
+  if (recordedProvider !== undefined && recordedModel !== undefined) {
+    return `${recordedProvider} · ${recordedModel}`;
+  }
+  const runtime = stringField(record, 'runtime');
   return runtime === undefined ? undefined : `${runtime}${suffix}`;
 }
 
@@ -333,7 +344,7 @@ export class ForemanTaskGraphReader {
       status: record.status.slice(0, 40),
       ...(name ? { task_name: name } : {}),
     };
-    const runtime = resolvedRuntimeLabel(record.resolved);
+    const runtime = resolvedRuntimeLabel(record);
     if (runtime !== undefined) info.runtime = runtime;
     if (typeof record.created_at === 'string') info.created_at = record.created_at;
     if (typeof record.started_at === 'string') info.started_at = record.started_at;

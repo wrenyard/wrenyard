@@ -84,6 +84,7 @@ export interface TaskRunStatusResult {
   status: TaskRunStatus
   summary?: string
   resolved?: TaskResolvedDispatch
+  recorded?: { provider: string; model: string }
   usage: TaskUsage
   error?: string | null
   failure_category?: string

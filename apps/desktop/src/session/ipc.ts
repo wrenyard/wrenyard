@@ -179,17 +179,29 @@ function readMediaRequest(value: unknown): { sessionId: string; path: string } {
   return { sessionId, path };
 }
 
-/** Runtime label from the actual resolved dispatch (execution client + model). */
+/** Runtime label from the full `task.run.status` record: resolved dispatch
+ *  first, then the recorded provider/model identity, then the raw runtime. */
 function taskRuntimeLabel(value: unknown): string | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const record = value as Record<string, unknown>;
+  const resolved = typeof record.resolved === 'object' && record.resolved !== null
+    ? record.resolved as Record<string, unknown>
+    : {};
   // Prefer the resolved execution client (codex/codebuddy/etc.); provider only as fallback.
-  const client = readString(record.client_display_name)
-    ?? readString(record.client) ?? readString(record.provider_display_name) ?? readString(record.provider);
-  const model = readString(record.model_display_name) ?? readString(record.model);
-  const effort = readString(record.clientReasoningEffort) ?? readString(record.reasoningEffort);
+  const client = readString(resolved.client_display_name)
+    ?? readString(resolved.client) ?? readString(resolved.provider_display_name) ?? readString(resolved.provider);
+  const model = readString(resolved.model_display_name) ?? readString(resolved.model);
+  const effort = readString(resolved.clientReasoningEffort) ?? readString(resolved.reasoningEffort);
   const suffix = effort !== undefined ? ` · ${effort}` : '';
   if (client !== undefined && model !== undefined) return `${client} · ${model}${suffix}`;
+  const recorded = typeof record.recorded === 'object' && record.recorded !== null
+    ? record.recorded as Record<string, unknown>
+    : undefined;
+  const recordedProvider = readString(recorded?.provider);
+  const recordedModel = readString(recorded?.model);
+  if (recordedProvider !== undefined && recordedModel !== undefined) {
+    return `${recordedProvider} · ${recordedModel}`;
+  }
   const runtime = readString(record.runtime);
   return runtime === undefined ? undefined : `${runtime}${suffix}`;
 }
@@ -244,7 +256,7 @@ function taskBriefFrom(taskRunId: string, value: unknown): SessionBridgeTaskBrie
   };
   const name = readString(record.task_name) ?? readString(record.task_id);
   if (name !== undefined) brief.taskName = name;
-  const runtime = taskRuntimeLabel(record.resolved);
+  const runtime = taskRuntimeLabel(record);
   if (runtime !== undefined) brief.runtime = runtime;
   const summary = readString(record.summary);
   if (summary !== undefined) brief.summary = summary;
@@ -559,7 +571,7 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
         run = { status: status.slice(0, 40) };
         const name = readString(record.task_name);
         if (name !== undefined) run.task_name = name.slice(0, 80);
-        const runtime = taskRuntimeLabel(record.resolved);
+        const runtime = taskRuntimeLabel(record);
         if (runtime !== undefined) run.runtime = runtime;
         const createdAt = readString(record.created_at);
         if (createdAt !== undefined) run.created_at = createdAt;

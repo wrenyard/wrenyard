@@ -312,6 +312,15 @@ export const taskRunStatusResultSchema = {
     started_at: { type: 'string' },
     summary: { type: 'string' },
     resolved: taskResolvedDispatchSchema,
+    recorded: {
+      type: 'object',
+      required: ['provider', 'model'],
+      properties: {
+        provider: { type: 'string' },
+        model: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
     usage: taskUsageSchema,
     error: nullableStringSchema,
     failure_category: { type: 'string' },

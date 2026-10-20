@@ -777,6 +777,7 @@ function taskStatusRowToJson(row: DbTaskStatusRow): JsonRecord {
     ...taskFailureFields(row),
     has_output: output !== null && output !== undefined && output !== '',
     ...(metadata.resolved ? { resolved: metadata.resolved } : {}),
+    ...(metadata.recorded ? { recorded: metadata.recorded } : {}),
     usage: metadata.usage,
     ...(row.execution_pid === null ? {} : { pid: row.execution_pid }),
     _meta: taskRowMeta(row),
