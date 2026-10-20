@@ -13,6 +13,13 @@ export function codeBuddyRouteFailure(input: UpstreamRouteErrorInput): UpstreamR
   }
   if (code === 'insufficient_balance' || code === 'balance_exhausted') return { state: 'quota_exhausted', scope: 'provider', ...(until ? { until } : {}) };
   if (code === 'model_not_found' || code === 'model_unavailable') return { state: 'model_unavailable', scope: 'route', ...(until ? { until } : {}) };
+  // A 429 that states its own reset instant (CodeBuddy's usage limit) is a
+  // usage allowance exhausted until that time, as with Devin's free-model
+  // limit: the route is skipped until then and a hand-picked model ends its
+  // turn with the reset time instead of waiting it out.
+  if (input.status === 429 && until && typeof quotaPoolId !== 'string') {
+    return { state: 'quota_exhausted', scope: 'route', until };
+  }
   // A bare per-model 429 carries no account/pool exhaustion code, so it limits
   // only this exact route; a pool claim belongs to an explicit exhaustion code
   // or a named quota_pool_id below.
