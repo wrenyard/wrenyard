@@ -781,7 +781,10 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         failureCategory: record.failure_category,
         startedAt: factsContext.startedAt,
         endedAt: record.finishedAt,
-        timedOut: isTaskRunTimedOut(factsContext, record.status),
+        // Executions-row timeout settlement may complete after facts collection; agent_timeout is the reliable signal.
+        timedOut:
+          isTaskRunTimedOut(factsContext, record.status) ||
+          record.failure_category === 'agent_timeout',
         checkoutPath: options.workingDirectory ?? process.cwd(),
         worktreeId: options.worktreeId ?? factsContext.worktree,
       })
