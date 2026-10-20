@@ -3,45 +3,54 @@
  * shell (`app/ActivityPanel.tsx`) while its openers — the title-bar toggle,
  * the transcript task chip and the `activity.toggle` command — are spread
  * across lower layers, so the state is a small store here: one open flag and
- * the session scope a chip requested.
+ * the session a chip asked to focus when opening.
  */
 import { useSyncExternalStore } from 'react';
 
 interface ActivityPanelState {
   open: boolean;
   /**
-   * Session the last opener asked to scope the list to (`''` when the opener
-   * had no session, e.g. the title bar or the command). The panel
-   * defaults its 本会话/全部 toggle from this on open.
+   * Session the last opener asked to focus (`''` when the opener had no
+   * session, e.g. the title bar or the command). Retained for AppShell
+   * compatibility; the panel list is not filtered by this value.
    */
   scopeSession: string;
+  /** Monotonic counter bumped on every `openActivityPanel` call. */
+  openRequestId: number;
 }
 
-let state: ActivityPanelState = { open: false, scopeSession: '' };
+let state: ActivityPanelState = { open: false, scopeSession: '', openRequestId: 0 };
 const listeners = new Set<() => void>();
 
 function publish(next: ActivityPanelState): void {
-  if (next.open === state.open && next.scopeSession === state.scopeSession) return;
+  if (
+    next.open === state.open &&
+    next.scopeSession === state.scopeSession &&
+    next.openRequestId === state.openRequestId
+  ) {
+    return;
+  }
   state = next;
   for (const listener of listeners) listener();
 }
 
-/** Open the panel, scoped to `sessionId` when given (the transcript chip). */
+/** Open the panel; optional `sessionId` sets the focus target for this open. */
 export function openActivityPanel(sessionId?: string): void {
   publish({
     open: true,
     scopeSession: sessionId ?? '',
+    openRequestId: state.openRequestId + 1,
   });
 }
 
 export function closeActivityPanel(): void {
-  publish({ open: false, scopeSession: '' });
+  publish({ open: false, scopeSession: '', openRequestId: state.openRequestId });
 }
 
 /** Toggle the panel; the scoped-open always keeps it open. */
 export function toggleActivityPanel(sessionId?: string): void {
   if (state.open && sessionId === undefined) {
-    publish({ open: false, scopeSession: '' });
+    publish({ open: false, scopeSession: '', openRequestId: state.openRequestId });
   } else {
     openActivityPanel(sessionId);
   }

@@ -101,7 +101,7 @@ export const GLOBAL_COMMANDS: readonly CommandDefinition[] = [
   },
   {
     id: 'activity.toggle',
-    title: '活动面板',
+    title: '后台任务',
     run: (args) => {
       const { sessionId } = panelCommandArgs(args);
       toggleActivityPanel(sessionId);

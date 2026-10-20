@@ -7,7 +7,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/u
 import { shell, useActivityStatus, useShellPage } from '@/renderer/lib/desktop';
 import { toggleActivityPanel } from '@/renderer/lib/activity-panel';
 import { TaskGraphsPopover } from '@/renderer/app/TitleBarPanels';
-import { useSessionActivity } from '@/renderer/app/use-activity';
 import { closeCard, getCurrentSession, openMiniCard, restoreMain, setMiniPinned, useMiniMode, useMiniPinned } from '@/renderer/lib/mini';
 import { back, forward, toggleSecondarySidebar, useNavigation, useSecondarySidebarToggle } from '@/renderer/lib/navigation';
 import { registerTitleBarSlot } from '@/renderer/lib/titlebar';
@@ -64,10 +63,9 @@ export function TitleBar() {
   const mini = useMiniMode();
   const pinned = useMiniPinned();
   const activitySnapshot = useActivityStatus();
-  const sessions = useSessionActivity();
-  const activityTasks = activitySnapshot.tasks.filter((task) => task.status === 'running' || task.status === 'queued');
-  const activityTurns = (sessions.data ?? []).flatMap((session) => session.turns);
-  const activityBadgeCount = activityTurns.length + activityTasks.length;
+  const activityBadgeCount = activitySnapshot.tasks.filter(
+    (task) => task.status === 'running' || task.status === 'queued',
+  ).length;
 
   // Mini card: a compact 36px drag strip. 置顶 sits at the far left; the middle
   // is a plain, non-interactive session title inside the drag region; the right
@@ -207,7 +205,7 @@ export function TitleBar() {
       </div>
 
       <div className={cn('flex shrink-0 items-center gap-2 px-2', DRAG, SLOT_NO_DRAG)}>
-        <TitleBarButton label="活动面板" tooltip="活动面板" onClick={() => toggleActivityPanel()}>
+        <TitleBarButton label="后台任务" tooltip="后台任务" onClick={() => toggleActivityPanel()}>
           <span className="relative inline-flex">
             <PanelRight />
             {activityBadgeCount > 0 ? (
