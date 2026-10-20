@@ -144,7 +144,8 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
     const config = JSON.stringify(mcp ? { ...base, mcp } : base);
     const configDir = join(sharedConfigHome, 'opencode');
     const pluginDir = join(configDir, 'plugins');
-    const pluginPath = join(pluginDir, 'wrenyard-retry-guard.mjs');
+    // OpenCode loads only {plugin,plugins}/*.{ts,js}; a .mjs file is silently ignored.
+    const pluginPath = join(pluginDir, 'wrenyard-retry-guard.js');
     await mkdir(pluginDir, { recursive: true, mode: 0o700 });
     const args = ['run'];
     if (request.resumeSessionId)
