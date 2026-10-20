@@ -65,7 +65,7 @@ function ConfigSection(props: { botId: string; tools: readonly string[] }) {
         </div>
         <div className="flex flex-col gap-1">
           <span className="text-xs font-medium">identity.md</span>
-          <pre className="max-h-48 overflow-auto rounded-lg bg-muted p-3 text-xs">
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-3 text-xs">
             {config.isError ? '身份读取失败。' : config.data?.identity ?? '…'}
           </pre>
         </div>

@@ -1426,6 +1426,8 @@ export interface RoutineCreateParams {
   botId: string;
   prompt: string;
   intervalMinutes: number;
+  /** Optional short name persisted in the routine file front matter. */
+  name?: string;
 }
 export interface RoutineCreateResult { routine: Routine }
 export interface RoutineUpdateParams { id: string; state: 'active' | 'paused' }

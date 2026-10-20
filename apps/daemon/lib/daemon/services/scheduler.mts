@@ -507,9 +507,11 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
       const activeCount = routines.filter(record => record.botId === input.botId).length
       if (activeCount >= MAX_PER_BOT) throw new Error(`routine limit reached (${MAX_PER_BOT} per bot)`)
       const now = new Date()
+      const name = input.name?.trim()
       const record: RoutineRecord = {
         id: nextId(),
         botId: input.botId,
+        ...(name !== undefined && name !== '' ? { name } : {}),
         prompt,
         intervalMinutes: input.intervalMinutes,
         state: 'active',

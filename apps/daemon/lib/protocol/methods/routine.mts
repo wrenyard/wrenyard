@@ -42,6 +42,7 @@ export interface RoutineCreateParams {
   botId: string
   prompt: string
   intervalMinutes: number
+  name?: string
 }
 export interface RoutineCreateResult { routine: RoutineRecord }
 export interface RoutineUpdateParams {
@@ -100,6 +101,7 @@ export const routineCreateParamsSchema = {
     botId: botIdSchema,
     prompt: { type: 'string', minLength: 1, maxLength: 4000 },
     intervalMinutes: { type: 'integer', minimum: 1, maximum: 10080 },
+    name: { type: 'string', minLength: 1, maxLength: 64 },
   },
 } as const satisfies JsonSchema
 export const routineCreateResultSchema = {

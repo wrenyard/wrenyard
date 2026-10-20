@@ -26,19 +26,21 @@ const NONE = '—';
 
 /** Routines section: one bot's routine table with row actions and a create form. */
 export function RoutinesSection(props: { botId: string; botName?: string; filter?: string }) {
-  const routines = useRoutinesQuery(props.botId);
+  const routines = useRoutinesQuery();
   const update = useUpdateRoutineMutation();
   const run = useRunRoutineMutation();
   const remove = useDeleteRoutineMutation();
   const create = useCreateRoutineMutation();
   const confirm = useConfirm();
 
+  const [creating, setCreating] = useState(false);
   const [prompt, setPrompt] = useState('');
+  const [name, setName] = useState('');
   const [interval, setIntervalMinutes] = useState('5');
 
   const filterKey = (props.filter ?? '').trim().toLowerCase();
   const items: Routine[] = (routines.data?.routines ?? []).filter((item) =>
-    filterKey === '' ? true : item.prompt.toLowerCase().includes(filterKey),
+    item.botId === props.botId && (filterKey === '' ? true : item.prompt.toLowerCase().includes(filterKey)),
   );
 
   const requestDelete = (item: Routine): void => {
@@ -60,11 +62,14 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
         botId: props.botId,
         prompt: prompt.trim(),
         intervalMinutes: minutes,
+        name: name.trim() === '' ? undefined : name.trim(),
       },
       {
         onSuccess: () => {
           setPrompt('');
           setIntervalMinutes('5');
+          setName('');
+          setCreating(false);
         },
       },
     );
@@ -125,8 +130,8 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
                     <TableCell className="text-muted-foreground tabular-nums">
                       {item.nextRunAt === undefined ? NONE : <Timestamp value={item.nextRunAt} />}
                     </TableCell>
-                    <TableCell className="max-w-[10rem] truncate text-xs text-destructive">
-                      {item.lastError ?? NONE}
+                    <TableCell className="max-w-[10rem] truncate text-xs">
+                      {item.lastError === undefined ? NONE : <span className="text-destructive">{item.lastError}</span>}
                     </TableCell>
                     <TableCell>
                       <div className="flex shrink-0 items-center justify-end gap-1">
@@ -154,25 +159,43 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
             </TableBody>
           </Table>
         )}
-        <div className="flex flex-col gap-2 rounded-lg border p-3">
-          <Textarea value={prompt} rows={2} placeholder="例行任务提示词" onChange={(event) => setPrompt(event.target.value)} />
-          <div className="flex flex-wrap items-center gap-4">
-            <Field className="flex items-center gap-2">
-              <FieldLabel>间隔（分钟）</FieldLabel>
-              <Input
-                type="number"
-                min={1}
-                value={interval}
-                className="w-24"
-                onChange={(event) => setIntervalMinutes(event.target.value)}
-              />
-            </Field>
-            <Button size="sm" className="ml-auto" disabled={create.isPending} onClick={submit}>
-              新建
-            </Button>
+        {creating ? (
+          <div className="flex flex-col gap-2 rounded-lg border p-3">
+            <Textarea value={prompt} rows={2} placeholder="例行任务提示词" onChange={(event) => setPrompt(event.target.value)} />
+            <div className="flex flex-wrap items-center gap-4">
+              <Field className="flex items-center gap-2">
+                <FieldLabel>名称（可选）</FieldLabel>
+                <Input
+                  value={name}
+                  maxLength={64}
+                  className="w-48"
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </Field>
+              <Field className="flex items-center gap-2">
+                <FieldLabel>间隔（分钟）</FieldLabel>
+                <Input
+                  type="number"
+                  min={1}
+                  value={interval}
+                  className="w-24"
+                  onChange={(event) => setIntervalMinutes(event.target.value)}
+                />
+              </Field>
+              <Button size="sm" className="ml-auto" disabled={create.isPending} onClick={submit}>
+                新建
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setCreating(false)}>
+                取消
+              </Button>
+            </div>
+            {create.isError && <span className="text-xs text-destructive">{String(create.error)}</span>}
           </div>
-          {create.isError && <span className="text-xs text-destructive">{String(create.error)}</span>}
-        </div>
+        ) : (
+          <Button variant="outline" size="sm" onClick={() => setCreating(true)}>
+            新建例行任务
+          </Button>
+        )}
       </CardContent>
     </Card>
   );

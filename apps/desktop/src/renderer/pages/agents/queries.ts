@@ -27,7 +27,7 @@ export const agentKeys = {
   list: ['agents', 'list'] as const,
   config: (id: string) => ['agents', 'config', id] as const,
   memory: (id: string) => ['agents', 'memory', id] as const,
-  routines: (botId: string) => ['agents', 'routines', botId] as const,
+  routines: ['agents', 'routines'] as const,
 };
 
 /** Polled bot list; the daemon kernel owns config loading and wake queues. */
@@ -73,17 +73,16 @@ export function useAgentMemoryQuery(id: string | null) {
   });
 }
 
-/** Polled routine list of one bot. An absent botId keeps the query idle. */
-export function useRoutinesQuery(botId: string | null) {
+/** Polled routine list of all bots; callers filter the items by botId. */
+export function useRoutinesQuery() {
   const enabled = useAgentEnabled();
   return useQuery({
-    queryKey: agentKeys.routines(botId ?? ''),
+    queryKey: agentKeys.routines,
     queryFn: async () => {
-      if (botId === null) return { routines: [] };
-      return agentRequest('routine.list', { botId });
+      return agentRequest('routine.list', {});
     },
     refetchInterval: 5000,
-    enabled: enabled && botId !== null,
+    enabled,
   });
 }
 

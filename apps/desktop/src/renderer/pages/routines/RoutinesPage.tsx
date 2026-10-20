@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { Search } from 'lucide-react';
 import { Page, PageContent, PageHeader, PageTitle } from '@/renderer/components/page';
 import { QueryError } from '@/renderer/components/query-error';
+import { StatusBadge } from '@/renderer/components/status-badge';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/renderer/components/ui/input-group';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
@@ -20,13 +21,14 @@ function RoutinesBotEntry(props: {
   filter: string;
   onMatchChange: (botId: string, matched: boolean) => void;
 }) {
-  const routines = useRoutinesQuery(props.bot.id);
+  const routines = useRoutinesQuery();
+  const botRoutines = (routines.data?.routines ?? []).filter((item) => item.botId === props.bot.id);
   const key = props.filter.trim().toLowerCase();
   const matched = useMemo(() => {
     if (key === '') return true;
     if (props.bot.name.trim().toLowerCase().includes(key)) return true;
-    return (routines.data?.routines ?? []).some((item) => item.prompt.toLowerCase().includes(key));
-  }, [key, props.bot.name, routines.data]);
+    return botRoutines.some((item) => item.prompt.toLowerCase().includes(key));
+  }, [key, props.bot.name, botRoutines]);
 
   useEffect(() => {
     props.onMatchChange(props.bot.id, matched);
@@ -34,6 +36,19 @@ function RoutinesBotEntry(props: {
   }, [props.bot.id, props.onMatchChange, matched]);
 
   if (!matched) return null;
+  if (!props.bot.enabled) {
+    return (
+      <div className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+        <span className="font-medium">{props.bot.name}</span>
+        <StatusBadge tone="muted" label="已停用" />
+        {!routines.isPending && (
+          <span className="text-xs text-muted-foreground">
+            {botRoutines.length === 0 ? '无例行任务' : `${botRoutines.length} 项例行任务`}
+          </span>
+        )}
+      </div>
+    );
+  }
   return <RoutinesSection botId={props.bot.id} botName={props.bot.name} filter={props.filter} />;
 }
 

@@ -35,7 +35,7 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
     label: '模型供应',
     description: '供应商、额度、网关、路由与 Agent 客户端。',
   },
-  { id: 'bot', label: '机器人', description: '机器人配置与例行任务；群聊和私聊在机器人页面。' },
+  { id: 'bot', label: '机器人', description: '机器人配置与记忆文件；例行任务在自动化页面。' },
   { id: 'shortcuts', label: '快捷键', description: '当前平台生效的全部快捷键；暂不支持自定义。' },
   { id: 'pet', label: '桌宠', description: '桌宠的显示内容与行为，由啾啾工坊直接管理生命周期。' },
   { id: 'components', label: '操作组件', description: '浏览器与桌面操作所需的组件：安装、授权、健康检查与更新。' },
