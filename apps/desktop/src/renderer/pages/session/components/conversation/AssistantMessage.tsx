@@ -32,6 +32,9 @@ export interface AssistantMessageProps {
 export function AssistantMessage({ turn, reply, reference, enter, onReply, attachmentFiles, sessionId, model }: AssistantMessageProps) {
   const animate = useEnterAnimation(enter === true);
   const at = reply.at || turn.endedAt;
+  // Only the turn's final reply shows the time/copy/model footer; progress
+  // replies stay bare so no reserved footer space shows under them.
+  const finalReply = turn.replies.at(-1) === reply;
   return (
     <Message className={cn('group/msg', animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out')}>
       <MessageContent>
@@ -60,7 +63,7 @@ export function AssistantMessage({ turn, reply, reference, enter, onReply, attac
             </Bubble>
           </ReplyMenu>
         </div>
-        <MessageFooter align="left" at={at} text={reply.text} model={model} />
+        {finalReply && <MessageFooter align="left" at={at} text={reply.text} model={model} />}
       </MessageContent>
     </Message>
   );

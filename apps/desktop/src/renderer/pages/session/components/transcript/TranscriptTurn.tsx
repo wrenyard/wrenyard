@@ -80,11 +80,14 @@ function ReplyBlock({
   reply,
   at,
   model,
+  showFooter,
   children,
 }: {
   reply: ReplyModel;
   at?: string;
   model?: string;
+  /** Only the turn's final reply shows the time/copy/model footer. */
+  showFooter?: boolean;
   children?: ReactNode;
 }) {
   return (
@@ -97,9 +100,11 @@ function ReplyBlock({
       >
         {reply.text}
       </AppMarkdown>
-      <MessageFooter align="left" at={at} text={reply.text} model={model}>
-        {children}
-      </MessageFooter>
+      {showFooter === true && (
+        <MessageFooter align="left" at={at} text={reply.text} model={model}>
+          {children}
+        </MessageFooter>
+      )}
     </div>
   );
 }
@@ -314,8 +319,8 @@ export function TranscriptTurn({ turn, sessionId, models, onCancelTask, waiting 
           );
         }
         if (block.kind === 'reply') {
-          // The turn's terminal state and still-running tasks belong to its
-          // last reply, and stay visible even while the footer fades.
+          // The turn's terminal state belongs to its last reply, and stays
+          // visible even while the footer fades.
           const tail = index === lastReplyIndex;
           return (
             <ReplyBlock
@@ -323,9 +328,9 @@ export function TranscriptTurn({ turn, sessionId, models, onCancelTask, waiting 
               reply={block.reply}
               at={block.reply.at || turn.endedAt}
               model={modelDisplayName(replyModelId(block.reply, turn), models)}
+              showFooter={tail}
             >
               {tail && terminal !== undefined && <span>{DISPATCH_TERMINAL_LABEL[terminal]}</span>}
-              {tail && <RunningTasks tasks={runningTasks(turn)} sessionId={sessionId} />}
             </ReplyBlock>
           );
         }
