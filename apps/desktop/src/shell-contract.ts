@@ -1084,7 +1084,7 @@ export interface TaskSettingsLayer
 
 /** Field-level save patch; `null` deletes that field only at the selected layer. */
 export interface TaskSettingsPatch {
-  timeout_ms?: number | null;
+  run_time_limit_minutes?: number | null;
   routing_weights?: TaskSettingsRoutingWeights | null;
   automatic?: TaskSettingsAutomaticPatch | null;
 }

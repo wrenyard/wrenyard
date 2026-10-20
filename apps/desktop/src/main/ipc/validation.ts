@@ -13,7 +13,7 @@ import type {
   TaskSettingsSaveRequest,
 } from '../../shell-contract.js';
 
-export const TASK_SETTINGS_PATCH_KEYS = new Set(['timeout_ms', 'automatic']);
+export const TASK_SETTINGS_PATCH_KEYS = new Set(['run_time_limit_minutes', 'automatic', 'routing_weights']);
 export const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
   'expected_tps',
   'minimum_tps',
@@ -122,9 +122,17 @@ export function validateTaskSettingsSaveRequest(value: unknown): TaskSettingsSav
   for (const key of Object.keys(patch)) {
     if (!TASK_SETTINGS_PATCH_KEYS.has(key)) throw new Error('任务设置内容无效');
   }
-  const timeoutMs = patch.timeout_ms;
-  if (timeoutMs !== undefined && timeoutMs !== null) {
-    if (typeof timeoutMs !== 'number' || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error('超时设置无效');
+  const runTimeLimitMinutes = patch.run_time_limit_minutes;
+  if (runTimeLimitMinutes !== undefined && runTimeLimitMinutes !== null) {
+    if (scope !== 'global') throw new Error('任务运行时限仅可在全局设置中修改');
+    if (
+      typeof runTimeLimitMinutes !== 'number' ||
+      !Number.isSafeInteger(runTimeLimitMinutes) ||
+      runTimeLimitMinutes < 5 ||
+      runTimeLimitMinutes > 600
+    ) {
+      throw new Error('任务运行时限无效');
+    }
   }
   validateAutomaticDispatch(patch.automatic, true);
   const request: TaskSettingsSaveRequest = {

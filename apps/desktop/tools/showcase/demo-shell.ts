@@ -813,8 +813,6 @@ const STATS: StatsSnapshot = {
 /* Task settings                                                       */
 /* ------------------------------------------------------------------ */
 
-const TASK_TIMEOUT_MS = 30 * MINUTE;
-
 const INSTRUCTION_TEMPLATE_TEXT = [
   'Goal',
   'Achieve the requested outcome for this workspace.',
@@ -852,7 +850,7 @@ function instructionTemplate(): TaskSettingsInstructionTemplate {
 function effectiveSettings(): TaskSettingsEffective {
   return {
     routing_weights: { value: { price: 0.3, speed: 0.3, quota: 0.2, intelligence: 0.2 }, source: 'system' },
-    timeout_ms: { value: TASK_TIMEOUT_MS, source: 'system' },
+    run_time_limit_minutes: { value: 30, source: 'system' },
     automatic: {
       expected_tps: { value: null, source: 'system' },
       minimum_tps: { value: null, source: 'system' },
@@ -909,7 +907,6 @@ function taskRow(options: TaskRowOptions): TaskSettingsTaskRow {
       project: options.project,
       prompt_template: options.promptTemplate,
       instruction_template: instructionTemplate(),
-      timeout_ms: TASK_TIMEOUT_MS,
       dispatch: { intelligence_min: 'mid', required_capabilities: ['text'] },
     },
     user_task: {},
@@ -935,7 +932,7 @@ const TASK_SETTINGS: TaskSettingsSnapshot = {
   config_path: '~/.config/wrenyard/task-settings.json',
   revision: '42',
   project: 'aurora',
-  user_global: {},
+  user_global: { run_time_limit_minutes: 30 },
   rows: TASK_ROWS,
 };
 
@@ -945,7 +942,6 @@ const ROUTING_TASKS: TaskRoutingTestTask[] = TASK_ROWS.map((row) => ({
   display_name: row.display_name,
   project: row.project,
   automatic: row.builtin.dispatch,
-  timeout_ms: TASK_TIMEOUT_MS,
 }));
 
 const ROUTING_CANDIDATES: Array<Omit<TaskRoutingTestRow, 'rank' | 'reason'>> = [

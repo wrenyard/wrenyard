@@ -355,7 +355,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     let exactAgentRuntime: string | undefined
     let dispatchSnapshot: import('@wrenyard/protocol').TaskResolvedDispatch | null = null
     let codeBuddyExecution: import('../../core/operations/types.mts').CodeBuddyExecutionBinding | undefined
-    let resolvedTimeoutMs: number | undefined
+    let runTimeLimitMs: number | undefined
     const effectiveInput = validateInput(config.input, taskInputContext.input, `Invalid input for task '${target.name}'`)
     const executionOptions = options
     // Resolve selected features from config before launching an agent.
@@ -496,7 +496,6 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         kind: target.source,
         project: target.project,
         defaults: {
-          timeoutMs: taskConfig.timeoutMs,
           ...(taskConfig.dispatch ? { dispatch: taskConfig.dispatch as unknown as Record<string, unknown> } : {}),
         },
         ...(options.invocationSettings ? { invocation: options.invocationSettings } : {}),
@@ -514,8 +513,8 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       requestedAgentRuntime = canonicalTarget
       dispatchSnapshot = settingsResolution.dispatch
       codeBuddyExecution = settingsResolution.codeBuddyExecution
-      if (settingsResolution.timeoutMs !== undefined && settingsResolution.timeoutMs !== null) {
-        resolvedTimeoutMs = settingsResolution.timeoutMs
+      if (settingsResolution.runTimeLimitMinutes !== undefined && settingsResolution.runTimeLimitMinutes !== null) {
+        runTimeLimitMs = settingsResolution.runTimeLimitMinutes * 60_000
       }
       resolution = settingsResolution
     }
@@ -580,7 +579,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         // the same bounded in-session output correction (three corrections after
         // the initial attempt). A correction continues the original native
         // session on the resolved model/profile and never replays the task.
-        timeoutMs: resolvedTimeoutMs ?? taskConfig.timeoutMs,
+        runTimeLimitMs: runTimeLimitMs ?? 60 * 60_000,
         features: selectedFeatures,
         writePaths,
         requestedAgentRuntime: requestedAgentRuntime,

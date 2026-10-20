@@ -42,8 +42,10 @@ export const TASK_SETTINGS_SOURCE_ORDER: readonly TaskSettingsSourceTag[] = [
   'invocation',
 ]
 
-/** System default total execution timeout: 15 minutes. */
-export const SYSTEM_DEFAULT_TIMEOUT_MS = 15 * 60 * 1000
+/** System default global task run time limit: 60 minutes. */
+export const SYSTEM_DEFAULT_RUN_TIME_LIMIT_MINUTES = 60
+export const MIN_RUN_TIME_LIMIT_MINUTES = 5
+export const MAX_RUN_TIME_LIMIT_MINUTES = 600
 
 export type TaskDefinitionKind = 'builtin' | 'project'
 
@@ -148,8 +150,8 @@ const GLOBAL_IGNORED_DISPATCH_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
 
 export interface TaskSettingsLayer {
   dispatch?: Partial<TaskDispatchRequirements>
-  /** Total execution timeout in milliseconds. */
-  timeoutMs?: number
+  /** Global-scope task run time limit in minutes. */
+  runTimeLimitMinutes?: number
   /**
    * Optional user-global-only scoring weights for automatic routing, mapped to
    * the catalog scorer keys P/S/Q/I. All four keys are required finite numbers
@@ -230,13 +232,13 @@ export interface TaskSettingsLayersInput {
 }
 
 export interface EffectiveTaskSettingsSources {
-  timeoutMs?: TaskSettingsSourceTag
+  runTimeLimitMinutes?: TaskSettingsSourceTag
   routingWeights?: TaskSettingsSourceTag
   dispatch?: Partial<Record<TaskDispatchField, TaskSettingsSourceTag>>
 }
 
 export interface EffectiveTaskSettings {
-  timeoutMs: number
+  runTimeLimitMinutes: number
   dispatch: TaskDispatchRequirements
   /** User-global routing score weights; undefined falls back to scorer defaults. */
   routingWeights?: TaskRoutingWeights
@@ -246,8 +248,7 @@ export interface EffectiveTaskSettings {
 
 export interface TaskDefaultsLike {
   /** TaskConfig-declared defaults. Task definitions never pin a runtime:
-   *  only timeout and dispatch are carried into the builtin layer. */
-  timeoutMs?: number
+   *  only dispatch is carried into the builtin layer. */
   dispatch?: Partial<TaskDispatchRequirements>
 }
 
@@ -286,11 +287,26 @@ function resolveAliased(
   return { value: undefined, key: undefined }
 }
 
-function assertSafeIntegerTimeout(value: unknown, scope: string): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
-    fail(scope, `timeoutMs must be a positive safe integer, got ${String(value)}`)
+function assertSafeIntegerRunTimeLimitMinutes(value: unknown, scope: string): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < MIN_RUN_TIME_LIMIT_MINUTES ||
+    value > MAX_RUN_TIME_LIMIT_MINUTES
+  ) {
+    fail(
+      scope,
+      `runTimeLimitMinutes must be a safe integer between ${MIN_RUN_TIME_LIMIT_MINUTES} and ${MAX_RUN_TIME_LIMIT_MINUTES}, got ${String(value)}`,
+    )
   }
   return value
+}
+
+/** True when a raw persisted/config record still carries a legacy per-task timeout field. */
+export function rawLayerDeclaresLegacyTimeout(record: unknown): boolean {
+  if (!isPlainObject(record)) return false
+  return Object.prototype.hasOwnProperty.call(record, 'timeoutMs') ||
+    Object.prototype.hasOwnProperty.call(record, 'timeout_ms')
 }
 
 /**
@@ -432,7 +448,7 @@ export function normalizeRoutingWeights(raw: unknown, scope: string): TaskRoutin
 }
 
 const LAYER_FIELD_ALIASES = {
-  timeoutMs: ['timeoutMs', 'timeout_ms'],
+  runTimeLimitMinutes: ['runTimeLimitMinutes', 'run_time_limit_minutes'],
   routingWeights: ['routingWeights', 'routing_weights'],
   environmentTools: ['environmentTools', 'environment_tools'],
   dispatch: ['dispatch'],
@@ -462,9 +478,9 @@ export function normalizeTaskSettingsLayer(
   // keys are unknown fields here: they are dropped like any other ignored key,
   // never migrated, rewritten, or honored.
 
-  const timeout = resolveAliased(record, LAYER_FIELD_ALIASES.timeoutMs)
-  if (timeout.value !== undefined) {
-    layer.timeoutMs = assertSafeIntegerTimeout(timeout.value, scope)
+  const runTimeLimit = resolveAliased(record, LAYER_FIELD_ALIASES.runTimeLimitMinutes)
+  if (runTimeLimit.value !== undefined) {
+    layer.runTimeLimitMinutes = assertSafeIntegerRunTimeLimitMinutes(runTimeLimit.value, scope)
   }
 
   const routingWeights = resolveAliased(record, LAYER_FIELD_ALIASES.routingWeights)
@@ -513,9 +529,6 @@ export function normalizeTaskSettingsLayer(
  */
 export function taskDefaultsToSettingsLayer(taskDefaults: TaskDefaultsLike): TaskSettingsLayer {
   const layer: TaskSettingsLayer = {}
-  if (taskDefaults.timeoutMs !== undefined) {
-    layer.timeoutMs = taskDefaults.timeoutMs
-  }
   if (taskDefaults.dispatch !== undefined) {
     layer.dispatch = { ...taskDefaults.dispatch }
   }
@@ -714,7 +727,7 @@ function assertEffectiveIntelligenceOrder(dispatch: TaskDispatchRequirements): v
  * when the declaration alone contributes (no nonempty normal winner),
  * otherwise the highest contributing layer (the normal winner's source).
  *
- * System default: total execution timeout 15 minutes.
+ * System default: global task run time limit 60 minutes.
  */
 export function resolveEffectiveTaskSettings(
   layers: TaskSettingsLayersInput,
@@ -724,9 +737,9 @@ export function resolveEffectiveTaskSettings(
     layer: normalizeTaskSettingsLayer(layers[key], { scope: `layer:${tag}` }),
   }))
 
-  const timeoutLeaf = rightmostDefined(entries, (layer) => layer.timeoutMs)
-  const timeoutMs = timeoutLeaf.value ?? SYSTEM_DEFAULT_TIMEOUT_MS
-  const timeoutSource = timeoutLeaf.source ?? 'system_global'
+  const runTimeLimitLeaf = rightmostDefined(entries, (layer) => layer.runTimeLimitMinutes)
+  const runTimeLimitMinutes = runTimeLimitLeaf.value ?? SYSTEM_DEFAULT_RUN_TIME_LIMIT_MINUTES
+  const runTimeLimitSource = runTimeLimitLeaf.source ?? 'system_global'
 
   // Routing score weights are global-only: sourced exclusively from the
   // normalized userGlobal layer. Absence lets the catalog scorer use its own
@@ -804,13 +817,13 @@ export function resolveEffectiveTaskSettings(
   assertEffectiveIntelligenceOrder(dispatch)
 
   const sources: EffectiveTaskSettingsSources = {
-    timeoutMs: timeoutSource,
+    runTimeLimitMinutes: runTimeLimitSource,
   }
   if (routingWeights !== undefined) sources.routingWeights = 'user_global'
   sources.dispatch = dispatchSources
 
   return {
-    timeoutMs,
+    runTimeLimitMinutes,
     dispatch,
     routingWeights,
     sources,

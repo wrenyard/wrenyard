@@ -5,16 +5,8 @@ import type {
   TaskSettingsSnapshot,
   TaskSettingsTaskRow,
 } from '@/shell-contract';
-import {
-  ERR_TIMEOUT_INVALID,
-  TIMEOUT_INHERIT_PREFIX,
-  TIMEOUT_NOT_SET,
-  TIMEOUT_OVERRIDE_PREFIX,
-  TIMEOUT_SUFFIX,
-} from './describe.js';
 
-/* Pure, React-free Task Settings model: tree grouping, reference/timeout
- * coercion and the patch builder that mirrors the daemon scoped-save contract. */
+/* Pure, React-free Task Settings model: tree grouping and patch helpers. */
 
 export type TaskTreeLoadError = NonNullable<TaskSettingsSnapshot['load_errors']>[number];
 
@@ -127,57 +119,15 @@ export function taskResolutionFailureMessage(row: TaskSettingsTaskRow): string |
   return issue?.resolutionFailure?.message ?? null;
 }
 
-/** ms -> whole-seconds display text ('' when no override at this layer). */
-export function msToSecondsText(value: number | null | undefined): string {
-  return value === undefined || value === null ? '' : String(Math.round(value / 1000));
-}
-
-/** Whole-seconds user input -> ms wire value (null clears this layer override). */
-export function secondsToMilliseconds(value: string): number | null {
-  if (value.trim() === '') return null;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(ERR_TIMEOUT_INVALID);
-  return Math.round(parsed * 1000);
-}
-
-export interface TimeoutHint {
-  text: string;
-  /** True when this layer overrides the inherited timeout. */
-  overridden: boolean;
-}
-
-/** Effective timeout copy from the actual override/inherited/unset data. */
-export function timeoutHint(row: TaskSettingsTaskRow): TimeoutHint {
-  const override = row.user_task.timeout_ms;
-  const effective = row.effective.timeout_ms.value;
-  if (override !== undefined && override !== null) {
-    return { text: `${TIMEOUT_OVERRIDE_PREFIX} ${msToSecondsText(override)} ${TIMEOUT_SUFFIX}`, overridden: true };
-  }
-  if (effective !== undefined && effective !== null) {
-    return { text: `${TIMEOUT_INHERIT_PREFIX} ${msToSecondsText(effective)} ${TIMEOUT_SUFFIX}`, overridden: false };
-  }
-  return { text: TIMEOUT_NOT_SET, overridden: false };
-}
-
-/**
- * Builds the per-task layer patch from the visible controls. Timeout is entered
- * in whole seconds and converted back to ms.
- */
-export function buildLayerPatch(
-  row: TaskSettingsTaskRow,
-  timeoutValue: string,
-): TaskSettingsPatch {
-  const layer = row.user_task;
-  const patch: TaskSettingsPatch = {};
-  const timeout = secondsToMilliseconds(timeoutValue);
-  if ((layer.timeout_ms ?? null) !== timeout) patch.timeout_ms = timeout;
-  return patch;
+/** Per-task layer patch from visible controls (currently no per-task fields). */
+export function buildLayerPatch(): TaskSettingsPatch {
+  return {};
 }
 
 /** Field-level reset of every writable field present on this layer. */
 export function resetPatch(layer: TaskSettingsLayer): TaskSettingsPatch {
   const patch: TaskSettingsPatch = {};
-  for (const field of ['timeout_ms', 'automatic'] as const) {
+  for (const field of ['automatic'] as const) {
     if (layer[field] !== undefined) patch[field] = null as never;
   }
   return patch;

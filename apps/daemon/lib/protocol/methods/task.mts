@@ -142,10 +142,7 @@ export const taskDefinitionSummarySchema = {
     project: { type: 'string', minLength: 1 },
     description: { type: 'string' },
     category: taskCategorySchema,
-    timeoutMs: { type: 'number' },
-    effectiveTimeoutMs: { type: 'number' },
     structuredRetryTimeoutMs: { type: 'number' },
-    timeoutScope: { enum: ['task_execution'] },
     scheduling: { enum: ['active', 'legacy'] },
     dispatch: taskDispatchRequirementsSchema,
     inheritanceChain: { type: 'array', items: taskInheritanceChainEntrySchema },
@@ -180,10 +177,7 @@ export const taskDefinitionDetailSchema = {
       },
       additionalProperties: true,
     },
-    timeoutMs: { type: 'number' },
-    effectiveTimeoutMs: { type: 'number' },
     structuredRetryTimeoutMs: { type: 'number' },
-    timeoutScope: { enum: ['task_execution'] },
     scheduling: { enum: ['active', 'legacy'] },
     inheritanceChain: { type: 'array', items: taskInheritanceChainEntrySchema },
   },
@@ -496,6 +490,10 @@ const taskSettingsNullableNumberSchema = {
   anyOf: [{ type: 'number', minimum: 1 }, { type: 'null' }],
 } as const satisfies JsonSchema
 
+const taskSettingsRunTimeLimitMinutesSchema = {
+  anyOf: [{ type: 'integer', minimum: 5, maximum: 600 }, { type: 'null' }],
+} as const satisfies JsonSchema
+
 const taskSettingsNullableNonNegativeNumberSchema = {
   anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }],
 } as const satisfies JsonSchema
@@ -519,7 +517,7 @@ const taskSettingsNullableRoutingWeightsSchema = {
 export const taskSettingsLayerSchema = {
   type: 'object',
   properties: {
-    timeout_ms: taskSettingsNullableNumberSchema,
+    run_time_limit_minutes: taskSettingsRunTimeLimitMinutesSchema,
     automatic: taskSettingsNullableAutomaticSchema,
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
   },
@@ -529,7 +527,6 @@ export const taskSettingsLayerSchema = {
 export const taskSettingsLayerInputSchema = {
   type: 'object',
   properties: {
-    timeout_ms: taskSettingsNullableNumberSchema,
     automatic: taskSettingsNullableAutomaticSchema,
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
   },
@@ -539,7 +536,7 @@ export const taskSettingsLayerInputSchema = {
 export const taskSettingsPatchSchema = {
   type: 'object',
   properties: {
-    timeout_ms: taskSettingsNullableNumberSchema,
+    run_time_limit_minutes: taskSettingsRunTimeLimitMinutesSchema,
     automatic: { anyOf: [taskSettingsAutomaticPatchSchema, { type: 'null' }] },
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
   },
@@ -663,9 +660,17 @@ const taskSettingsEffectiveAutomaticSchema = {
 
 const taskSettingsEffectiveSchema = {
   type: 'object',
-  required: ['timeout_ms', 'automatic'],
+  required: ['run_time_limit_minutes', 'automatic'],
   properties: {
-    timeout_ms: taskSettingsSourcedNullableNumberSchema,
+    run_time_limit_minutes: {
+      type: 'object',
+      required: ['value', 'source'],
+      properties: {
+        value: taskSettingsRunTimeLimitMinutesSchema,
+        source: taskSettingsSourceLayerSchema,
+      },
+      additionalProperties: false,
+    },
     automatic: taskSettingsEffectiveAutomaticSchema,
     routing_weights: taskSettingsSourcedNullableRoutingWeightsSchema,
   },
@@ -780,7 +785,6 @@ const taskSettingsBuiltinMetadataSchema = {
     'source',
     'prompt_template',
     'instruction_template',
-    'timeout_ms',
     'dispatch',
   ],
   properties: {
@@ -791,7 +795,6 @@ const taskSettingsBuiltinMetadataSchema = {
     project: { type: 'string', minLength: 1 },
     prompt_template: { enum: ['dynamic', 'fixed'] },
     instruction_template: { type: 'array', items: taskSettingsInstructionSegmentSchema },
-    timeout_ms: { anyOf: [{ type: 'number', minimum: 1 }, { type: 'null' }] },
     dispatch: taskSettingsAutomaticDispatchSchema,
   },
   additionalProperties: true,

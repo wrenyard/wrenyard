@@ -50,7 +50,7 @@ export type TaskSettingsAutomaticPatch = {
 
 /** JSON-safe view of one editable settings layer (user global, user per-task, or invocation). */
 export interface TaskSettingsLayer {
-  timeout_ms?: number | null
+  run_time_limit_minutes?: number | null
   automatic?: Partial<TaskSettingsAutomaticDispatch> | null
   /** Global-only automatic scoring weights; null clears them. All four numeric
    *  fields are required, bounded [0, 1], and must sum to 1. */
@@ -68,7 +68,7 @@ export interface TaskSettingsRoutingWeights {
 
 /** Field-level save patch. `null` deletes that field only at the selected layer. */
 export interface TaskSettingsPatch {
-  timeout_ms?: number | null
+  run_time_limit_minutes?: number | null
   automatic?: TaskSettingsAutomaticPatch | null
   /** Global-only: set (full four-key object) or clear (null) routing weights. */
   routing_weights?: TaskSettingsRoutingWeights | null
@@ -99,7 +99,7 @@ export interface TaskSettingsEffectiveAutomatic {
 }
 
 export interface TaskSettingsEffective {
-  timeout_ms: TaskSettingsSourcedValue<number | null>
+  run_time_limit_minutes: TaskSettingsSourcedValue<number | null>
   automatic: TaskSettingsEffectiveAutomatic
   /** Global-only routing weights; sourced exclusively from the user_global
    *  layer; a null value means the scorer defaults apply. */
@@ -151,7 +151,6 @@ export interface TaskSettingsBuiltinMetadata {
   prompt_template: 'dynamic' | 'fixed'
   /** Ordered non-executing preview segments of the builtin prompt template. */
   instruction_template: TaskSettingsInstructionTemplate
-  timeout_ms: number | null
   /** Read-only builtin automatic dispatch defaults. */
   dispatch: TaskSettingsAutomaticDispatch
 }

@@ -1,10 +1,6 @@
 import { compileSchema, validateAgainstSchema, V2SchemaValidationError, type CompiledSchema } from './schema-validation.ts'
 import type { ZodType } from 'zod'
-import {
-  STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
-  assertValidTimeoutMs,
-  effectiveTaskTimeoutMs,
-} from './task-timeouts.ts'
+import { STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS } from './task-timeouts.ts'
 import { agentFailedError, GateFailureError } from './failure.ts'
 import type { MarkableFailure } from '@wrenyard/gateway'
 import type { TaskResolvedDispatch } from '@wrenyard/protocol'
@@ -145,7 +141,8 @@ export interface StructuredOutputOptions {
   runAgent: StructuredOutputAgent
   workingDirectory?: string
   maxResumeAttempts?: number
-  timeoutMs?: number
+  /** Total wall-clock model-execution budget in ms (shared across initial attempt and retries). */
+  runTimeLimitMs: number
   taskName?: string
   taskId?: string
   /** Whether the resolved client can resume a native session (its
@@ -311,8 +308,7 @@ export type StructuredOutputAgent = (
 
 export async function collectStructuredOutput(opts: StructuredOutputOptions): Promise<unknown> {
   const schema = compileSchema(opts.outputSchema)
-  assertValidTimeoutMs(opts.timeoutMs, 'structured output timeoutMs')
-  const totalBudgetMs = effectiveTaskTimeoutMs(opts.timeoutMs)
+  const totalBudgetMs = opts.runTimeLimitMs
   // ── Mutation-aware evidence only ──
   // Task coordination metadata, not the runtime mode, decides whether an
   // attempt may have changed repository state. It no longer gates retries:

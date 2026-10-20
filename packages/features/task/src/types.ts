@@ -76,13 +76,6 @@ export interface TaskConfigBase {
    *  `'.'` for repository-wide scope under the active checkout. The execution
    *  kernel resolves and bounds every returned path inside the checkout. */
   writeTargets?: (input: unknown) => readonly string[]
-  /** Total wall-clock milliseconds budgeted for this task's model execution:
-   *  one shared deadline covering the initial native-agent execution and every
-   *  structured-output resume attempt. The deadline begins when model execution
-   *  starts and is never renewed per attempt; each structured retry is capped
-   *  by the shorter retry timeout and by the positive remaining total. Omitted
-   *  tasks inherit the 15-minute default. */
-  timeoutMs?: number
   /** A complete replacement config never selects an inheritance base. The
    *  `extends` selector exists only on `TaskInheritedDeclaration`; making it
    *  type-level impossible here rejects stored (non-literal) mixed shapes that
@@ -157,7 +150,6 @@ export interface TaskInheritedDeclaration {
   /** Field-level dispatch override; `requiredCapabilities` unions with the
    *  base and `intelligenceMin` takes the higher (harder) tier. */
   dispatch?: TaskDispatchRequirements
-  timeoutMs?: number
   displayName?: string
   description?: string
   category?: {

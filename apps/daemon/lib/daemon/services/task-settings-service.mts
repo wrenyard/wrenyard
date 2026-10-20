@@ -35,7 +35,7 @@ import {
   readRoutingExclusions,
   normalizeTaskSettingsLayer,
   resolveEffectiveTaskSettings,
-  SYSTEM_DEFAULT_TIMEOUT_MS,
+  rawLayerDeclaresLegacyTimeout,
   type TaskDispatchField,
   type TaskSettingsDispatch as ConfigTaskDispatchRequirements,
   type TaskSettingsLayer as ConfigTaskSettingsLayer,
@@ -107,6 +107,10 @@ export type {
  * with daemon admission and live provider credential/availability supplied by
  * injected non-billable callbacks.
  */
+const ROUTING_TEST_DEFAULT_TIMEOUT_MS = 15 * 60 * 1000
+
+const MS_PER_MINUTE = 60_000
+
 export interface TaskSettingsDefinitionSummary {
   name: string
   /** Authoritative human-facing task label; consumers fall back to the exact `name`. */
@@ -117,7 +121,6 @@ export interface TaskSettingsDefinitionSummary {
   project?: string
   source?: string
   description?: string
-  timeoutMs?: number
   dispatch?: unknown
   promptTemplate?: 'dynamic' | 'fixed'
   /** Ordered safe preview segments of the builtin prompt template; never
@@ -616,7 +619,7 @@ function buildRoutingFormRows(
 function canonicalLayerToRaw(layer?: ConfigTaskSettingsLayer): Record<string, unknown> {
   if (!layer) return {}
   const raw: Record<string, unknown> = {}
-  if (layer.timeoutMs !== undefined) raw.timeout_ms = layer.timeoutMs
+  if (layer.runTimeLimitMinutes !== undefined) raw.run_time_limit_minutes = layer.runTimeLimitMinutes
   if (layer.routingWeights !== undefined) {
     raw.routing_weights = layer.routingWeights
   }
@@ -734,6 +737,7 @@ export class TaskSettingsService {
   private readonly quotaSnapshots?: AutoRoutingQuotaSnapshotService
   private readonly routeStatus?: (model: string) => GatewayRouteStatus | undefined
   private readonly now: () => number
+  private readonly warnedLegacyStoredTimeouts = new Set<string>()
 
   constructor(options: TaskSettingsServiceOptions) {
     this.configPath = options.configPath
@@ -747,6 +751,15 @@ export class TaskSettingsService {
     this.quotaSnapshots = options.quotaSnapshots
     this.routeStatus = options.routeStatus
     this.now = options.now ?? (() => Date.now())
+  }
+
+  private maybeWarnStoredLegacyTimeout(identity: string, raw: unknown): void {
+    if (!rawLayerDeclaresLegacyTimeout(raw)) return
+    if (this.warnedLegacyStoredTimeouts.has(identity)) return
+    this.warnedLegacyStoredTimeouts.add(identity)
+    console.warn(
+      `task-settings: ignoring stored per-task timeout for ${identity}; the global task run time limit applies`,
+    )
   }
 
   /** The authoritative config path this daemon-owned service reads and writes. */
@@ -850,9 +863,6 @@ export class TaskSettingsService {
     invocation: TaskSettingsLayerDto,
   ): ConfigTaskSettingsLayer {
     const raw: Record<string, unknown> = {}
-    if (invocation.timeout_ms !== undefined && invocation.timeout_ms !== null) {
-      raw.timeoutMs = invocation.timeout_ms
-    }
     if (invocation.automatic !== undefined && invocation.automatic !== null) {
       raw.dispatch = invocation.automatic
     }
@@ -882,8 +892,14 @@ export class TaskSettingsService {
       ...(project !== undefined ? { project } : {}),
     })
 
+    const settingsSection = tasks?.settings
+    this.maybeWarnStoredLegacyTimeout('global', settingsSection?.global)
+    const byTask = settingsSection?.byTask
+    if (byTask !== undefined && byTask !== null && Object.prototype.hasOwnProperty.call(byTask, identity)) {
+      this.maybeWarnStoredLegacyTimeout(identity, byTask[identity])
+    }
+
     const builtinLayer = taskDefaultsToSettingsLayer({
-      ...(params.defaults?.timeoutMs !== undefined ? { timeoutMs: params.defaults.timeoutMs } : {}),
       dispatch: rawDefinitionDispatch(params.defaults?.dispatch),
     })
 
@@ -918,7 +934,7 @@ export class TaskSettingsService {
         params.taskName,
         record,
       ),
-      timeoutMs: effective.timeoutMs,
+      timeoutMs: effective.runTimeLimitMinutes * MS_PER_MINUTE,
       routingWeights: effective.routingWeights,
     })
     if (!selection.ok) throw selection.error
@@ -928,7 +944,7 @@ export class TaskSettingsService {
       ...(selection.codeBuddyExecution
         ? { codeBuddyExecution: selection.codeBuddyExecution }
         : {}),
-      timeoutMs: effective.timeoutMs,
+      runTimeLimitMinutes: effective.runTimeLimitMinutes,
       sources: toRunSources(effective.sources),
     }
   }
@@ -1080,7 +1096,7 @@ export class TaskSettingsService {
     const requirements = mergeRoutingExclusions(routingFormRequirements(params.automatic), globalSettings?.dispatch)
     const timeoutMs = typeof params.timeout_ms === 'number' && params.timeout_ms >= 1
       ? params.timeout_ms
-      : SYSTEM_DEFAULT_TIMEOUT_MS
+      : ROUTING_TEST_DEFAULT_TIMEOUT_MS
 
     // Baseline availability with NO submitted gates: `diagnose` evaluates each
     // exact pair's availability against empty requirements (so a pair rejected
@@ -1180,9 +1196,6 @@ export class TaskSettingsService {
         automatic: toSnakeDispatch(effective.dispatch),
         // The system fallback timeout is not a declared constraint, so it stays
         // out of the form and leaves the field blank.
-        ...(effective.sources.timeoutMs !== undefined && effective.sources.timeoutMs !== 'system_global'
-          ? { timeout_ms: effective.timeoutMs }
-          : {}),
       }
     })
     return { tasks }
@@ -1275,6 +1288,11 @@ export class TaskSettingsService {
         'routing_weights is global-only and cannot be applied at task scope',
       )
     }
+    if (params.patch.run_time_limit_minutes !== undefined) {
+      throw new TaskSettingsInvalidSettingsError(
+        'run_time_limit_minutes is global-only and cannot be applied at task scope',
+      )
+    }
     const taskName = summary.name
     const current = this.readConfigRecord()
     if (current.revision !== params.expected_revision) {
@@ -1295,7 +1313,6 @@ export class TaskSettingsService {
 
     if (nextLayer !== undefined) {
       const builtinLayer = taskDefaultsToSettingsLayer({
-        ...(summary.timeoutMs !== undefined ? { timeoutMs: summary.timeoutMs } : {}),
         dispatch: rawDefinitionDispatch(summary.dispatch),
       })
       try {
@@ -1322,15 +1339,9 @@ export class TaskSettingsService {
   }
 
   private summaryDefaults(summary: TaskSettingsDefinitionSummary, detail?: TaskSettingsDefinitionDetail): {
-    timeoutMs?: number
     dispatch: ConfigTaskDispatchRequirements
   } {
     return {
-      ...(summary.timeoutMs !== undefined
-        ? { timeoutMs: summary.timeoutMs }
-        : detail?.timeoutMs !== undefined
-          ? { timeoutMs: detail.timeoutMs }
-          : {}),
       dispatch: rawDefinitionDispatch(summary.dispatch ?? detail?.dispatch),
     }
   }
@@ -1405,7 +1416,7 @@ export class TaskSettingsService {
         const selection = await this.resolveAutomaticSelection({
           taskName: summary.name,
           requirements: this.withRoleRoutingExclusions(effective.dispatch, summary.name),
-          timeoutMs: effective.timeoutMs,
+          timeoutMs: effective.runTimeLimitMinutes * MS_PER_MINUTE,
           routingWeights: effective.routingWeights,
         }, previewMemo)
         if (selection.ok) {
@@ -1457,12 +1468,11 @@ export class TaskSettingsService {
         ...(projectName !== undefined ? { project: projectName } : {}),
         prompt_template: summary.promptTemplate ?? detail?.promptTemplate ?? 'dynamic',
         instruction_template: instructionTemplate,
-        timeout_ms: builtinLayer.timeoutMs ?? null,
         dispatch: toSnakeDispatch(builtinLayer.dispatch ?? {}),
       },
       user_task: this.toLayerDto(userTaskLayer),
       effective: {
-        timeout_ms: { value: effective.timeoutMs, source: toSourceLayer(effective.sources.timeoutMs) },
+        run_time_limit_minutes: { value: effective.runTimeLimitMinutes, source: toSourceLayer(effective.sources.runTimeLimitMinutes) },
         ...(effective.routingWeights !== undefined
           ? {
               routing_weights: {
@@ -1946,11 +1956,11 @@ export class TaskSettingsService {
   ): ConfigTaskSettingsLayer | undefined {
     const raw = canonicalLayerToRaw(layer)
 
-    if (patch.timeout_ms !== undefined) {
-      if (patch.timeout_ms === null) {
-        delete raw.timeout_ms
+    if (patch.run_time_limit_minutes !== undefined) {
+      if (patch.run_time_limit_minutes === null) {
+        delete raw.run_time_limit_minutes
       } else {
-        raw.timeout_ms = patch.timeout_ms
+        raw.run_time_limit_minutes = patch.run_time_limit_minutes
       }
     }
 
@@ -2000,7 +2010,7 @@ export class TaskSettingsService {
   private toLayerDto(layer?: ConfigTaskSettingsLayer): TaskSettingsLayerDto {
     if (!layer) return {}
     return {
-      ...(layer.timeoutMs !== undefined ? { timeout_ms: layer.timeoutMs } : {}),
+      ...(layer.runTimeLimitMinutes !== undefined ? { run_time_limit_minutes: layer.runTimeLimitMinutes } : {}),
       ...(layer.dispatch !== undefined && Object.keys(layer.dispatch).length > 0
         ? { automatic: toSnakeDispatch(layer.dispatch) }
         : {}),
@@ -2245,7 +2255,7 @@ function toRunSources(
     }
   }
   return {
-    timeoutMs: toSourceLayer(sources.timeoutMs),
+    runTimeLimitMinutes: toSourceLayer(sources.runTimeLimitMinutes),
     automatic,
   }
 }
@@ -2342,7 +2352,6 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
             ...(projectDisplayName !== undefined ? { projectDisplayName } : {}),
             ...(record.source !== undefined ? { source: String(record.source) } : {}),
             ...(record.description !== undefined ? { description: String(record.description) } : {}),
-            ...(typeof record.timeoutMs === 'number' ? { timeoutMs: record.timeoutMs } : {}),
             ...(record.dispatch !== undefined
               ? { dispatch: record.dispatch }
               : {}),
@@ -2414,8 +2423,7 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
         ...(projectDisplayName !== undefined ? { projectDisplayName } : {}),
         ...(record.source !== undefined ? { source: String(record.source) } : {}),
         ...(record.description !== undefined ? { description: String(record.description) } : {}),
-        ...(typeof record.timeoutMs === 'number' ? { timeoutMs: record.timeoutMs } : {}),
-        ...(record.dispatch !== undefined ? { dispatch: record.dispatch } : {}),
+                ...(record.dispatch !== undefined ? { dispatch: record.dispatch } : {}),
         ...(record.promptTemplate === 'dynamic' || record.promptTemplate === 'fixed'
           ? { promptTemplate: record.promptTemplate }
           : {}),

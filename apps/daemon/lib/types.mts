@@ -170,9 +170,8 @@ export interface TaskRunSettingsParams {
   kind?: 'builtin' | 'project'
   /** Project name required to isolate a stable per-task identity for project tasks. */
   project?: string
-  /** TaskConfig-declared defaults (timeout/dispatch; never a runtime pin). */
+  /** TaskConfig-declared defaults (dispatch; never a runtime pin). */
   defaults?: {
-    timeoutMs?: number
     dispatch?: Record<string, unknown>
   }
   /** Optional public snake_case invocation settings layer. */
@@ -192,11 +191,11 @@ export interface TaskRunSettingsResolution {
   /** Private CodeBuddy admission binding captured with this resolution. Never
    * persisted or projected through public task settings/telemetry DTOs. */
   codeBuddyExecution?: import('./core/operations/types.mts').CodeBuddyExecutionBinding
-  /** Effective total task timeout after all layer merges. */
-  timeoutMs: number | null
+  /** Effective global task run time limit in minutes after all layer merges. */
+  runTimeLimitMinutes: number | null
   /** Per-field winning source layer. */
   sources: {
-    timeoutMs: TaskRunSettingsLayerName
+    runTimeLimitMinutes: TaskRunSettingsLayerName
     automatic: Partial<Record<string, TaskRunSettingsLayerName>>
   }
 }

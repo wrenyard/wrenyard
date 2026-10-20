@@ -13,13 +13,7 @@ import type {
   TaskDispatchRequirements,
   TaskInheritedDeclaration,
 } from '../types.mts'
-import {
-  STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
-  TASK_TIMEOUT_SCOPE,
-  assertValidTimeoutMs,
-  effectiveTaskTimeoutMs,
-  type TaskTimeoutScope,
-} from '@wrenyard/task'
+import { STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS } from '@wrenyard/task'
 import { installRuntimeGlobals } from '../daemon/execution/runtime-globals.mts'
 import { generateInputExample, normalizeSchema } from '@wrenyard/task'
 import { getTaskPromptTemplates, withTaskPromptTemplates } from '@wrenyard/task'
@@ -127,10 +121,7 @@ export interface ListedDefinition {
     pre?: Array<{ id: string; description?: string }>
     post?: Array<{ id: string; description?: string }>
   }
-  timeoutMs?: number
-  effectiveTimeoutMs?: number
   structuredRetryTimeoutMs?: number
-  timeoutScope?: TaskTimeoutScope
   /** Available Wrenyard capability pack ids declared by the task config.
    *  Present only when the task declares execution features. */
   features?: readonly string[]
@@ -163,13 +154,22 @@ function extractGateMetadata(config: import('../types.mts').TaskConfig): ListedD
   }
 }
 
-function timeoutMetadata(config: TaskConfig): Pick<ListedDefinition, 'timeoutMs' | 'effectiveTimeoutMs' | 'structuredRetryTimeoutMs' | 'timeoutScope'> {
-  return {
-    ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
-    effectiveTimeoutMs: effectiveTaskTimeoutMs(config.timeoutMs),
-    structuredRetryTimeoutMs: STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
-    timeoutScope: TASK_TIMEOUT_SCOPE,
-  }
+const warnedLegacyTaskTimeoutPaths = new Set<string>()
+
+function warnLegacyTaskTimeout(absolutePath: string): void {
+  if (warnedLegacyTaskTimeoutPaths.has(absolutePath)) return
+  warnedLegacyTaskTimeoutPaths.add(absolutePath)
+  console.warn(
+    `definition-registry: ignoring legacy timeoutMs declared in ${absolutePath}; task runs use the global task run time limit`,
+  )
+}
+
+function structuredRetryMetadata(): Pick<ListedDefinition, 'structuredRetryTimeoutMs'> {
+  return { structuredRetryTimeoutMs: STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS }
+}
+
+function recordHasOwnLegacyTimeout(record: Record<string, unknown>): boolean {
+  return Object.prototype.hasOwnProperty.call(record, 'timeoutMs')
 }
 
 /**
@@ -639,11 +639,8 @@ async function loadTaskFile(filePath: string, workspaceRoot: string): Promise<Re
     )
   }
   assertTaskSchemas(definition.config, absolutePath)
-  try {
-    assertValidTimeoutMs(definition.config.timeoutMs)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`Invalid timeoutMs in ${absolutePath}. ${message}.`)
+  if (recordHasOwnLegacyTimeout(definition.config as unknown as Record<string, unknown>)) {
+    warnLegacyTaskTimeout(absolutePath)
   }
   definition.config = normalizeLegacyTaskPermission(definition.config)
   if (definition.config.scheduling !== undefined && !VALID_SCHEDULING.has(definition.config.scheduling)) {
@@ -731,7 +728,6 @@ const INHERITED_ALLOWED_FIELDS = new Set([
   'promptAppend',
   'instructions',
   'dispatch',
-  'timeoutMs',
   'displayName',
   'description',
   'category',
@@ -752,7 +748,11 @@ function validateInheritedDeclaration(
   sourcePath: string,
 ): void {
   const raw = declaration as unknown as Record<string, unknown>
+  if (recordHasOwnLegacyTimeout(raw)) {
+    warnLegacyTaskTimeout(sourcePath)
+  }
   for (const key of Object.keys(raw)) {
+    if (key === 'timeoutMs') continue
     if (!INHERITED_ALLOWED_FIELDS.has(key)) {
       throw new Error(
         `${sourcePath} task config declares '${key}' on an inherited definition (extends '${String(raw.extends)}'); inherited definitions may only declare ${[...INHERITED_ALLOWED_FIELDS].join(', ')}`,
@@ -782,16 +782,6 @@ function validateInheritedDeclaration(
       !instructions.every((item) => typeof item === 'string' || typeof item === 'function')
     ) {
       throw new Error(`${sourcePath} task config instructions must be an array of strings or functions`)
-    }
-  }
-
-  const timeoutMs = raw.timeoutMs
-  if (timeoutMs !== undefined) {
-    try {
-      assertValidTimeoutMs(timeoutMs)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`Invalid timeoutMs in ${sourcePath}. ${message}.`)
     }
   }
 
@@ -906,7 +896,6 @@ function mergeInheritedConfig(
     prompt: composeInheritedPrompt(base.prompt, declaration.promptAppend),
     ...(instructions !== undefined ? { instructions } : {}),
     ...(dispatch !== undefined ? { dispatch } : {}),
-    ...(declaration.timeoutMs !== undefined ? { timeoutMs: declaration.timeoutMs } : {}),
     ...(displayName !== undefined ? { displayName } : {}),
     ...(declaration.description !== undefined ? { description: declaration.description } : {}),
     ...(category !== undefined ? { category } : {}),
@@ -1058,10 +1047,7 @@ export function listTaskDefinitions(workspaceRoot: string, currentProject?: stri
     id: string
     displayLabel: string
   }
-  timeoutMs?: number
-  effectiveTimeoutMs?: number
   structuredRetryTimeoutMs?: number
-  timeoutScope?: TaskTimeoutScope
   scheduling?: 'active' | 'legacy'
   dispatch?: TaskDispatchRequirements
   inheritanceChain?: InheritanceChainEntry[]
@@ -1082,7 +1068,7 @@ export function listTaskDefinitions(workspaceRoot: string, currentProject?: stri
       ...(entry.definition.config.scheduling
         ? { scheduling: entry.definition.config.scheduling }
         : {}),
-      ...timeoutMetadata(entry.definition.config),
+      ...structuredRetryMetadata(),
       ...(entry.definition.config.dispatch ? { dispatch: entry.definition.config.dispatch } : {}),
       ...(entry.inheritanceChain ? { inheritanceChain: entry.inheritanceChain } : {}),
     }
@@ -1313,7 +1299,7 @@ function taskToListed(entry: RegisteredTask): ListedDefinition {
     structured: true,
     ...(normalizedInput ? { input_example: generateInputExample(normalizedInput as any) } : {}),
     ...(extractGateMetadata(config) ? { gates: extractGateMetadata(config) } : {}),
-    ...timeoutMetadata(config),
+    ...structuredRetryMetadata(),
     ...featuresMetadata(config),
     ...(config.scheduling
       ? { scheduling: config.scheduling }

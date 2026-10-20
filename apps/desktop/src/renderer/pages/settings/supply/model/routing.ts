@@ -184,7 +184,6 @@ export function formFromTask(task: TaskRoutingTestTask, currency: DisplayCurrenc
   form.excludeProviderIds = [...(automatic.exclude_provider_ids ?? [])];
   form.excludeProfileIds = [...(automatic.exclude_profile_ids ?? [])];
   form.excludeClientIds = [...(automatic.exclude_client_ids ?? [])];
-  if (task.timeout_ms !== undefined) form.timeoutMs = String(task.timeout_ms);
   return form;
 }
 
