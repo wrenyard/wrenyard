@@ -502,6 +502,8 @@ export interface InvokedCall {
   error?: string;
   /** Structured main-reasoning failure facts; present only when the call failed. */
   failure?: CallFailureSummary;
+  /** The route the completed call actually served, when the runner recorded it. */
+  route?: CallRunResult['route'];
 }
 
 /**

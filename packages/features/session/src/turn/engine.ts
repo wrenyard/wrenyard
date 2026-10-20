@@ -1310,6 +1310,7 @@ class Engine implements Session, SessionCallHost {
         toolCalls: result.toolCalls,
         ...(result.reasoning === undefined ? {} : { reasoning: result.reasoning }),
         ...(result.metrics === undefined ? {} : { metrics: result.metrics }),
+        ...(result.route === undefined ? {} : { route: result.route }),
       };
     } catch (error) {
       const failure = error instanceof ModelCallError && error.detail.failure !== undefined

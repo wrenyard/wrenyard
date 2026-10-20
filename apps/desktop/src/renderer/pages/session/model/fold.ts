@@ -374,19 +374,13 @@ function buildTurn(
       ...(event.step === undefined ? {} : { cycle: event.step }),
     }));
 
-  // A turn that recorded no closing reply still ends with one: the same
-  // fallback the engine uses, derived from the folded turn. Turns recorded
-  // before the terminal answer existed therefore look like new ones, and no
-  // turn is ever shown as missing a reply.
   const derived = committedFinal === undefined
     ? derivedFinalReply({
       status,
-      cycles,
-      actions,
-      calls,
       errors,
       startedAt,
       endedAt,
+      ...(finished?.error === undefined ? {} : { terminalError: finished.error }),
       ...(interrupted === undefined ? {} : { interruptReason: interrupted.reason }),
     })
     : undefined;
@@ -431,31 +425,19 @@ function buildTurn(
 }
 
 /**
- * The closing reply of an ended turn that recorded none, derived from the
- * folded turn. The first nonempty candidate wins, in the terminal-reply
- * fallback order shared with the engine — `REPLY_FALLBACK_SOURCES` in
- * '@wrenyard/session', which `terminalFallback`
- * (packages/features/session/src/auxiliary/reply.ts) applies after the reply
- * tool candidate:
- *   1. `reply-text`: the plain output of the turn's last communication call;
- *   2. `reasoning`: the last reasoning step's raw text;
- *   3. `action-result`: the last finished action's textual result;
- *   4. `closing`: a line built from turn facts, which is never empty.
- * A running turn has no closing reply yet. The order is documented as a list
- * rather than imported because the renderer reads '@wrenyard/session' as types
- * only; keep both lists in sync.
+ * Presentation-only closing reply when no committed `reply.sent` is classified
+ * as final. Successful closings come only from committed publications; this
+ * covers failed and interrupted turns only.
  */
 function derivedFinalReply(turn: {
   status: TurnStatus;
-  cycles: readonly CycleModel[];
-  actions: readonly ActionModel[];
-  calls: readonly CallModel[];
   errors: readonly ErrorItem[];
   startedAt: string;
   endedAt?: string;
+  terminalError?: string;
   interruptReason?: 'user' | 'shutdown' | 'restart';
 }): ReplyModel | undefined {
-  if (turn.status === 'running') return undefined;
+  if (turn.status === 'running' || turn.status === 'completed') return undefined;
   const at = turn.endedAt ?? turn.startedAt;
   const tone = turn.status === 'failed' ? 'destructive' : turn.status === 'interrupted' ? 'muted' : undefined;
   const closing = (text: string): ReplyModel => ({
@@ -465,59 +447,13 @@ function derivedFinalReply(turn: {
     ...(tone === undefined ? {} : { tone }),
   });
 
-  const replyText = lastReplyCallText(turn.calls);
-  if (replyText !== undefined) return closing(replyText);
-  const reasoning = lastReasoningText(turn.cycles, turn.calls);
-  if (reasoning !== undefined) return closing(reasoning);
-  const result = lastActionResult(turn.actions);
-  if (result !== undefined) return closing(result);
-  if (turn.status === 'failed') return closing(`出错了：${summarizeError(turn.errors[0]?.message ?? '未知错误')}`);
+  if (turn.status === 'failed') {
+    const message = turn.terminalError ?? turn.errors.at(-1)?.message ?? '未知错误';
+    return closing(`出错了：${summarizeError(message)}`);
+  }
   if (turn.status === 'interrupted') {
     if (turn.interruptReason === 'shutdown') return closing('已中断 · 守护进程已关闭');
     return closing('已中断');
-  }
-  const done = turn.actions.reduce((count, action) => (action.status === 'running' ? count : count + 1), 0);
-  return closing(`本轮已完成，执行了 ${done} 个操作，未生成文字说明。`);
-}
-
-/**
- * The plain output of the turn's last terminal communication call, the first
- * candidate of the shared fallback order. Only the call's own output counts,
- * never its reasoning.
- */
-function lastReplyCallText(calls: readonly CallModel[]): string | undefined {
-  for (let index = calls.length - 1; index >= 0; index -= 1) {
-    const call = calls[index]!;
-    if (call.role !== 'reply') continue;
-    if (call.output.trim() === '') continue;
-    return call.output;
-  }
-  return undefined;
-}
-
-/** The raw text of the turn's last reasoning step, from its cycles or calls. */
-function lastReasoningText(cycles: readonly CycleModel[], calls: readonly CallModel[]): string | undefined {
-  for (let index = cycles.length - 1; index >= 0; index -= 1) {
-    const text = cycles[index]!.reasoning?.text;
-    if (text !== undefined && text.trim() !== '') return text;
-  }
-  for (let index = calls.length - 1; index >= 0; index -= 1) {
-    const call = calls[index]!;
-    if (call.role !== 'reason') continue;
-    const text = call.output !== '' ? call.output : call.reasoning;
-    if (text !== undefined && text.trim() !== '') return text;
-  }
-  return undefined;
-}
-
-/** The nonempty textual result of the turn's last finished action, if any. */
-function lastActionResult(actions: readonly ActionModel[]): string | undefined {
-  for (let index = actions.length - 1; index >= 0; index -= 1) {
-    const action = actions[index]!;
-    if (action.status === 'running') continue;
-    const result = action.result;
-    if (result === undefined || result.trim() === '') continue;
-    return result;
   }
   return undefined;
 }

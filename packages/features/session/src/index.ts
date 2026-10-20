@@ -68,7 +68,6 @@ export type { MemorySearchViewInput } from './auxiliary/memory.ts';
 export type { ReasonViewInput } from './reasoning/prompt.ts';
 export type { ReplyViewInput } from './auxiliary/reply.ts';
 export type { TitleViewInput } from './auxiliary/title.ts';
-export { fallbackReply } from './auxiliary/reply.ts';
 export type {
   ActionExecutionOutcome,
   ActionRunContext,

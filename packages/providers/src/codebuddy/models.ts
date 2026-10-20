@@ -302,6 +302,7 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     nativeClients: ['codebuddy'],
     defaultModel: 'hunyuan-hy4-preview',
     useClientBinary: true,
+    ignoresForcedToolChoice: true,
     // Measured 2026-10-19: no event for about 9 s, then the whole response in
     // about 2.5 s (visible text near 640 tok/s).
     replayedStreamModels: ['gpt-6-luna'],

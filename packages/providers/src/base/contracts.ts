@@ -481,4 +481,11 @@ export interface ProviderDefinition {
    * `undefined` or `true` means the capability is supported.
    */
   supportsForcedToolChoice?: boolean;
+  /**
+   * Signals that the provider may ignore a forced `tool_choice` and return a
+   * successful plain-text response instead of the requested tool call.
+   * `undefined` or `false` means a forced tool choice is honoured when
+   * successful.
+   */
+  ignoresForcedToolChoice?: boolean;
 }

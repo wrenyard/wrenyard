@@ -582,25 +582,22 @@ export interface ReplySentEvent extends LedgerEventBase {
    */
   kind?: 'progress' | 'final';
   /**
-   * Where the reply text came from: the reply tool call (`tool`), the
-   * communication call's own plain text (`reply-text`), the turn's last
-   * reasoning output (`reasoning`), the turn's last finished action result
-   * (`action-result`), or a closing line built from turn facts (`closing`).
-   * Absent means `tool`, the default.
+   * Where the reply text came from: the reply tool call (`tool`) or plain text
+   * from the communication call when the serving provider ignores forced tool
+   * choice (`reply-text`). Absent means `tool`, the default. Reasoning output,
+   * action results and closing lines are not reconstructed as reply fallbacks.
    */
-  source?: 'tool' | 'reply-text' | 'reasoning' | 'action-result' | 'closing';
+  source?: 'tool' | 'reply-text';
 }
 
 /**
- * The canonical terminal-reply fallback order: the candidates a finished turn
- * falls back to, in order, when the reply tool sent no text. The engine applies
- * it in `terminalFallback` (`auxiliary/reply.ts`), after the `tool` candidate,
- * and records the matching `reply.sent` source; the Desktop derivation
- * `derivedFinalReply` (`apps/desktop/src/renderer/pages/session/model/fold.ts`)
- * applies the same order on read for turns recorded before the terminal answer
- * existed. Both must stay in sync with this constant.
+ * Non-tool reply sources the engine may record after a successful communication
+ * call. Only `reply-text` is allowed: plain text accepted when the actual
+ * serving route's provider declares `ignoresForcedToolChoice`. Desktop reads
+ * committed `reply.sent` records only; it does not rebuild reasoning, action
+ * output or closing text as substitutes.
  */
-export const REPLY_FALLBACK_SOURCES = ['reply-text', 'reasoning', 'action-result', 'closing'] as const;
+export const REPLY_FALLBACK_SOURCES = ['reply-text'] as const;
 
 /** The session title; never part of the model context. */
 export interface SessionTitledEvent extends LedgerEventBase {

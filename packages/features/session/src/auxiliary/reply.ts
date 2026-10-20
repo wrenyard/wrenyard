@@ -7,7 +7,7 @@
  */
 
 import { attachmentRefUrl, type SessionFile } from '@wrenyard/protocol';
-import { stepId, turnId, type LedgerEvent, type TurnStatus } from '../ledger/store.ts';
+import { stepId, turnId, type LedgerEvent } from '../ledger/store.ts';
 import type { ToolCall, ToolSpec } from '../transport/index.ts';
 import { escapeReplyBody, tag } from '../context/render.ts';
 import { messageOf } from '../errors.ts';
@@ -191,10 +191,9 @@ export class ReplyWriter {
     if (!turn) return;
     // An interrupted or already-finished turn never communicates.
     if (turn.finished || turn.abort.signal.aborted) {
-      // An interrupted terminal turn still records its closing line, so a
-      // finished turn is never left without a reply.
+      // Record explicit interruption on a terminal abort.
       if (request.terminal && turn.abort.signal.aborted) {
-        await this.appendReply(session, request, undefined, INTERRUPTED_CLOSING, 'closing');
+        await this.appendReply(session, request, undefined, INTERRUPTED_CLOSING);
       }
       return;
     }
@@ -237,7 +236,7 @@ export class ReplyWriter {
     // An interrupt that landed while the call was in flight suppresses it.
     if (turn.finished || turn.abort.signal.aborted) {
       if (request.terminal && turn.abort.signal.aborted) {
-        await this.appendReply(session, request, outcome.spanId, INTERRUPTED_CLOSING, 'closing');
+        await this.appendReply(session, request, outcome.spanId, INTERRUPTED_CLOSING);
       }
       return;
     }
@@ -252,25 +251,29 @@ export class ReplyWriter {
       } catch (error) {
         failure = messageOf(error);
       }
-      // A terminal request that produced no reply tool text still answers: the
-      // call's own plain text, then the turn's last reasoning output, then the
-      // last finished action's result, then a closing line built from turn
-      // facts, which is never empty. Progress requests stay silent exactly as
-      // before.
-      if (text === undefined && failure === undefined && request.terminal) {
-        const fallback = terminalFallback(input.events, request, outcome.text);
-        text = fallback.text;
-        source = fallback.source;
+      if (text === undefined && failure === undefined) {
+        const providerId = outcome.route?.provider;
+        if (
+          providerId !== undefined
+          && outcome.text.trim() !== ''
+          && this.host.host.resolveInferenceProvider(providerId)?.ignoresForcedToolChoice === true
+        ) {
+          text = outcome.text;
+          source = 'reply-text';
+        } else if (request.terminal) {
+          failure = 'Reply call completed without a non-empty reply tool call';
+        }
       }
     } else {
       failure = outcome.error ?? 'reply call failed';
     }
     // Running failures stay in the span record only; they add no error to the
-    // main reasoning context. Terminal failures retain the fixed fallback.
+    // main reasoning context.
     if (failure !== undefined && request.terminal) {
       await this.host.appendError(session.sessionId, 'reply', failure, turn, request.step);
       if (turn.finished || turn.abort.signal.aborted) return;
-      text = fallbackReply(request.status as TerminalStatus, request.error);
+      await this.finishTurn(session, turn, 'failed', failure);
+      return;
     }
 
     if (text !== undefined) await this.appendReply(session, request, outcome.spanId, text, source);
@@ -278,8 +281,7 @@ export class ReplyWriter {
 
     if (request.terminal) {
       // Only an accepted nonempty reply made through the reply tool may carry
-      // memories; a failed reply, or one taken from a fallback because the tool
-      // was never called, saves nothing.
+      // memories; capability-gated plain text and failed replies save nothing.
       const memoryCalls = canSave && text !== undefined && source === undefined && outcome.ok && failure === undefined
         ? outcome.toolCalls
         : undefined;
@@ -296,7 +298,7 @@ export class ReplyWriter {
     request: ReplyRequest,
     parent: string | undefined,
     text: string,
-    source: ReplySource | undefined,
+    source?: ReplySource,
   ): Promise<void> {
     await this.host.ledger.append(session.sessionId, {
       type: 'reply.sent',
@@ -314,28 +316,29 @@ export class ReplyWriter {
   /**
    * Publish the closing reply of a session that runs on an agent tool port,
    * without the auxiliary reply call. The reply is the prose of the terminal
-   * step's own reasoning output, read back from the ledger. A failed turn, or
-   * one that left no text, falls back to the fixed terminal text, so the closing
-   * reply is always nonempty. Finalization stays the one existing path, and no
-   * memory is ever saved on this direct path.
+   * step's own reasoning output, read back from the ledger when it is nonempty.
+   * Finalization stays the one existing path, and no memory is ever saved on
+   * this direct path.
    */
   private async publishFinal(session: SessionRuntime, turn: TurnRuntime, request: ReplyRequest): Promise<void> {
     const events = this.host.ledger.read(session.sessionId);
     const step = terminalReasonOutput(events, request.turn, request.step);
     const text = request.status === 'completed' && step !== undefined && step.text.trim() !== ''
       ? step.text
-      : fallbackReply(request.status as TerminalStatus, request.error);
-    // The reasoning span of that exact step, or the step itself, is the reply's
-    // parent when one is available.
-    const parent = step?.parent ?? turn.currentStepId;
-    await this.host.ledger.append(session.sessionId, {
-      type: 'reply.sent',
-      turn: request.turn,
-      step: request.step,
-      ...(parent === undefined ? {} : { parent }),
-      text,
-      kind: 'final',
-    });
+      : undefined;
+    if (text !== undefined) {
+      // The reasoning span of that exact step, or the step itself, is the reply's
+      // parent when one is available.
+      const parent = step?.parent ?? turn.currentStepId;
+      await this.host.ledger.append(session.sessionId, {
+        type: 'reply.sent',
+        turn: request.turn,
+        step: request.step,
+        ...(parent === undefined ? {} : { parent }),
+        text,
+        kind: 'final',
+      });
+    }
     if (turn.finished || turn.abort.signal.aborted) return;
     await this.finishTurn(session, turn, request.status as TerminalStatus, request.error);
   }
@@ -350,9 +353,9 @@ export class ReplyWriter {
     if (memory === undefined) return;
     try {
       // The reply run is a single completion with tool choice auto: the model
-      // may answer with no reply call (the turn fallback supplied the text) or
-      // split the reply across several calls. Only a reply call can carry
-      // memory candidates, so read the first one and stay quiet without any.
+      // may answer with no reply call or split the reply across several calls.
+      // Only a reply call can carry memory candidates, so read the first one
+      // and stay quiet without any.
       const replies = calls.filter((call) => call.name === REPLY_TOOL.name);
       const reply = replies[0];
       if (reply === undefined) return;
@@ -476,80 +479,6 @@ function terminalReasonOutput(
     return { text: event.workerOutput ?? event.text, parent: event.parent };
   }
   return undefined;
-}
-
-/**
- * The terminal answer of a communication call that sent no reply tool text.
- * The first nonempty candidate wins: the call's own plain text, and for
- * non-failed turns the turn's last reasoning output and the last finished
- * action's textual result. Failed terminal requests do not reuse pre-failure
- * reasoning drafts or action results: after the call's own text they go
- * directly to the closing error line. The closing line is never empty, so a
- * terminal turn always records an answer. The order is `REPLY_FALLBACK_SOURCES`
- * (ledger/events.ts), the canonical list shared with the Desktop derivation.
- */
-function terminalFallback(
-  events: readonly LedgerEvent[],
-  request: ReplyRequest,
-  callText: string,
-): { text: string; source: Exclude<ReplySource, 'tool'> } {
-  if (callText.trim() !== '') return { text: callText, source: 'reply-text' };
-  if (request.status === 'failed') {
-    return { text: `出错了：${request.error ?? '未知错误'}`, source: 'closing' };
-  }
-  const reasoning = lastTurnReasonText(events, request.turn);
-  if (reasoning !== undefined) return { text: reasoning, source: 'reasoning' };
-  const result = lastActionResult(events, request.turn);
-  if (result !== undefined) return { text: result, source: 'action-result' };
-  const actions = finishedActionCount(events, request.turn);
-  return { text: `本轮已完成，执行了 ${actions} 个操作，未生成文字说明。`, source: 'closing' };
-}
-
-/**
- * The raw text of a turn's last completed reasoning output, preferring
- * `workerOutput` over `text`, or undefined when the turn recorded none or it
- * is empty.
- */
-function lastTurnReasonText(events: readonly LedgerEvent[], turn: number): string | undefined {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]!;
-    if (event.type !== 'reasoning.completed' || event.turn !== turn) continue;
-    const text = event.workerOutput ?? event.text;
-    return text.trim() === '' ? undefined : text;
-  }
-  return undefined;
-}
-
-/** The nonempty textual result of the turn's last finished action, if any. */
-function lastActionResult(events: readonly LedgerEvent[], turn: number): string | undefined {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]!;
-    if (event.type !== 'action.finished' || event.turn !== turn) continue;
-    if (event.result.trim() === '') continue;
-    return event.result;
-  }
-  return undefined;
-}
-
-/** How many actions of the turn finished. */
-function finishedActionCount(events: readonly LedgerEvent[], turn: number): number {
-  let count = 0;
-  for (const event of events) {
-    if (event.type === 'action.finished' && event.turn === turn) count += 1;
-  }
-  return count;
-}
-
-/** Fixed-format fallback used when a terminal communication call itself fails. */
-export function fallbackReply(status: TurnStatus, _error: string | undefined): string {
-  switch (status) {
-    case 'failed':
-      return '本轮未完成。';
-    case 'interrupted':
-      return '本轮已中断。';
-    default:
-      return '本轮已结束。';
-  }
 }
 
 // ─── Reply view ─────────────────────────────────────────────────────────────
