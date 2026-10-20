@@ -1368,8 +1368,6 @@ async function createForemanDaemonResources(
   // npm package backing each client, when one is published. Clients without an
   // entry (e.g. cursor) have no supported install source and are managed
   // manually. Used to derive the install/upgrade source and to run npm.
-  // Pi is intentionally manual: its own documentation does not name an
-  // official CLI npm package.
   const clientNpmPackages: Record<string, string> = {
     claude: '@anthropic-ai/claude-code',
     codex: '@openai/codex',
@@ -1377,6 +1375,7 @@ async function createForemanDaemonResources(
     opencode: 'opencode-ai',
     codebuddy: '@tencent-ai/codebuddy-code',
     dsh: '@deepseek-ai/dsh',
+    pi: '@mariozechner/pi-coding-agent',
   }
   // In-flight install/upgrade jobs, keyed by client id, and the last recorded
   // failure message per client. Shared so client.list reflects live state.
