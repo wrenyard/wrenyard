@@ -13,6 +13,7 @@ import {
   AUXILIARY_TIMEOUT_MS,
   BOT_REQUIREMENT,
   ROLE_REQUIREMENTS,
+  TASK_REQUIREMENT,
   supportsSession,
   type AuxiliaryCallRole,
   type RoleReasoningRequirement,
@@ -390,13 +391,12 @@ export function createAuxiliarySelector(port: SelectorInputPort) {
 
 /**
  * Rank routes against explicit caller-supplied intelligence requirements. The
- * profile is an ordinary text-only role's (the `reply` role) with only
- * `intelligenceMin` / `intelligenceExpected` replaced, so gating, pricing, speed
- * and ranking behave exactly like an auxiliary role selection.
+ * profile is the plain text-only task baseline with only `intelligenceMin` /
+ * `intelligenceExpected` replaced; auxiliary weights and ladders do not apply.
  */
 export function createRequirementSelector(port: SelectorInputPort) {
   return async (requirements: AuxiliaryIntelligenceRequirements): Promise<SelectorRoute[]> => {
-    const base = ROLE_REQUIREMENTS.reply;
+    const base = TASK_REQUIREMENT;
     const profile: RoleReasoningRequirement = {
       ...base,
       intelligenceMin: requirements.intelligenceMin,

@@ -61,11 +61,14 @@ export const ROLE_REQUIREMENTS: Readonly<Record<AuxiliaryCallRole, RoleReasoning
 };
 
 /**
- * The task requirement is the ordinary text-only reply profile. Per-invocation
- * requirements (intelligence tier, TPS, caps) arrive through the settings layer;
- * this constant only names the baseline the settings are applied to.
+ * The plain text-only baseline for tasks and explicit-requirement selections.
+ * Per-invocation requirements (intelligence tier, TPS, caps) arrive through the
+ * settings layer. It carries no auxiliary weights or ladder: those are for
+ * auxiliary roles only.
  */
-export const TASK_REQUIREMENT: RoleReasoningRequirement = ROLE_REQUIREMENTS.reply;
+export const TASK_REQUIREMENT: RoleReasoningRequirement = {
+  intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT,
+};
 
 /** Bot agents run a four-state tier ladder: premium and high models with
  *  abundant, then sufficient, then insufficient quota, and finally any mid
