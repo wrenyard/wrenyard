@@ -1,5 +1,5 @@
-import { findExecutable, type ClientStatus, type InspectOptions } from '@wrenyard/agent-client';
+import { findExecutable, withVersion, type ClientStatus, type InspectOptions } from '@wrenyard/agent-client';
 
-export function inspectPi(options?: InspectOptions): Promise<ClientStatus> {
-    return findExecutable(['pi'], options);
+export async function inspectPi(options?: InspectOptions): Promise<ClientStatus> {
+    return withVersion(await findExecutable(['pi'], options), options);
 }

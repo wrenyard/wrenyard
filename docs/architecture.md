@@ -42,7 +42,7 @@ updates. There is no separate agent runtime binary or Go build.
   quota queries. `features/quota` composes HTTP and native client account reads;
   providers interpret the returned observations.
 - `packages/providers` and `packages/models` own provider and model definitions.
-- `packages/clients/{codex,claude,cursor,grok,codebuddy,opencode,dsh}` implement
+- `packages/clients/{codex,claude,cursor,grok,codebuddy,opencode,dsh,pi}` implement
   the common agent client interface: installation, arguments, native protocol,
   account reads and token/TPS statistics.
 - `packages/execution` owns subprocess lifetime, stdio RPC and native credential
