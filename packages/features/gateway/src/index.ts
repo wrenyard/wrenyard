@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { Catalog, GatewayProtocol, PublicGatewayModel } from '@wrenyard/providers/catalog';
+import { bareModelId, type Catalog, type GatewayProtocol, type PublicGatewayModel } from '@wrenyard/providers/catalog';
 import type { ProviderRuntime } from '@wrenyard/providers';
 import { RouteStateStore, type Admission, type ClientFaultKind, type MarkableFailure, type RouteGuard, type RouteStateChangedEvent, type RouteStatus } from './route-state.ts';
 import { chatProtocol } from './protocols/chat.ts';
@@ -85,6 +85,20 @@ function splitModel(publicModel: string): { provider: string; model: string } | 
 }
 
 /**
+ * Normalize one route model onto the route-state key's model part.
+ *
+ * A native task route carries its resolved client as a `:<client>` suffix
+ * (`provider/model:client`), while route state is shared by provider and model.
+ * Only a known public client key is stripped, so a `:free` model variant keeps
+ * its exact identity. This is the single normalization used by every route-state
+ * lookup, so a client-qualified route observes the same rate_limited window as
+ * the bare route that recorded it.
+ */
+function routeModel(model: string): string {
+  return bareModelId(model);
+}
+
+/**
  * Normalize one route identity onto the provider-qualified internal key.
  *
  * A bare registered model id is accepted only when exactly one provider offers
@@ -97,11 +111,12 @@ export function gatewayRouteKey(
   identity: string,
 ): { provider: string; model: string } | undefined {
   const qualified = splitModel(identity);
-  if (qualified !== undefined) return qualified;
+  if (qualified !== undefined) return { provider: qualified.provider, model: routeModel(qualified.model) };
   if (identity.trim() === '') return undefined;
+  const model = routeModel(identity);
   const matches = catalog.providers().filter((provider) =>
-    provider.models.some((model) => model.id === identity));
-  return matches.length === 1 ? { provider: matches[0]!.id, model: identity } : undefined;
+    provider.models.some((candidate) => candidate.id === model));
+  return matches.length === 1 ? { provider: matches[0]!.id, model } : undefined;
 }
 
 /**
@@ -141,10 +156,10 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
   // The task path admits exactly one attempt per collected run, so it hands the
   // admission handle back to be settled here instead of re-deriving a route.
   // These delegate to the same single RouteStateStore the HTTP callers use.
-  const admitRoute = (provider: string, model: string): Admission => routeStates.admit(provider, model);
+  const admitRoute = (provider: string, model: string): Admission => routeStates.admit(provider, routeModel(model));
 
   const completeRouteSuccess = (provider: string, model: string, guard?: RouteGuard): void => {
-    routeStates.success(provider, model, guard);
+    routeStates.success(provider, routeModel(model), guard);
   };
 
   const reportNativeRouteFault = (provider: string, model: string, failure: MarkableFailure, guard?: RouteGuard): void => {
