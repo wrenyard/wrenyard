@@ -292,16 +292,16 @@ export function summarizeError(message: string, max = 60): string {
  * Terminal state of a turn's dispatch, told apart in the UI: `compile-failed`
  * when the dispatch stopped in the compile stage without opening any task run,
  * `not-started` when a run was opened but the implementation never settled, and
- * `failed`/`ended` for a run that executed.
+ * `failed` for a run that executed. A normally completed turn has no terminal
+ * label at all.
  */
-export type DispatchTerminal = 'compile-failed' | 'not-started' | 'failed' | 'ended';
+export type DispatchTerminal = 'compile-failed' | 'not-started' | 'failed';
 
 /** Display label of every dispatch terminal state. */
 export const DISPATCH_TERMINAL_LABEL: Record<DispatchTerminal, string> = {
   'compile-failed': '编译失败',
   'not-started': '实施未启动',
   failed: '失败',
-  ended: '已结束',
 };
 
 /**
@@ -311,8 +311,7 @@ export const DISPATCH_TERMINAL_LABEL: Record<DispatchTerminal, string> = {
  * finished implementation.
  */
 export function dispatchTerminal(turn: TurnModel): DispatchTerminal | undefined {
-  if (turn.status === 'running') return undefined;
-  if (turn.status === 'completed') return 'ended';
+  if (turn.status === 'running' || turn.status === 'completed') return undefined;
   const dispatches = turn.actions.filter((action) => action.kind === 'dispatch');
   if (dispatches.length === 0) return 'failed';
   if (dispatches.every((action) => action.taskRunId === undefined)) {

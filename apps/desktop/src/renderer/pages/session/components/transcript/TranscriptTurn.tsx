@@ -334,7 +334,11 @@ export function TranscriptTurn({ turn, sessionId, models, botNames, onCancelTask
               model={modelDisplayName(replyModelId(block.reply, turn), models)}
               showFooter={tail}
             >
-              {tail && terminal !== undefined && <span>{DISPATCH_TERMINAL_LABEL[terminal]}</span>}
+              {tail && terminal !== undefined && (
+                <span className={terminal === 'not-started' ? 'text-muted-foreground' : 'text-destructive'}>
+                  {DISPATCH_TERMINAL_LABEL[terminal]}
+                </span>
+              )}
             </ReplyBlock>
           );
         }

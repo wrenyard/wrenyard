@@ -22,7 +22,8 @@ export interface MessageFooterProps {
 /**
  * One message's metadata row. Its height is reserved at all times; only the
  * copy/time/model cluster fades, and only while the owning `group/msg` message
- * is hovered or holds focus. Extras passed as children stay visible.
+ * is hovered or holds focus. Extras passed as children stay visible and lead
+ * the row, ahead of the fading cluster.
  */
 export function MessageFooter({
   align = 'left',
@@ -50,10 +51,10 @@ export function MessageFooter({
         className,
       )}
     >
+      {children}
       <span className="inline-flex min-w-0 items-center gap-1.5 opacity-0 transition-opacity group-hover/msg:opacity-100 group-focus-within/msg:opacity-100">
         {metadata}
       </span>
-      {children}
     </div>
   );
 }
