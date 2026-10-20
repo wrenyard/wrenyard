@@ -14,6 +14,7 @@ import type { ToolSpec } from '../transport/index.ts';
 import type { SessionRuntime, TurnRuntime } from '../turn/runtime.ts';
 import { latestReasonText } from './reply.ts';
 import { memoryPortOf, type WorkspaceMemoryPort } from '../memory-write.ts';
+import { withAuxiliaryRetry } from './shared.ts';
 
 /** How much of one action result the memory-search view carries. */
 const ACTION_RESULT_EXCERPT = 200;
@@ -159,36 +160,33 @@ export async function runMemorySearch(
   const tools = [selectMemoriesTool(targets)];
   const toolChoice = { name: MEMORY_SELECTION.tool };
 
-  let outcome = await host.invoke(session, turn, 'memory-search', buildMemorySearch(input), {
-    parent: turnId(turn.turn), step, tools, toolChoice,
-  });
-  if (!outcome.ok) {
-    // A failed call is a model/transport failure, never a parsing problem.
-    await appendMemoryWarning(host, session, turn, step, outcome.spanId, outcome.error ?? 'memory-search call failed');
-    return;
-  }
-  let selection = memorySelectionFrom(outcome, memoryIndex);
-  if (!selection.ok) {
-    // Exactly one bounded correction round, through the same structured tool
-    // call, carrying the concrete failure classification the model must fix.
-    const correction = [
-      `Your previous memory-search output was rejected: ${selection.reason}`,
-      `Call ${MEMORY_SELECTION.tool} exactly once with a single valid JSON object: {"${MEMORY_SELECTION.container}":[{"path":"memories/…md","reason":"…"}]}`,
-      'Return the selection through the tool only, with no prose, no second JSON value and no trailing text.',
-    ].join('\n');
-    outcome = await host.invoke(session, turn, 'memory-search', buildMemorySearch(input, correction), {
+  // The shared auxiliary retry: a rejected selection is retried through the
+  // same structured tool call, carrying the concrete failure the model must fix.
+  const result = await withAuxiliaryRetry<
+    { selection: Extract<ReturnType<typeof memorySelectionFrom>, { ok: true }>; spanId: string },
+    { error: string; spanId?: string; rejected?: boolean }
+  >(async (previous) => {
+    const correction = previous?.rejected === true
+      ? [
+        `Your previous memory-search output was rejected: ${previous.error}`,
+        `Call ${MEMORY_SELECTION.tool} exactly once with a single valid JSON object: {"${MEMORY_SELECTION.container}":[{"path":"memories/…md","reason":"…"}]}`,
+        'Return the selection through the tool only, with no prose, no second JSON value and no trailing text.',
+      ].join('\n')
+      : undefined;
+    const outcome = await host.invoke(session, turn, 'memory-search', buildMemorySearch(input, correction), {
       parent: turnId(turn.turn), step, tools, toolChoice,
     });
-    if (!outcome.ok) {
-      await appendMemoryWarning(host, session, turn, step, outcome.spanId, outcome.error ?? 'memory-search call failed');
-      return;
-    }
-    selection = memorySelectionFrom(outcome, memoryIndex);
-  }
-  if (!selection.ok) {
-    await appendMemoryWarning(host, session, turn, step, outcome.spanId, selection.reason);
+    // A failed call is a model/transport failure, never a parsing problem.
+    if (!outcome.ok) return { ok: false, error: outcome.error ?? 'memory-search call failed', spanId: outcome.spanId };
+    const selection = memorySelectionFrom(outcome, memoryIndex);
+    if (!selection.ok) return { ok: false, error: selection.reason, spanId: outcome.spanId, rejected: true };
+    return { ok: true, value: { selection, spanId: outcome.spanId } };
+  }, turn.abort.signal);
+  if (!result.ok) {
+    await appendMemoryWarning(host, session, turn, step, ('spanId' in result ? result.spanId : undefined) ?? turnId(turn.turn), result.error);
     return;
   }
+  const { selection, spanId } = result.value;
   for (const pick of selection.picks) {
     if (turn.finished || turn.abort.signal.aborted) break;
     const file = memory === undefined ? session.files.read(pick.path) : readMemoryFile(memory, pick.path);
@@ -199,7 +197,7 @@ export async function runMemorySearch(
       type: 'memory.recalled',
       turn: turn.turn,
       step,
-      parent: outcome.spanId,
+      parent: spanId,
       path: pick.path,
       content: file.content,
       version,

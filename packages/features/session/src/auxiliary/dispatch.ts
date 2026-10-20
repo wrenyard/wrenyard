@@ -12,7 +12,7 @@ import { existsSync } from 'node:fs';
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 
 import { renderTaskResult } from './dispatch-result.ts';
-import { fail, isObject, renderRunFiles } from './shared.ts';
+import { fail, isObject, renderRunFiles, withAuxiliaryRetry } from './shared.ts';
 import { messageOf } from '../errors.ts';
 import {
   collectSessionFiles,
@@ -343,25 +343,14 @@ export async function runDispatchAction(
   };
   const view = buildCompile(compileInput);
   // A failed call or unusable output is a system fault, not a decision of
-  // the reasoning model. Both share one budget of COMPILE_ATTEMPTS, tried at
-  // once with no backoff: an unusable output is sent back with the reason it
-  // was rejected, and a failed call is retried on a fresh route selection
-  // (the transport already fails over across routes without same-route retry).
-  let compiled: Extract<ReturnType<typeof checkCompiled>, { ok: true }> | undefined;
-  let compileError = '';
+  // the reasoning model. It is retried by the shared auxiliary retry: an
+  // unusable output is sent back with the reason it was rejected.
   let attemptView = view;
-  for (let attempt = 1; attempt <= COMPILE_ATTEMPTS && compiled === undefined && !ctx.signal.aborted; attempt += 1) {
+  const compiledOutcome = await withAuxiliaryRetry<Extract<ReturnType<typeof checkCompiled>, { ok: true }>, { error: string }>(async () => {
     const outcome = await runCompileCall(deps, attemptView, ctx);
-    if (!outcome.ok) {
-      compileError = `compile call failed: ${outcome.error}`;
-      continue;
-    }
+    if (!outcome.ok) return { ok: false, error: `compile call failed: ${outcome.error}` };
     const checked = checkCompiled(outcome.text, ctx, contracts);
-    if (checked.ok) {
-      compiled = checked;
-      break;
-    }
-    compileError = checked.error;
+    if (checked.ok) return { ok: true, value: checked };
     attemptView = {
       ...attemptView,
       messages: [
@@ -370,8 +359,10 @@ export async function runDispatchAction(
         { role: 'user', content: `The previous output cannot be used: ${checked.error}\nOutput only the corrected complete JSON.` },
       ],
     };
-  }
-  if (compiled === undefined) return notDispatched(compileError);
+    return { ok: false, error: checked.error };
+  }, ctx.signal);
+  if (!compiledOutcome.ok) return notDispatched(compiledOutcome.error);
+  const compiled = compiledOutcome.value;
 
   const { parsed, project, taskId, worktree, effectiveInput, fast } = compiled;
 
@@ -437,12 +428,12 @@ export async function runDispatchAction(
       ...(worktree === undefined ? {} : { worktree }),
     })
     if (conflict) {
-      return fail(
-        `cannot dispatch task '${taskId}': running task run '${conflict.runId}' (task '${conflict.taskId}') already holds overlapping write targets: ${conflict.overlap.join(', ')}`,
+      return notDispatched(
+        `Its write targets overlap running task run '${conflict.runId}' (task '${conflict.taskId}'): ${conflict.overlap.join(', ')}`,
       )
     }
   } catch (error) {
-    return fail(messageOf(error))
+    return notDispatched(messageOf(error))
   }
 
   let taskRunId: string;
@@ -751,8 +742,6 @@ type Waited = Awaited<ReturnType<ActionWorkflowDeps['host']['waitTaskRun']>>;
 /** The host's task contract, derived from the authoritative `SessionHost` type. */
 type TaskContract = Awaited<ReturnType<ActionWorkflowDeps['host']['describeTask']>>;
 
-/** Total compile attempts, failed calls and rejected outputs together. */
-const COMPILE_ATTEMPTS = 3;
 
 type CompileContract = ActionTaskInfo & {
   inputSchema: unknown;
