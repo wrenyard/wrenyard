@@ -344,7 +344,13 @@ export function SessionPage() {
         turns={model.turns}
         ledgerReady={draft || state.ledgerLoaded}
       >
-        <RunningDispatchTasks api={api} turns={model.turns} tasks={state.tasks} setTasks={setTasks} />
+        <RunningDispatchTasks
+          key={sessionKey}
+          api={api}
+          turns={model.turns}
+          tasks={state.tasks}
+          setTasks={setTasks}
+        />
         <div className="relative flex min-h-0 flex-1 flex-col">
           {empty ? (
             <EmptySession>

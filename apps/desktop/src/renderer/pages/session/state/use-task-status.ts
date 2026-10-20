@@ -38,12 +38,16 @@ export function useTaskStatus(
     const justEnded = [...previous.current].filter((id) => !current.has(id));
     previous.current = current;
 
-    // Dispatch ids with no cached brief get exactly one fetch, whether their
+    // Dispatch ids with no usable cached brief get exactly one fetch, whether their
     // action (and turn) is still running or long finished.
-    const missing = [...new Set(allIds)].filter(
-      (id) => tasksRef.current[id] === undefined && !fetched.current.has(id),
-    );
-    for (const id of missing) fetched.current.add(id);
+    for (const id of allIds) {
+      if (tasksRef.current[id]?.status === 'unavailable') fetched.current.delete(id);
+    }
+    const missing = [...new Set(allIds)].filter((id) => {
+      const brief = tasksRef.current[id];
+      const needsBrief = brief === undefined || brief.status === 'unavailable';
+      return needsBrief && !fetched.current.has(id);
+    });
 
     const ids = [...new Set([...current, ...justEnded, ...missing])];
     if (ids.length === 0) return;
@@ -55,6 +59,7 @@ export function useTaskStatus(
       try {
         const resolved = await api.tasks(ids);
         if (cancelled) return;
+        for (const task of resolved) fetched.current.add(task.taskRunId);
         onTasks({
           ...tasksRef.current,
           ...Object.fromEntries(resolved.map((task) => [task.taskRunId, task])),
