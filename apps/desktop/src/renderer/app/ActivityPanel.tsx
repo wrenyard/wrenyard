@@ -1,85 +1,76 @@
 /**
- * App-level right-side activity panel: the single activity surface that
- * replaced the status-bar popover. The header carries the 本会话/全部 scope
- * toggle (while a session is open), the list shows the popover's content —
- * running session turns grouped by session, task runs with status, runtime
- * and their task graph link — plus finished task runs kept for ten minutes.
- * Selecting a task run previews its live transcript in the lower part through
- * the shared `TaskTranscript` view. One instance serves the whole app; later
- * background tasks for the app shell.
+ * App-level right-side panel listing background task runs and task graphs
+ * across sessions. Rows expand in place for task transcript preview, cancellation,
+ * and navigation; session turns and actions are not shown here.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Bot, MessageSquare, X, Zap, type LucideIcon } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  Square,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
-import { Item } from '@/renderer/components/ui/item';
-import { Separator } from '@/renderer/components/ui/separator';
-import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
-import { PanelFooterAction } from '@/renderer/components/panel-footer-action';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { TaskTranscript, type TaskRunEventsLoader } from '@/renderer/components/task-transcript';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { executeCommand } from '@/renderer/lib/commands';
 import { shell, useActivityStatus } from '@/renderer/lib/desktop';
 import { getSessionBridge } from '@/renderer/lib/session';
 import { useAppearance } from '@/renderer/lib/theme';
-import { closeActivityPanel } from '@/renderer/lib/activity-panel';
-import { useActiveSession } from '@/renderer/lib/navigation';
-import { TASK_RUN_PHASE_LABEL, runningTaskAction } from '@/renderer/pages/session/model/describe';
-import { isRunningTask } from '@/renderer/pages/session/model/fold';
-import type { ActionKindModel } from '@/renderer/pages/session/model/types';
+import { closeActivityPanel, useActivityPanelState } from '@/renderer/lib/activity-panel';
+import { useTaskCancellation } from '@/renderer/hooks/use-task-cancellation';
 import type { ActivityStatusTask, ActivityStatusTaskGraph } from '@/shell-contract';
 import { useActivityTaskDetails, useSessionActivity } from './use-activity';
 
-const ACTION_LABEL: Record<ActionKindModel, string> = {
-  // The compile stage only: a dispatch whose task run has opened is shown with
-  // its own phase label and elapsed time instead.
-  dispatch: '编译任务输入',
-  document: '文档管理',
-  todo: '待办',
-  search: '检索资料',
-  vcs: '工作区版本',
-  project: '项目管理',
-  schedule: '定时任务',
-  'parse-failed': '解析行动',
-};
-
-/** A finished run stays listed this long for a result preview. */
+/** A finished run stays listed this long after it leaves the live snapshot. */
 const FINISHED_RETENTION_MS = 10 * 60 * 1000;
-const TURN_PHASE_LABEL: Record<'preparing' | 'reasoning' | 'acting' | 'replying', string> = {
-  preparing: '准备中',
-  reasoning: '推理中',
-  acting: '行动中',
-  replying: '回复中',
-};
 
-/** One task run shown in the list: live from the snapshot or recently finished. */
+type ExpandedKey = `task:${string}` | `graph:${string}`;
+
 interface ListedTask extends ActivityStatusTask {
-  /** When the run left the live snapshot; retained entries expire after it. */
   finishedAt?: number;
 }
 
-function ActivityRow({ icon: Icon, title, detail, startedAt, onClick, selected }: {
-  icon: LucideIcon;
+interface ListedGraph extends ActivityStatusTaskGraph {
+  finishedAt?: number;
+}
+
+interface TaskSessionLink {
+  sessionId: string;
   title: string;
-  detail?: string;
-  startedAt: string;
-  onClick: () => void;
-  selected?: boolean;
-}) {
-  return (
-    <Item
-      render={<button type="button" onClick={onClick} />}
-      size="xs"
-      className={cn('w-full flex-nowrap text-left', selected && 'bg-accent')}
-    >
-      <Icon className="size-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate" title={title}>{title}</span>
-        {detail ? <span className="block truncate text-xs text-muted-foreground" title={detail}>{detail}</span> : null}
-      </span>
-      <Elapsed start={startedAt} className="shrink-0 tabular-nums text-xs text-muted-foreground" />
-    </Item>
-  );
+}
+
+function isActiveGraph(graph: ActivityStatusTaskGraph): boolean {
+  return graph.state !== 'done' && graph.state !== 'cancelled';
+}
+
+function graphRowKey(graph: ListedGraph): ExpandedKey {
+  return `graph:${graph.taskgraphId}`;
+}
+
+function taskRowKey(taskRunId: string): ExpandedKey {
+  return `task:${taskRunId}`;
+}
+
+function graphStateLabel(graph: ListedGraph, active: boolean): string {
+  if (!active && graph.finishedAt !== undefined && isActiveGraph(graph)) {
+    return '已结束';
+  }
+  switch (graph.state) {
+    case 'done':
+      return '已完成';
+    case 'cancelled':
+      return '已取消';
+    case 'running':
+      return '运行中';
+    case 'paused':
+      return '已暂停';
+    default:
+      return graph.state;
+  }
 }
 
 /** The session bridge as the preview's event source. */
@@ -88,46 +79,87 @@ const transcriptLoader: TaskRunEventsLoader = {
   retry: () => Promise.resolve(),
 };
 
-export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
+export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: string }) {
   const snapshot = useActivityStatus();
   const sessions = useSessionActivity();
-  const activeSession = useActiveSession();
+  const panelState = useActivityPanelState();
+  const { cancelledTasks, cancelTask } = useTaskCancellation();
   const { dark } = useAppearance();
   const onOpenExternal = useCallback((href: string) => {
     void shell.openExternal(href);
   }, []);
 
-  // The chip asks for a session-scoped open; other openers leave the scope
-  // where the user last put it (or 全部 when no session is open).
-  const [scope, setScope] = useState<'session' | 'all'>(scopeSession === '' ? 'all' : 'session');
-  useEffect(() => {
-    if (scopeSession !== '') setScope('session');
-  }, [scopeSession]);
-  // The scope toggle exists only while a session is open; losing the session
-  // falls back to the full list.
-  const sessionOpen = activeSession !== '';
-  const scoped = scope === 'session' && sessionOpen;
+  const [runningGroupOpen, setRunningGroupOpen] = useState(true);
+  const [finishedGroupOpen, setFinishedGroupOpen] = useState(false);
+  const [expandedKey, setExpandedKey] = useState<ExpandedKey | null>(null);
+  const [hiddenFinished, setHiddenFinished] = useState<Set<string>>(() => new Set());
+  const persistedSessionLinksRef = useRef<Map<string, TaskSessionLink>>(new Map());
+  const sessionLinks = useMemo(() => {
+    const merged = new Map(persistedSessionLinksRef.current);
+    const groups = sessions.data;
+    if (groups !== undefined) {
+      for (const session of groups) {
+        const title = session.title || '新会话';
+        for (const turn of session.turns) {
+          for (const action of turn.actions) {
+            if (action.taskRunId === undefined) continue;
+            merged.set(action.taskRunId, { sessionId: session.sessionId, title });
+          }
+        }
+      }
+    }
+    persistedSessionLinksRef.current = merged;
+    return merged;
+  }, [sessions.data]);
+  const handledFocusRequestRef = useRef(0);
+  const focusRowRef = useRef<HTMLDivElement | null>(null);
+  const pendingFocusTaskIdRef = useRef<string | null>(null);
+  const [restoredRunningTasks, setRestoredRunningTasks] = useState<Map<string, ListedTask>>(
+    () => new Map(),
+  );
 
-  const liveTasks = useMemo(
+  const snapshotLiveTasks = useMemo(
     () => snapshot.tasks
       .filter((task) => task.status === 'running' || task.status === 'queued')
       .sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt)),
     [snapshot.tasks],
   );
 
-  // Finished runs are not part of the snapshot: remember each live id and keep
-  // the ones that disappear for FINISHED_RETENTION_MS, resolved through the
-  // task briefs so the row can read 已完成 / 失败.
-  const [finished, setFinished] = useState<Map<string, ListedTask>>(() => new Map());
-  const knownRef = useRef<Map<string, ActivityStatusTask>>(new Map());
   useEffect(() => {
-    const previous = knownRef.current;
+    setRestoredRunningTasks((current) => {
+      if (current.size === 0) return current;
+      const snapshotIds = new Set(snapshotLiveTasks.map((task) => task.taskRunId));
+      let changed = false;
+      const next = new Map(current);
+      for (const id of current.keys()) {
+        if (snapshotIds.has(id)) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [snapshotLiveTasks]);
+
+  const liveTasks = useMemo(() => {
+    const byId = new Map(snapshotLiveTasks.map((task) => [task.taskRunId, task]));
+    for (const [id, task] of restoredRunningTasks) {
+      if (!byId.has(id)) byId.set(id, task);
+    }
+    return [...byId.values()].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+  }, [snapshotLiveTasks, restoredRunningTasks]);
+
+  const [finishedTasks, setFinishedTasks] = useState<Map<string, ListedTask>>(() => new Map());
+  const knownTasksRef = useRef<Map<string, ActivityStatusTask>>(new Map());
+  useEffect(() => {
+    const previous = knownTasksRef.current;
     const next = new Map(liveTasks.map((task) => [task.taskRunId, task]));
     const now = Date.now();
-    setFinished((current) => {
+    setFinishedTasks((current) => {
       const retained = new Map(current);
       let changed = false;
       for (const [id, task] of previous) {
+        if (restoredRunningTasks.has(id)) continue;
         if (!next.has(id) && !retained.has(id)) {
           retained.set(id, { ...task, finishedAt: now });
           changed = true;
@@ -135,7 +167,6 @@ export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
       }
       for (const [id, task] of retained) {
         if (next.has(id)) {
-          // Back in the live set (e.g. a retried run): drop the stale entry.
           retained.delete(id);
           changed = true;
         } else if (task.finishedAt !== undefined && now - task.finishedAt > FINISHED_RETENTION_MS) {
@@ -145,239 +176,479 @@ export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
       }
       return changed ? retained : current;
     });
-    knownRef.current = next;
-  }, [liveTasks]);
-  // Retention expiry has no clock of its own; a minute tick drops stale rows.
+    knownTasksRef.current = next;
+  }, [liveTasks, restoredRunningTasks]);
+
   useEffect(() => {
-    if (finished.size === 0) return;
-    const timer = setTimeout(() => setFinished((current) => new Map(current)), 60_000);
-    return () => clearTimeout(timer);
-  }, [finished]);
+    if (finishedTasks.size === 0) return;
+    const interval = setInterval(() => {
+      setFinishedTasks((current) => {
+        const now = Date.now();
+        let changed = false;
+        const next = new Map(current);
+        for (const [id, task] of current) {
+          if (task.finishedAt !== undefined && now - task.finishedAt > FINISHED_RETENTION_MS) {
+            next.delete(id);
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [finishedTasks.size]);
 
-  const liveIds = useMemo(() => new Set(liveTasks.map((task) => task.taskRunId)), [liveTasks]);
-  const tasks = useMemo<ListedTask[]>(() => {
-    const finishedList = [...finished.values()].filter((task) => !liveIds.has(task.taskRunId));
+  const liveTaskIds = useMemo(() => new Set(liveTasks.map((task) => task.taskRunId)), [liveTasks]);
+  const allTasks = useMemo<ListedTask[]>(() => {
+    const finishedList = [...finishedTasks.values()].filter((task) => !liveTaskIds.has(task.taskRunId));
     return [...liveTasks, ...finishedList];
-  }, [liveTasks, finished, liveIds]);
+  }, [liveTasks, finishedTasks, liveTaskIds]);
 
-  const details = useActivityTaskDetails(tasks.map((task) => task.taskRunId).sort());
-  const groups = sessions.data ?? [];
-  const turns = groups.flatMap((session) => session.turns);
-  const linkedTasks = useMemo(
-    () => new Set(turns.flatMap((turn) => turn.actions.flatMap((action) => action.taskRunId ? [action.taskRunId] : []))),
-    [turns],
+  const liveGraphs = useMemo(
+    () => snapshot.taskgraphs.filter(isActiveGraph),
+    [snapshot.taskgraphs],
   );
-  const renderedTurnTaskIds = useMemo(
-    () => new Set(
-      groups.flatMap((session) => session.turns.flatMap((turn) => turn.actions.flatMap((action) => action.taskRunId ? [action.taskRunId] : []))),
-    ),
-    [groups],
+  const finishedGraphsInSnapshot = useMemo(
+    () => snapshot.taskgraphs.filter((graph) => !isActiveGraph(graph)),
+    [snapshot.taskgraphs],
   );
-  // Live tasks unlinked to any session, plus finished runs whose turn already
-  // dropped out of the running-turn list, render in the standalone section.
-  const standaloneTasks = tasks.filter(
-    (task) => !linkedTasks.has(task.taskRunId)
-      || (task.finishedAt !== undefined && !renderedTurnTaskIds.has(task.taskRunId)),
+
+  const [finishedGraphs, setFinishedGraphs] = useState<Map<string, ListedGraph>>(() => new Map());
+  const knownGraphsRef = useRef<Map<string, ActivityStatusTaskGraph>>(new Map());
+  useEffect(() => {
+    const previous = knownGraphsRef.current;
+    const next = new Map(liveGraphs.map((graph) => [graph.taskgraphId, graph]));
+    const now = Date.now();
+    setFinishedGraphs((current) => {
+      const retained = new Map(current);
+      let changed = false;
+      for (const [id, graph] of previous) {
+        if (!next.has(id) && !retained.has(id)) {
+          retained.set(id, { ...graph, finishedAt: now });
+          changed = true;
+        }
+      }
+      for (const [id, graph] of retained) {
+        if (next.has(id)) {
+          retained.delete(id);
+          changed = true;
+        } else if (graph.finishedAt !== undefined && now - graph.finishedAt > FINISHED_RETENTION_MS) {
+          retained.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? retained : current;
+    });
+    knownGraphsRef.current = next;
+  }, [liveGraphs]);
+
+  useEffect(() => {
+    if (finishedGraphs.size === 0) return;
+    const interval = setInterval(() => {
+      setFinishedGraphs((current) => {
+        const now = Date.now();
+        let changed = false;
+        const next = new Map(current);
+        for (const [id, graph] of current) {
+          if (graph.finishedAt !== undefined && now - graph.finishedAt > FINISHED_RETENTION_MS) {
+            next.delete(id);
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [finishedGraphs.size]);
+
+  const liveGraphIds = useMemo(() => new Set(liveGraphs.map((graph) => graph.taskgraphId)), [liveGraphs]);
+  const retainedFinishedGraphs = useMemo(
+    () => [...finishedGraphs.values()].filter((graph) => !liveGraphIds.has(graph.taskgraphId)),
+    [finishedGraphs, liveGraphIds],
   );
+
+  const taskRunIds = useMemo(
+    () => allTasks.map((task) => task.taskRunId).sort(),
+    [allTasks],
+  );
+  const details = useActivityTaskDetails(taskRunIds);
+
+  const isTaskActive = useCallback((task: ListedTask): boolean => {
+    if (cancelledTasks.has(task.taskRunId)) return false;
+    if (task.finishedAt !== undefined) return false;
+    return task.status === 'running' || task.status === 'queued';
+  }, [cancelledTasks]);
+
+  const runningTasks = useMemo(
+    () => allTasks.filter((task) => isTaskActive(task)),
+    [allTasks, isTaskActive],
+  );
+  const finishedTasksList = useMemo(
+    () => allTasks.filter((task) => !isTaskActive(task)),
+    [allTasks, isTaskActive],
+  );
+
+  const runningGraphs = liveGraphs;
+  const finishedGraphsList = useMemo(() => {
+    const byId = new Map<string, ListedGraph>();
+    for (const graph of finishedGraphsInSnapshot) {
+      byId.set(graph.taskgraphId, graph);
+    }
+    for (const graph of retainedFinishedGraphs) {
+      if (!byId.has(graph.taskgraphId)) byId.set(graph.taskgraphId, graph);
+    }
+    return [...byId.values()];
+  }, [finishedGraphsInSnapshot, retainedFinishedGraphs]);
+
+  const visibleFinishedTasks = finishedTasksList.filter((task) => !hiddenFinished.has(taskRowKey(task.taskRunId)));
+  const visibleFinishedGraphs = finishedGraphsList.filter((graph) => !hiddenFinished.has(graphRowKey(graph)));
+
+  const runningCount = runningTasks.length + runningGraphs.length;
+  const finishedCount = visibleFinishedTasks.length + visibleFinishedGraphs.length;
+  const empty = runningCount === 0 && finishedCount === 0;
+
   const stale = snapshot.stale || sessions.isError || details.isError;
-
-  const [selectedTaskRunId, setSelectedTaskRunId] = useState<string | null>(null);
-  const selectedTask = selectedTaskRunId === null ? undefined : tasks.find((task) => task.taskRunId === selectedTaskRunId);
-  // A selected run that left the list keeps its preview open for the result.
 
   const openSession = (sessionId: string): void => {
     executeCommand('session.open', { sessionId });
   };
 
-  /** Session-filtered view: only the open session's group and its linked tasks. */
-  const visibleGroups = scoped ? groups.filter((session) => session.sessionId === activeSession) : groups;
-  const visibleStandalone = scoped ? [] : standaloneTasks;
-  const scopedLinkedIds = useMemo(() => {
-    if (!scoped) return linkedTasks;
-    const session = groups.find((item) => item.sessionId === activeSession);
-    return new Set(session?.turns.flatMap((turn) => turn.actions.flatMap((action) => action.taskRunId ? [action.taskRunId] : [])) ?? []);
-  }, [scoped, groups, activeSession, linkedTasks]);
-  // Finished runs linked to this session but no longer under a rendered
-  // (running) turn stay listed as session-scoped standalone rows.
-  const scopedFinished = scoped
-    ? tasks.filter((task) => task.finishedAt !== undefined && scopedLinkedIds.has(task.taskRunId) && !renderedTurnTaskIds.has(task.taskRunId))
-    : [];
+  const requestCancel = (taskRunId: string): void => {
+    const match = liveTasks.find((task) => task.taskRunId === taskRunId);
+    const preRequest = match !== undefined ? { ...match } : undefined;
 
-  const renderTask = (task: ListedTask): React.ReactNode => {
+    void cancelTask(taskRunId, (id) =>
+      getSessionBridge().cancelTask(id).catch((error: unknown) => {
+        if (preRequest !== undefined) {
+          setRestoredRunningTasks((current) => {
+            const next = new Map(current);
+            next.set(preRequest.taskRunId, preRequest);
+            return next;
+          });
+          setFinishedTasks((current) => {
+            if (!current.has(preRequest.taskRunId)) return current;
+            const next = new Map(current);
+            next.delete(preRequest.taskRunId);
+            return next;
+          });
+          setRunningGroupOpen(true);
+        }
+        throw error;
+      }),
+    ).then((confirmed) => {
+      if (!confirmed) return;
+      setFinishedGroupOpen(true);
+      setExpandedKey(taskRowKey(taskRunId));
+    });
+  };
+
+  const hideVisibleFinished = (): void => {
+    setHiddenFinished((current) => {
+      const next = new Set(current);
+      for (const task of visibleFinishedTasks) next.add(taskRowKey(task.taskRunId));
+      for (const graph of visibleFinishedGraphs) next.add(graphRowKey(graph));
+      return next;
+    });
+  };
+
+  const toggleExpand = (key: ExpandedKey): void => {
+    setExpandedKey((current) => (current === key ? null : key));
+  };
+
+  useEffect(() => {
+    const requestId = panelState.openRequestId;
+    if (requestId === 0 || requestId === handledFocusRequestRef.current) return;
+    const focusSession = panelState.scopeSession;
+    if (focusSession === '') {
+      handledFocusRequestRef.current = requestId;
+      return;
+    }
+
+    setRunningGroupOpen(true);
+
+    if (sessions.isPending || sessions.isError) return;
+
+    const linkedRunning = runningTasks
+      .filter((task) => sessionLinks.get(task.taskRunId)?.sessionId === focusSession)
+      .sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+    if (linkedRunning.length === 0) return;
+
+    const latest = linkedRunning[linkedRunning.length - 1];
+    setExpandedKey(taskRowKey(latest.taskRunId));
+    handledFocusRequestRef.current = requestId;
+    pendingFocusTaskIdRef.current = latest.taskRunId;
+  }, [
+    panelState.openRequestId,
+    panelState.scopeSession,
+    runningTasks,
+    sessionLinks,
+    sessions.isPending,
+    sessions.isError,
+  ]);
+
+  useEffect(() => {
+    const pendingTaskId = pendingFocusTaskIdRef.current;
+    if (pendingTaskId === null) return;
+    if (!runningGroupOpen) return;
+    if (expandedKey !== taskRowKey(pendingTaskId)) return;
+    if (focusRowRef.current === null) return;
+    focusRowRef.current.scrollIntoView({ block: 'nearest' });
+    pendingFocusTaskIdRef.current = null;
+  }, [
+    panelState.openRequestId,
+    panelState.scopeSession,
+    expandedKey,
+    runningGroupOpen,
+    runningTasks,
+  ]);
+
+  const renderTaskDuration = (task: ListedTask, active: boolean): React.ReactNode => {
     const brief = details.data?.find((item) => item.taskRunId === task.taskRunId);
-    const graph = snapshot.taskgraphs.find((item) => item.taskgraphId === task.taskgraphId);
-    // A retained finished run learns its outcome from the task brief; a run
-    // that left the live set without a resolvable failure reads as 已完成.
-    const failed = brief?.status === 'failed' || brief?.status === 'cancelled' || brief?.status === 'interrupted';
-    const status = task.finishedAt !== undefined
-      ? (failed ? '失败' : '已完成')
-      : task.status === 'queued'
-        ? (task.queuePosition !== undefined ? `排队中 #${task.queuePosition}` : '排队中')
-        : '运行中';
+    const locallyCancelled = cancelledTasks.has(task.taskRunId);
+    const cancelled = locallyCancelled || brief?.status === 'cancelled';
+    const failed = !cancelled && (brief?.status === 'failed' || brief?.status === 'interrupted');
+
+    if (active && task.status === 'queued') {
+      const position = task.queuePosition !== undefined ? ` #${task.queuePosition}` : '';
+      return <span className="text-sm tabular-nums text-muted-foreground">排队{position}</span>;
+    }
+
+    const cancelTs = locallyCancelled ? cancelledTasks.get(task.taskRunId) : undefined;
+    const endIso = cancelTs !== undefined
+      ? new Date(cancelTs).toISOString()
+      : task.finishedAt !== undefined
+        ? new Date(task.finishedAt).toISOString()
+        : undefined;
+    const duration = (
+      <Elapsed
+        start={task.startedAt}
+        end={active ? undefined : endIso}
+        className="text-sm tabular-nums text-muted-foreground"
+      />
+    );
+
+    if (cancelled) {
+      return (
+        <span className="flex items-center gap-1 text-sm tabular-nums">
+          <span className="text-muted-foreground">已取消</span>
+          {duration}
+        </span>
+      );
+    }
+    if (failed) {
+      return (
+        <span className="flex items-center gap-1 text-sm tabular-nums">
+          <span className="text-destructive">失败</span>
+          {duration}
+        </span>
+      );
+    }
+    return duration;
+  };
+
+  const renderTaskRow = (task: ListedTask, active: boolean): React.ReactNode => {
+    const key = taskRowKey(task.taskRunId);
+    const expanded = expandedKey === key;
+    const brief = details.data?.find((item) => item.taskRunId === task.taskRunId);
+    const label = task.taskLabel ?? brief?.taskName ?? task.taskId ?? task.taskRunId;
+    const graph = snapshot.taskgraphs.find((item) => item.taskgraphId === task.taskgraphId)
+      ?? finishedGraphsList.find((item) => item.taskgraphId === task.taskgraphId);
+    const link = sessionLinks.get(task.taskRunId);
+    const isFocusTarget = expanded && panelState.scopeSession !== ''
+      && link?.sessionId === panelState.scopeSession;
+
     return (
-      <div key={task.taskRunId} className="flex items-center">
-        <div className="min-w-0 flex-1">
-          <ActivityRow
-            icon={Bot}
-            title={task.taskLabel ?? brief?.taskName ?? task.taskId ?? task.taskRunId}
-            detail={[
-              status,
-              brief?.taskName ?? task.taskId,
-              brief?.runtime,
-            ].filter(Boolean).join(' · ')}
-            startedAt={task.startedAt}
-            selected={selectedTaskRunId === task.taskRunId}
-            onClick={() => setSelectedTaskRunId((current) => current === task.taskRunId ? null : task.taskRunId)}
-          />
-        </div>
-        {graph ? (
-          <Button
-            variant="ghost"
-            size="xs"
-            className="max-w-24 shrink-0 text-muted-foreground"
-            onClick={() => void shell.openTaskGraph(graph.taskgraphId)}
+      <div
+        key={task.taskRunId}
+        ref={isFocusTarget ? focusRowRef : undefined}
+        className="flex flex-col gap-1"
+      >
+        <div
+          className={cn(
+            'group/task flex h-9 items-center gap-1 rounded-lg px-3',
+            expanded && 'ring-1 ring-ring bg-accent/40',
+          )}
+        >
+          <button
+            type="button"
+            className="min-w-0 flex-1 truncate text-left text-sm"
+            title={label}
+            onClick={() => toggleExpand(key)}
           >
-            <span className="truncate">{graph.title ?? graph.taskgraphId}</span>
-          </Button>
+            {label}
+          </button>
+          <span className="flex shrink-0 items-center gap-0.5">
+            {renderTaskDuration(task, active)}
+            {active ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={(
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className="opacity-0 group-hover/task:opacity-100 group-focus-within/task:opacity-100 focus-visible:opacity-100"
+                      aria-label="取消任务"
+                      onClick={() => requestCancel(task.taskRunId)}
+                    />
+                  )}
+                >
+                  <Square />
+                </TooltipTrigger>
+                <TooltipContent>取消任务</TooltipContent>
+              </Tooltip>
+            ) : null}
+          </span>
+          <button type="button" className="shrink-0 text-muted-foreground" onClick={() => toggleExpand(key)} aria-label={expanded ? '收起' : '展开'}>
+            {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+          </button>
+        </div>
+        {expanded ? (
+          <div className="flex flex-col gap-2 px-1 pb-2">
+            <div className="max-h-80 overflow-auto rounded-lg border bg-muted/30">
+              <TaskTranscript
+                key={task.taskRunId}
+                taskRunId={task.taskRunId}
+                loader={transcriptLoader}
+                dark={dark}
+                onOpenExternal={onOpenExternal}
+              />
+            </div>
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+              {link ? (
+                <>
+                  <button type="button" className="hover:text-foreground" onClick={() => openSession(link.sessionId)}>
+                    来自「{link.title}」
+                  </button>
+                  <span className="text-border">·</span>
+                </>
+              ) : null}
+              <button
+                type="button"
+                className="hover:text-foreground"
+                onClick={() => void shell.openTaskTranscript(task.taskRunId, task.taskLabel ?? brief?.taskName)}
+              >
+                在窗口中打开
+              </button>
+              {active ? (
+                <>
+                  <span className="text-border">·</span>
+                  <button type="button" className="text-destructive hover:text-destructive/90" onClick={() => requestCancel(task.taskRunId)}>
+                    取消任务
+                  </button>
+                </>
+              ) : null}
+              {graph ? (
+                <>
+                  <span className="text-border">·</span>
+                  <button
+                    type="button"
+                    className="hover:text-foreground"
+                    onClick={() => void shell.openTaskGraph(graph.taskgraphId)}
+                  >
+                    任务图 {graph.title ?? graph.taskgraphId}
+                  </button>
+                </>
+              ) : null}
+            </p>
+          </div>
         ) : null}
       </div>
     );
   };
 
-  const empty = visibleGroups.every((session) => session.turns.length === 0)
-    && visibleStandalone.length === 0
-    && scopedFinished.length === 0;
+  const renderGraphRow = (graph: ListedGraph, active: boolean): React.ReactNode => {
+    const key = graphRowKey(graph);
+    const expanded = expandedKey === key;
+    const title = graph.title ?? graph.taskgraphId;
+
+    return (
+      <div key={graph.taskgraphId} className="flex flex-col gap-1">
+        <div
+          className={cn(
+            'flex h-9 items-center gap-1 rounded-lg px-3',
+            expanded && 'ring-1 ring-ring bg-accent/40',
+          )}
+        >
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+            onClick={() => toggleExpand(key)}
+          >
+            <span className="min-w-0 flex-1 truncate text-sm" title={title}>{title}</span>
+            <span className="shrink-0 text-sm text-muted-foreground">{graphStateLabel(graph, active)}</span>
+            {expanded ? <ChevronDown className="size-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
+          </button>
+        </div>
+        {expanded ? (
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 pb-2 text-xs text-muted-foreground">
+            <button
+              type="button"
+              className="hover:text-foreground"
+              onClick={() => void shell.openTaskGraph(graph.taskgraphId)}
+            >
+              任务图 {title}
+            </button>
+            {!active ? <span>· {graphStateLabel(graph, active)}</span> : null}
+          </p>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
-        {sessionOpen ? (
-          <ToggleGroup
-            aria-label="活动范围"
-            value={[scope]}
-            onValueChange={(values) => {
-              const value = values.find((item): item is 'session' | 'all' => item === 'session' || item === 'all');
-              if (value !== undefined) setScope(value);
-            }}
-            size="sm"
-            variant="outline"
-          >
-            <ToggleGroupItem value="session">本会话</ToggleGroupItem>
-            <ToggleGroupItem value="all">全部</ToggleGroupItem>
-          </ToggleGroup>
-        ) : (
-          <span className="text-sm font-medium">活动</span>
-        )}
-        <Button variant="ghost" size="icon-sm" aria-label="关闭" onClick={closeActivityPanel}>
-          <X />
-        </Button>
+      <div className="flex h-12 items-center justify-between gap-2 px-4">
+        <span className="text-sm font-medium">后台任务</span>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon-sm" aria-label="清除已结束" onClick={hideVisibleFinished}>
+            <Trash2 />
+          </Button>
+          <Button variant="ghost" size="icon-sm" aria-label="关闭" onClick={closeActivityPanel}>
+            <X />
+          </Button>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
         {stale ? <p className="px-2 py-1 text-xs text-warning">活动数据暂未更新</p> : null}
-        {visibleGroups.map((session) => session.turns.length > 0 ? (
-          <section key={session.sessionId} className="mb-2">
-            <Button variant="ghost" size="sm" className="max-w-full justify-start gap-2" onClick={() => openSession(session.sessionId)}>
-              <MessageSquare className="size-3.5 shrink-0" />
-              <span className="truncate">{session.title || '新会话'}</span>
-            </Button>
-            {session.turns.map((turn) => {
-              const turnTaskIds = new Set(turn.actions.map((action) => action.taskRunId));
-              const turnTasks = tasks.filter((task) => turnTaskIds.has(task.taskRunId));
-              const actions = turn.actions.filter((action) => action.status === 'running' && !action.taskRunId);
-              // A dispatch whose task run is executing is an implementation
-              // phase of its own: it is timed from the run it opened, not
-              // from the turn, and never labelled as compiling.
-              const taskRuns = turn.actions.filter(isRunningTask);
-              const taskRun = runningTaskAction(turn);
-              const phase = taskRun === undefined ? TURN_PHASE_LABEL[turn.phase ?? 'preparing'] : TASK_RUN_PHASE_LABEL;
-              return (
-                <div key={turn.id} className="ml-3 border-l border-border pl-2">
-                  <ActivityRow
-                    icon={Activity}
-                    title={'第 ' + turn.id + ' 轮 · ' + phase}
-                    detail={turn.user.text}
-                    startedAt={turn.startedAt}
-                    onClick={() => openSession(session.sessionId)}
-                  />
-                  {actions.length + taskRuns.length > 0 ? <>
-                    <p className="px-2.5 pt-1 text-xs text-muted-foreground">行动</p>
-                    {actions.map((action) => (
-                      <ActivityRow key={action.id} icon={Zap} title={ACTION_LABEL[action.kind]}
-                        detail={action.subtitle || action.title} startedAt={action.startedAt}
-                        onClick={() => openSession(session.sessionId)} />
-                    ))}
-                    {taskRuns.map((action) => (
-                      <ActivityRow key={action.id} icon={Zap} title={TASK_RUN_PHASE_LABEL}
-                        detail={action.subtitle || action.title} startedAt={action.startedAt}
-                        onClick={() => openSession(session.sessionId)} />
-                    ))}
-                  </> : null}
-                  {turnTasks.length > 0 ? <>
-                    <p className="px-2.5 pt-1 text-xs text-muted-foreground">智能体任务</p>
-                    {turnTasks.map(renderTask)}
-                  </> : null}
-                </div>
-              );
-            })}
-          </section>
-        ) : null)}
-        {visibleStandalone.length > 0 ? <>
-          <p className="px-2.5 pt-1 text-xs text-muted-foreground">独立运行的任务</p>
-          {visibleStandalone.map(renderTask)}
-        </> : null}
-        {scopedFinished.length > 0 ? <>
-          <p className="px-2.5 pt-1 text-xs text-muted-foreground">已结束的任务</p>
-          {scopedFinished.map(renderTask)}
-        </> : null}
-        {empty ? <p className="px-2 py-6 text-center text-xs text-muted-foreground">
-          {sessions.isPending ? '正在读取活动…' : stale ? '暂时无法读取活动' : '暂无进行中的会话或任务'}
-        </p> : null}
-      </div>
-
-      {selectedTaskRunId !== null && (
-        <>
-          <Separator />
-          <div className="flex max-h-[50%] min-h-40 shrink-0 flex-col">
-            <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
-              <span className="min-w-0 truncate text-xs text-muted-foreground">
-                {selectedTask?.taskLabel ?? details.data?.find((item) => item.taskRunId === selectedTaskRunId)?.taskName ?? selectedTaskRunId}
-              </span>
-              <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => void shell.openTaskTranscript(selectedTaskRunId, selectedTask?.taskLabel)}
-                >
-                  在窗口中打开
-                </Button>
-                {selectedTask !== undefined && selectedTask.finishedAt === undefined && (
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="text-destructive"
-                    onClick={() => void getSessionBridge().cancelTask(selectedTaskRunId).catch(() => undefined)}
-                  >
-                    取消任务
-                  </Button>
-                )}
-                <Button variant="ghost" size="icon-xs" aria-label="关闭预览" onClick={() => setSelectedTaskRunId(null)}>
-                  <X />
-                </Button>
+        {empty ? (
+          <p className="px-2 py-6 text-center text-sm text-muted-foreground">
+            {sessions.isPending ? '正在读取活动…' : '没有后台任务'}
+          </p>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="mb-1 flex w-full items-center gap-1 px-2 py-1 text-sm text-muted-foreground"
+              onClick={() => setRunningGroupOpen((open) => !open)}
+            >
+              {runningGroupOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+              <span>运行中 {runningCount}</span>
+            </button>
+            {runningGroupOpen ? (
+              <div className="mb-3 flex flex-col gap-1">
+                {runningGraphs.map((graph) => renderGraphRow(graph, true))}
+                {runningTasks.map((task) => renderTaskRow(task, true))}
               </div>
-            </div>
-            <TaskTranscript
-              key={selectedTaskRunId}
-              taskRunId={selectedTaskRunId}
-              loader={transcriptLoader}
-              dark={dark}
-              onOpenExternal={onOpenExternal}
-            />
-          </div>
-        </>
-      )}
-      <Separator />
-      <PanelFooterAction label="打开任务页" onClick={() => executeCommand('tasks.open')} />
+            ) : null}
+
+            <button
+              type="button"
+              className="mb-1 flex w-full items-center gap-1 px-2 py-1 text-sm text-muted-foreground"
+              onClick={() => setFinishedGroupOpen((open) => !open)}
+            >
+              {finishedGroupOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+              <span>已结束 {finishedCount}</span>
+            </button>
+            {finishedGroupOpen ? (
+              <div className="flex flex-col gap-1">
+                {visibleFinishedGraphs.map((graph) => renderGraphRow(graph, false))}
+                {visibleFinishedTasks.map((task) => renderTaskRow(task, false))}
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
     </div>
   );
 }
