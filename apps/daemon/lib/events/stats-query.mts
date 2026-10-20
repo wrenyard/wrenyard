@@ -1,4 +1,4 @@
-import { get as dbGet, getDb, query as dbQuery } from '../db/connection.mts'
+import { get as dbGet, getDb, query as dbQuery, run as dbRun } from '../db/connection.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import { migrateProviderId } from '../config/chatgpt-migration.mts'
 import { AuxiliaryRunStore } from '../db/stores/auxiliary-run-store.mts'
@@ -277,6 +277,186 @@ function readSummaryStamp(): string {
   return row ? `${row.e}/${row.t}/${row.x}/${row.a}/${row.c}` : ''
 }
 
+interface StatsDayCacheRow {
+  day_key: string
+  dispatch_count: number
+  input_tokens: number
+  output_tokens: number
+  done_count: number
+  failed_count: number
+  cancelled_count: number
+  built_at: string
+}
+
+/** Guarded json_extract for turn_usage input_tokens (matches live summary scan). */
+const SQL_TURN_USAGE_INPUT = `CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
+      AND json_type(e.data, '$.input_tokens') IN ('integer','real')
+      AND json_extract(e.data, '$.input_tokens') > 0
+      AND json_extract(e.data, '$.input_tokens') < 1e308
+ THEN json_extract(e.data, '$.input_tokens') ELSE 0 END`
+
+const SQL_TURN_USAGE_CACHED = `CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
+      AND json_type(e.data, '$.cached_input_tokens') IN ('integer','real')
+      AND json_extract(e.data, '$.cached_input_tokens') > 0
+      AND json_extract(e.data, '$.cached_input_tokens') < 1e308
+ THEN json_extract(e.data, '$.cached_input_tokens') ELSE 0 END`
+
+const SQL_TURN_USAGE_OUTPUT = `CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
+      AND json_type(e.data, '$.output_tokens') IN ('integer','real')
+      AND json_extract(e.data, '$.output_tokens') > 0
+      AND json_extract(e.data, '$.output_tokens') < 1e308
+ THEN json_extract(e.data, '$.output_tokens') ELSE 0 END`
+
+interface StatsDayWindow {
+  dayKey: string
+  startAt: string
+  endAt: string
+}
+
+function closedDayWindows(startAt: string, endBeforeIso: string): StatsDayWindow[] {
+  const days: StatsDayWindow[] = []
+  let start = new Date(startAt)
+  while (start.toISOString() < endBeforeIso) {
+    const end = new Date(start)
+    end.setDate(end.getDate() + 1)
+    days.push({ dayKey: localDayKeyOf(start.toISOString()), startAt: start.toISOString(), endAt: end.toISOString() })
+    start = end
+  }
+  return days
+}
+
+function readSealedDayCacheRow(dayKey: string): StatsDayCacheRow | undefined {
+  return dbGet<StatsDayCacheRow>(
+    `SELECT day_key, dispatch_count, input_tokens, output_tokens, done_count, failed_count, cancelled_count, built_at
+     FROM stats_day_cache WHERE day_key = ?`,
+    dayKey,
+  )
+}
+
+/** Missing closed day keys strictly before sealBeforeIso, oldest first, bounded to MAX_STATS_SUMMARY_DAYS. */
+export function listMissingSealedDayKeys(sealBeforeIso: string, now = new Date()): string[] {
+  const oldestStart = localDayOffsetStartIso(now, -(MAX_STATS_SUMMARY_DAYS - 1))
+  const missing: string[] = []
+  for (const day of closedDayWindows(oldestStart, sealBeforeIso)) {
+    if (!readSealedDayCacheRow(day.dayKey)) missing.push(day.dayKey)
+  }
+  return missing
+}
+
+function dayWindowFromDayKey(dayKey: string): StatsDayWindow | undefined {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey)
+  if (!match) return undefined
+  const start = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  const end = new Date(start)
+  end.setDate(start.getDate() + 1)
+  return { dayKey, startAt: start.toISOString(), endAt: end.toISOString() }
+}
+
+/** Seal one local calendar day of dispatch/turn_usage totals and terminal task outcomes. */
+export function sealStatsDay(dayKey: string): void {
+  const window = dayWindowFromDayKey(dayKey)
+  if (!window) return
+  const { startAt, endAt } = window
+  const builtAt = new Date().toISOString()
+  const eventTotals = dbGet<{
+    dispatch_count: number
+    input_tokens: number
+    output_tokens: number
+  }>(
+    `SELECT COALESCE(SUM(CASE WHEN e.type = 'dispatch' THEN 1 ELSE 0 END), 0) AS dispatch_count,
+            COALESCE(SUM(${SQL_TURN_USAGE_INPUT} + ${SQL_TURN_USAGE_CACHED}), 0) AS input_tokens,
+            COALESCE(SUM(${SQL_TURN_USAGE_OUTPUT}), 0) AS output_tokens
+     FROM events e
+     WHERE e.type IN ('dispatch', 'turn_usage')
+       AND e.created_at >= ? AND e.created_at < ?`,
+    startAt,
+    endAt,
+  )
+  const outcomeTotals = dbGet<{
+    done_count: number
+    failed_count: number
+    cancelled_count: number
+  }>(
+    `SELECT COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
+            COALESCE(SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_count,
+            COALESCE(SUM(CASE WHEN t.status IN ('cancelled', 'interrupted') THEN 1 ELSE 0 END), 0) AS cancelled_count
+     FROM tasks t
+     WHERE t.ended_at >= ? AND t.ended_at < ?
+       AND t.status IN ('done', 'failed', 'cancelled', 'interrupted')`,
+    startAt,
+    endAt,
+  )
+  dbRun(
+    `INSERT OR REPLACE INTO stats_day_cache (day_key, dispatch_count, input_tokens, output_tokens, done_count, failed_count, cancelled_count, built_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    dayKey,
+    eventTotals?.dispatch_count ?? 0,
+    eventTotals?.input_tokens ?? 0,
+    eventTotals?.output_tokens ?? 0,
+    outcomeTotals?.done_count ?? 0,
+    outcomeTotals?.failed_count ?? 0,
+    outcomeTotals?.cancelled_count ?? 0,
+    builtAt,
+  )
+}
+
+let statsDayCacheSealerStopped = false
+
+export function stopStatsDayCacheBackgroundSealer(): void {
+  statsDayCacheSealerStopped = true
+}
+
+/** Opportunistically seal missing closed days; never blocks startup. */
+export function startStatsDayCacheBackgroundSealer(options: { isShuttingDown: () => boolean }): void {
+  statsDayCacheSealerStopped = false
+  void (async () => {
+    try {
+      const sealBeforeIso = localDayOffsetStartIso(new Date(), -(31 - 1))
+      const missing = listMissingSealedDayKeys(sealBeforeIso)
+      for (const dayKey of missing) {
+        if (statsDayCacheSealerStopped || options.isShuttingDown()) return
+        try {
+          sealStatsDay(dayKey)
+        } catch (error) {
+          writeDaemonLogNonFatal('stats day cache seal failed', error)
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    } catch (error) {
+      writeDaemonLogNonFatal('stats day cache background sealer failed', error)
+    }
+  })()
+}
+
+function writeDaemonLogNonFatal(message: string, error: unknown): void {
+  const detail = error instanceof Error ? error.message : String(error)
+  console.warn(`${message}: ${detail}`)
+}
+
+function applySealedTotalsToBucket(bucket: DailyBucket, row: StatsDayCacheRow): void {
+  bucket.dispatchCount = row.dispatch_count
+  bucket.inputTokens = row.input_tokens
+  bucket.outputTokens = row.output_tokens
+  bucket.totalTokens = row.input_tokens + row.output_tokens
+  if (row.done_count > 0 || row.failed_count > 0 || row.cancelled_count > 0) {
+    bucket.outcomes = {
+      done: row.done_count,
+      failed: row.failed_count,
+      cancelled: row.cancelled_count,
+    }
+  }
+}
+
+function ensureSealedDayForBucket(dayKey: string, sealBeforeDayKey: string): StatsDayCacheRow | undefined {
+  if (dayKey >= sealBeforeDayKey) return undefined
+  let row = readSealedDayCacheRow(dayKey)
+  if (!row) {
+    sealStatsDay(dayKey)
+    row = readSealedDayCacheRow(dayKey)
+  }
+  return row
+}
+
 export function readTodayStats(now = new Date()): DailyStatsResponse {
   const window = localDayWindow(now)
   const dispatchRow = dbGet<{ count: number }>(
@@ -369,33 +549,26 @@ function readStatsSummaryUncached(
   // activity projection to extend to a full year.
   const windowsStartIso = localDayOffsetStartIso(now, -(31 - 1))
   const dailyStartIso = localDayOffsetStartIso(now, -(days - 1))
-  const fullStartIso = days > 31 ? dailyStartIso : windowsStartIso
+  const sealBeforeDayKey = localDayKeyOf(windowsStartIso)
   const fullEndIso = todayWindow.endAt
 
-  // One bounded events query over the longest requested projection. Token
+  // Daily chart days strictly before the 31-day live window are served from
+  // sealed per-day totals (lazy seal on read); rankings and fixed windows stay live.
+  for (const bucket of dailyBuckets) {
+    if (bucket.dayKey >= sealBeforeDayKey) continue
+    const sealed = ensureSealedDayForBucket(bucket.dayKey, sealBeforeDayKey)
+    if (sealed) applySealedTotalsToBucket(bucket, sealed)
+  }
+
+  // Bounded live event scan for the rolling 31-local-day window only. Token
   // fields are extracted in SQL under json_valid so the event `data` blob never
-  // crosses to JS; each guard preserves the exact nonNegativeNumber semantics
-  // (missing, non-numeric or non-positive JSON values all contribute 0), and a
-  // NULL/malformed/non-object payload yields three zeroes just like the skipped
-  // JS parse did. Dispatch rows carry no usable payload and select no data.
+  // crosses to JS; executions wide profile columns are not selected.
   const allEventsRows = dbQuery<StatsEventRow>(
-    `SELECT e.type, e.created_at, ex.profile, ex.resolved_profile, COALESCE(t.template, ex_t.template) AS template,
+    `SELECT e.type, e.created_at, COALESCE(t.template, ex_t.template) AS template,
             tra.provider AS provider, tra.model AS model, tra.model_id AS model_id,
-            CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
-                      AND json_type(e.data, '$.input_tokens') IN ('integer','real')
-                      AND json_extract(e.data, '$.input_tokens') > 0
-                      AND json_extract(e.data, '$.input_tokens') < 1e308
-                 THEN json_extract(e.data, '$.input_tokens') ELSE 0 END AS u_input,
-            CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
-                      AND json_type(e.data, '$.cached_input_tokens') IN ('integer','real')
-                      AND json_extract(e.data, '$.cached_input_tokens') > 0
-                      AND json_extract(e.data, '$.cached_input_tokens') < 1e308
-                 THEN json_extract(e.data, '$.cached_input_tokens') ELSE 0 END AS u_cached,
-            CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
-                      AND json_type(e.data, '$.output_tokens') IN ('integer','real')
-                      AND json_extract(e.data, '$.output_tokens') > 0
-                      AND json_extract(e.data, '$.output_tokens') < 1e308
-                 THEN json_extract(e.data, '$.output_tokens') ELSE 0 END AS u_output
+            ${SQL_TURN_USAGE_INPUT} AS u_input,
+            ${SQL_TURN_USAGE_CACHED} AS u_cached,
+            ${SQL_TURN_USAGE_OUTPUT} AS u_output
      FROM events e
      LEFT JOIN executions ex ON e.execution_id = ex.id
      LEFT JOIN tasks t ON e.task_id = t.id
@@ -403,11 +576,11 @@ function readStatsSummaryUncached(
      LEFT JOIN task_run_attempt_dispatch tra ON e.execution_id = tra.execution_id
      WHERE e.type IN ('dispatch', 'turn_usage')
        AND e.created_at >= ? AND e.created_at < ?`,
-    fullStartIso,
+    windowsStartIso,
     fullEndIso,
   )
 
-  // One bounded terminal+active task interval scan over the same window.
+  // One bounded terminal+active task interval scan over the 31-day window.
   // Terminal rows overlap via ended_at (idx_task_ended_at); queued/running rows
   // are bounded by status (idx_task_status) and end at the injected now.
   const taskIntervalRows = dbQuery<StatsTaskIntervalRow>(
@@ -423,7 +596,7 @@ function readStatsSummaryUncached(
        WHERE t.status IN ('queued','running')
          AND t.created_at < ?
      )`,
-    fullStartIso,
+    windowsStartIso,
     fullEndIso,
     now.toISOString(),
     fullEndIso,

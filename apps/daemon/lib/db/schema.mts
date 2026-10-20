@@ -1276,4 +1276,15 @@ const SCHEMA_STATEMENTS = [
   ...FWA_INDEX_STATEMENTS,
   STORAGE_CLEANUP_RUN_TABLE_SQL,
   ...STORAGE_CLEANUP_RUN_INDEX_STATEMENTS,
+  // Closed-calendar dispatch and turn_usage totals per day; sealed offline for stats.summary cold reads.
+  `CREATE TABLE IF NOT EXISTS stats_day_cache (
+  day_key TEXT PRIMARY KEY,
+  dispatch_count INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  done_count INTEGER NOT NULL,
+  failed_count INTEGER NOT NULL,
+  cancelled_count INTEGER NOT NULL,
+  built_at TEXT NOT NULL
+)`,
 ] as const

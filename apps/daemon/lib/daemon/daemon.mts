@@ -72,6 +72,7 @@ import { createWorkspaceControl } from './services/workspace-control.mts'
 import { ForemanConfigManager } from '../config/manager.mts'
 import { getForemanEventBus } from '../events/event-bus.mts'
 import { initializeLocalSpeedSamples, readLocalSpeedSamplesCached, updateLocalSpeedSample } from '../events/tps.mts'
+import { startStatsDayCacheBackgroundSealer, stopStatsDayCacheBackgroundSealer } from '../events/stats-query.mts'
 import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../events/event-types.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { WorkspaceTodoService, todoIndexPath } from './services/workspace-todo-service.mts'
@@ -459,6 +460,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
     // finalises: close the lane so their admission fails instead of handing
     // them ownership when the current holder releases.
     desktopLane.close()
+    stopStatsDayCacheBackgroundSealer()
     this.shutdownForce ||= force
     this.shutdownRequestedFlag = true
     this.resolveShutdownRequested()
@@ -620,6 +622,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
     // On timeout the cleanup fence keeps any suspended run from resuming SQL
     // against a released database.
     stopManagedCleanup()
+    stopStatsDayCacheBackgroundSealer()
     const cleanupDrained = await drainManagedCleanup(SHUTDOWN_DRAIN_TIMEOUT_MS)
     if (!cleanupDrained) {
       writeDaemonLog('warn', `cleanup drain exceeded ${SHUTDOWN_DRAIN_TIMEOUT_MS}ms; remaining cleanup is fenced and will not resume SQL`)
@@ -2661,6 +2664,7 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
   // served from memory and refreshed per execution on completion, so no routing
   // path re-runs the historical TPS queries.
   initializeLocalSpeedSamples(db)
+  startStatsDayCacheBackgroundSealer({ isShuttingDown: () => false })
   const taskDispatchResolver = await createTaskDispatchResolver({
     catalog,
     runtime: providerRuntime,
