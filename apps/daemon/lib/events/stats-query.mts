@@ -371,32 +371,54 @@ function dayWindowFromDayKey(dayKey: string): StatsDayWindow | undefined {
   return { dayKey, startAt: start.toISOString(), endAt: end.toISOString() }
 }
 
-const SQL_INSERT_SEAL_WINDOW = `INSERT INTO seal_windows (day_key, start_iso, end_iso) VALUES (?, ?, ?)`
+interface SealEventLoadRow {
+  created_at: string
+  type: string
+  u_input: number
+  u_cached: number
+  u_output: number
+}
 
-const SQL_BATCH_SEAL_OUTCOMES = `INSERT INTO seal_outcomes (day_key, done, failed, cancelled)
-     SELECT w.day_key,
-            COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN t.status IN ('cancelled', 'interrupted') THEN 1 ELSE 0 END), 0)
-     FROM seal_windows w
-     LEFT JOIN tasks t ON t.ended_at >= w.start_iso AND t.ended_at < w.end_iso
-       AND t.status IN ('done', 'failed', 'cancelled', 'interrupted')
-     GROUP BY w.day_key`
+interface SealTaskLoadRow {
+  ended_at: string
+  status: string
+}
 
-const SQL_BATCH_FILL_STATS_DAY_CACHE = `INSERT OR REPLACE INTO stats_day_cache (day_key, dispatch_count, input_tokens, output_tokens, done_count, failed_count, cancelled_count, built_at)
-     SELECT w.day_key,
-            COALESCE(SUM(CASE WHEN e.type = 'dispatch' THEN 1 ELSE 0 END), 0),
-            COALESCE(SUM(${SQL_TURN_USAGE_INPUT} + ${SQL_TURN_USAGE_CACHED}), 0),
-            COALESCE(SUM(${SQL_TURN_USAGE_OUTPUT}), 0),
-            COALESCE(MAX(o.done), 0),
-            COALESCE(MAX(o.failed), 0),
-            COALESCE(MAX(o.cancelled), 0),
-            ?
-     FROM seal_windows w
-     LEFT JOIN events e ON e.created_at >= w.start_iso AND e.created_at < w.end_iso
-       AND e.type IN ('dispatch', 'turn_usage')
-     LEFT JOIN seal_outcomes o ON o.day_key = w.day_key
-     GROUP BY w.day_key`
+interface SealDayTotals {
+  dispatch_count: number
+  input_tokens: number
+  output_tokens: number
+  done_count: number
+  failed_count: number
+  cancelled_count: number
+}
+
+function emptySealDayTotals(): SealDayTotals {
+  return {
+    dispatch_count: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    done_count: 0,
+    failed_count: 0,
+    cancelled_count: 0,
+  }
+}
+
+const SQL_LOAD_SEAL_EVENTS = `SELECT e.created_at, e.type,
+            ${SQL_TURN_USAGE_INPUT} AS u_input,
+            ${SQL_TURN_USAGE_CACHED} AS u_cached,
+            ${SQL_TURN_USAGE_OUTPUT} AS u_output
+     FROM events e
+     WHERE e.created_at >= ? AND e.created_at < ?
+       AND e.type IN ('dispatch', 'turn_usage')`
+
+const SQL_LOAD_SEAL_TASKS = `SELECT t.ended_at, t.status
+     FROM tasks t
+     WHERE t.ended_at >= ? AND t.ended_at < ?
+       AND t.status IN ('done', 'failed', 'cancelled', 'interrupted')`
+
+const SQL_SEAL_UPSERT_STATS_DAY = `INSERT OR REPLACE INTO stats_day_cache (day_key, dispatch_count, input_tokens, output_tokens, done_count, failed_count, cancelled_count, built_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
 /** Seal one local calendar day of dispatch/turn_usage totals and terminal task outcomes. */
 export function sealStatsDay(dayKey: string): void {
@@ -411,21 +433,60 @@ function sealStatsDaysInTransaction(dayKeys: string[]): void {
     if (window) windows.push(window)
   }
   if (windows.length === 0) return
+
+  let minStart = windows[0].startAt
+  let maxEnd = windows[0].endAt
+  for (const window of windows) {
+    if (window.startAt < minStart) minStart = window.startAt
+    if (window.endAt > maxEnd) maxEnd = window.endAt
+  }
+
+  const totalsByDayKey = new Map<string, SealDayTotals>()
+  for (const window of windows) {
+    totalsByDayKey.set(window.dayKey, emptySealDayTotals())
+  }
+
   const builtAt = new Date().toISOString()
   dbTx(() => {
-    dbRun(
-      `CREATE TEMP TABLE IF NOT EXISTS seal_windows (day_key TEXT PRIMARY KEY, start_iso TEXT NOT NULL, end_iso TEXT NOT NULL)`,
-    )
-    dbRun(`DELETE FROM seal_windows`)
-    for (const window of windows) {
-      dbRun(SQL_INSERT_SEAL_WINDOW, window.dayKey, window.startAt, window.endAt)
+    const eventRows = dbQuery<SealEventLoadRow>(SQL_LOAD_SEAL_EVENTS, minStart, maxEnd)
+    const taskRows = dbQuery<SealTaskLoadRow>(SQL_LOAD_SEAL_TASKS, minStart, maxEnd)
+
+    for (const row of eventRows) {
+      const key = localDayKeyOf(row.created_at)
+      const totals = totalsByDayKey.get(key)
+      if (!totals) continue
+      if (row.type === 'dispatch') {
+        totals.dispatch_count++
+      } else if (row.type === 'turn_usage') {
+        totals.input_tokens += row.u_input + row.u_cached
+        totals.output_tokens += row.u_output
+      }
     }
-    dbRun(
-      `CREATE TEMP TABLE IF NOT EXISTS seal_outcomes (day_key TEXT PRIMARY KEY, done INTEGER NOT NULL, failed INTEGER NOT NULL, cancelled INTEGER NOT NULL)`,
-    )
-    dbRun(`DELETE FROM seal_outcomes`)
-    dbRun(SQL_BATCH_SEAL_OUTCOMES)
-    dbRun(SQL_BATCH_FILL_STATS_DAY_CACHE, builtAt)
+
+    for (const row of taskRows) {
+      const key = localDayKeyOf(row.ended_at)
+      const totals = totalsByDayKey.get(key)
+      if (!totals) continue
+      if (row.status === 'done') totals.done_count++
+      else if (row.status === 'failed') totals.failed_count++
+      else if (row.status === 'cancelled' || row.status === 'interrupted') totals.cancelled_count++
+    }
+
+    for (const dayKey of dayKeys) {
+      const totals = totalsByDayKey.get(dayKey)
+      if (!totals) continue
+      dbRun(
+        SQL_SEAL_UPSERT_STATS_DAY,
+        dayKey,
+        totals.dispatch_count,
+        totals.input_tokens,
+        totals.output_tokens,
+        totals.done_count,
+        totals.failed_count,
+        totals.cancelled_count,
+        builtAt,
+      )
+    }
   })
 }
 
