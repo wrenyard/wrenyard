@@ -1,7 +1,8 @@
 import type { WorkBuddyBuild } from './definition.ts';
 
-export const WORKBUDDY_USER_AGENT = 'WorkBuddy/5.5.6';
-export const WORKBUDDY_CONFIG_USER_AGENT = 'CLI/2.0.0 WorkBuddy/5.5.6';
+export const WORKBUDDY_UA_VERSION = '5.5.6';
+export const WORKBUDDY_USER_AGENT = `WorkBuddy/${WORKBUDDY_UA_VERSION}`;
+export const WORKBUDDY_CONFIG_USER_AGENT = `CLI/2.0.0 WorkBuddy/${WORKBUDDY_UA_VERSION}`;
 
 export const AUTH_POLL_INTERVAL_MS = 1_000;
 export const AUTH_POLL_TIMEOUT_MS = 5 * 60_000;

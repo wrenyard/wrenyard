@@ -37,7 +37,9 @@ export interface WorkBuddyCredentialStore {
   readonly build: WorkBuddyBuild;
 }
 
-const refreshQueues = new Map<WorkBuddyBuildId, Promise<unknown>>();
+const KEEP_RENEWED_MS = 60_000;
+const renewingByRefreshToken = new Map<string, Promise<WorkBuddyStoredAuth | undefined>>();
+const renewedByRefreshToken = new Map<string, { at: number; next: WorkBuddyStoredAuth }>();
 
 function persistencePath(context: ProviderContext, buildId: WorkBuddyBuildId): string {
   return join(resolveWrenyardStateRoot(context.env), 'providers', 'workbuddy', `${buildId}.json`);
@@ -107,7 +109,7 @@ export async function readPersistedAuth(store: WorkBuddyCredentialStore): Promis
     return parseStoredAuth(parsed);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw error;
+    return undefined;
   }
 }
 
@@ -206,18 +208,86 @@ function envelopeData(payload: unknown): Record<string, unknown> | undefined {
   return isRecord(data) ? data : undefined;
 }
 
-async function withRefreshQueue<T>(buildId: WorkBuddyBuildId, run: () => Promise<T>): Promise<T> {
-  const previous = refreshQueues.get(buildId);
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => { release = resolve; });
-  refreshQueues.set(buildId, current);
-  try {
-    if (previous) await previous;
-    return await run();
-  } finally {
-    if (refreshQueues.get(buildId) === current) refreshQueues.delete(buildId);
-    release();
+function refreshDedupeKey(store: WorkBuddyCredentialStore, refreshToken: string): string {
+  return `${store.build.id}\n${refreshToken}`;
+}
+
+function mergeRefreshedTokens(previous: WorkBuddyStoredAuth, next: WorkBuddyStoredAuth): WorkBuddyStoredAuth {
+  return {
+    accessToken: next.accessToken,
+    ...(next.refreshToken ? { refreshToken: next.refreshToken } : previous.refreshToken ? { refreshToken: previous.refreshToken } : {}),
+    ...(next.expiresAt !== undefined ? { expiresAt: next.expiresAt } : previous.expiresAt !== undefined ? { expiresAt: previous.expiresAt } : {}),
+    ...(next.refreshExpiresAt !== undefined ? { refreshExpiresAt: next.refreshExpiresAt } : previous.refreshExpiresAt !== undefined ? { refreshExpiresAt: previous.refreshExpiresAt } : {}),
+    ...(next.domain ? { domain: next.domain } : previous.domain ? { domain: previous.domain } : {}),
+    ...(next.tokenType ? { tokenType: next.tokenType } : previous.tokenType ? { tokenType: previous.tokenType } : {}),
+    ...(previous.uid ? { uid: previous.uid } : {}),
+    ...(previous.enterpriseId ? { enterpriseId: previous.enterpriseId } : {}),
+    ...(previous.plan ? { plan: previous.plan } : {}),
+  };
+}
+
+async function renewWorkBuddyAuth(
+  store: WorkBuddyCredentialStore,
+  auth: WorkBuddyStoredAuth,
+  signal: AbortSignal,
+  fetchImpl: typeof fetch,
+): Promise<WorkBuddyStoredAuth | undefined> {
+  const refreshToken = auth.refreshToken;
+  if (!refreshToken) return undefined;
+  const key = refreshDedupeKey(store, refreshToken);
+  const cached = renewedByRefreshToken.get(key);
+  if (cached && Date.now() - cached.at < KEEP_RENEWED_MS) {
+    return mergeRefreshedTokens(auth, cached.next);
   }
+  let pending: Promise<WorkBuddyStoredAuth | undefined> | undefined = renewingByRefreshToken.get(key);
+  if (!pending) {
+    pending = (async (): Promise<WorkBuddyStoredAuth | undefined> => {
+      const headers = new Headers({
+        'X-Refresh-Token': refreshToken,
+        'X-Auth-Refresh-Source': 'plugin',
+        'Content-Type': 'application/json',
+        ...LOGIN_ACCOUNT_HEADERS,
+      });
+      if (auth.domain) headers.set('X-Domain', auth.domain);
+      if (auth.enterpriseId) {
+        headers.set('X-Enterprise-Id', auth.enterpriseId);
+        headers.set('X-Tenant-Id', auth.enterpriseId);
+      }
+      const response = await fetchImpl(refreshTokenUrl(store.build), {
+        method: 'POST',
+        headers,
+        body: '{}',
+        signal,
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        if (!accessExpired(auth, Date.now())) return auth;
+        return undefined;
+      }
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        if (!accessExpired(auth, Date.now())) return auth;
+        return undefined;
+      }
+      const data = envelopeData(payload);
+      if (!data) {
+        if (!accessExpired(auth, Date.now())) return auth;
+        return undefined;
+      }
+      const next = parseRefreshPayload(data, auth);
+      renewedByRefreshToken.set(key, { next, at: Date.now() });
+      await writePersistedAuth(store, next);
+      return next;
+    })().finally(() => {
+      renewingByRefreshToken.delete(key);
+    });
+    renewingByRefreshToken.set(key, pending);
+  }
+  const renewed = await pending;
+  if (!renewed) return undefined;
+  return mergeRefreshedTokens(auth, renewed);
 }
 
 function parseRefreshPayload(data: Record<string, unknown>, previous: WorkBuddyStoredAuth): WorkBuddyStoredAuth {
@@ -258,45 +328,7 @@ export async function refreshWorkBuddyAuth(
     if (!accessExpired(auth, Date.now())) return auth;
     return undefined;
   }
-  return withRefreshQueue(store.build.id, async () => {
-    const headers = new Headers({
-      'X-Refresh-Token': auth.refreshToken!,
-      'X-Auth-Refresh-Source': 'plugin',
-      'Content-Type': 'application/json',
-      ...LOGIN_ACCOUNT_HEADERS,
-    });
-    if (auth.domain) headers.set('X-Domain', auth.domain);
-    if (auth.enterpriseId) {
-      headers.set('X-Enterprise-Id', auth.enterpriseId);
-      headers.set('X-Tenant-Id', auth.enterpriseId);
-    }
-    const response = await fetchImpl(refreshTokenUrl(store.build), {
-      method: 'POST',
-      headers,
-      body: '{}',
-      signal,
-    });
-    if (!response.ok) {
-      await response.body?.cancel();
-      if (!accessExpired(auth, Date.now())) return auth;
-      return undefined;
-    }
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch {
-      if (!accessExpired(auth, Date.now())) return auth;
-      return undefined;
-    }
-    const data = envelopeData(payload);
-    if (!data) {
-      if (!accessExpired(auth, Date.now())) return auth;
-      return undefined;
-    }
-    const next = parseRefreshPayload(data, auth);
-    await writePersistedAuth(store, next);
-    return next;
-  });
+  return renewWorkBuddyAuth(store, auth, signal, fetchImpl);
 }
 
 export async function resolveWorkBuddySession(
@@ -439,7 +471,10 @@ async function finalizeWorkBuddyLoginAccount(
       if (!response.ok) throw new Error('WorkBuddy login account request failed');
       return auth;
     }
-    if (isRecord(payload) && payload.code === 12151) continue;
+    if (isRecord(payload) && payload.code === 12151) {
+      await sleep(AUTH_POLL_INTERVAL_MS, signal);
+      continue;
+    }
     const data = envelopeData(payload);
     if (!data) {
       if (!response.ok) throw new Error('WorkBuddy login account request failed');
@@ -471,6 +506,24 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
     }
     signal.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+export function meterAuthHeaders(auth: WorkBuddyStoredAuth, userAgent: string): Headers {
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    'User-Agent': userAgent,
+    Authorization: `Bearer ${auth.accessToken}`,
+    'X-User-Id': auth.uid ?? '',
+    'X-Product': 'SaaS',
+    'X-IDE-Type': 'WorkBuddy',
+  });
+  if (auth.domain) headers.set('X-Domain', auth.domain);
+  const native = nativeHeaderRecord(auth);
+  for (const [name, value] of Object.entries(native)) {
+    if (name !== 'X-User-Id') headers.set(name, value);
+  }
+  return headers;
 }
 
 export function authHeadersForRefresh(store: WorkBuddyCredentialStore, auth: WorkBuddyStoredAuth): Headers {

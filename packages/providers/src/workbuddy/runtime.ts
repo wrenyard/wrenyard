@@ -12,7 +12,7 @@ import { codeBuddyProtocolError } from '../codebuddy/route-errors.ts';
 import { productCreditsAreFree } from '../codebuddy/product.ts';
 import type { WorkBuddyBuild } from './definition.ts';
 import {
-  authHeadersForRefresh,
+  meterAuthHeaders,
   nativeHeadersForSession,
   readPersistedAuth,
   refreshWorkBuddyAuth,
@@ -26,11 +26,17 @@ import {
 import type { WorkBuddyModelState } from './models.ts';
 import {
   WORKBUDDY_CONFIG_USER_AGENT,
+  WORKBUDDY_UA_VERSION,
   WORKBUDDY_USER_AGENT,
   configUrl,
   enterpriseUserUsageUrl,
   userResourceSummaryUrl,
 } from './protocol.ts';
+import {
+  fitWorkBuddyTools,
+  normalizeWorkBuddyToolChoice,
+  renameWorkBuddyResponse,
+} from './tools.ts';
 
 export interface WorkBuddyProviderCredential extends ProviderCredential {
   readonly value: string;
@@ -48,6 +54,10 @@ const sessionByCredential = new WeakMap<WorkBuddyProviderCredential, WorkBuddySe
 const ROUND_TTL_MS = 30 * 60 * 1000;
 const ROUND_CACHE_LIMIT = 512;
 const CATALOG_TTL_MS = 5 * 60_000;
+const TOOL_NAME_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_SYSTEM_TEXT = 'You are a helpful assistant.';
+
+const toolNamesByTurn = new Map<string, { names: ReadonlyMap<string, string>; lastSeenMs: number }>();
 
 function workBuddyId(): string {
   return randomUUID().replace(/-/gu, '');
@@ -123,8 +133,7 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
   }
 
   async function fetchCatalog(session: WorkBuddySession, signal?: AbortSignal): Promise<void> {
-    const headers = authHeadersForRefresh(store, session);
-    headers.set('User-Agent', WORKBUDDY_CONFIG_USER_AGENT);
+    const headers = meterAuthHeaders(session, WORKBUDDY_CONFIG_USER_AGENT);
     const response = await fetchImpl(configUrl(store.build), { method: 'GET', headers, signal });
     if (!response.ok) {
       await response.body?.cancel();
@@ -158,14 +167,17 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
     },
     async beforeRequest(context: ProviderRequestHookContext): Promise<void> {
       if (context.protocol !== 'openai_chat') return;
-      if (context.body.tool_choice !== null && typeof context.body.tool_choice === 'object') {
-        context.body.tool_choice = 'required';
-      }
+      const { safeToOriginal } = fitWorkBuddyTools(context.body);
+      normalizeWorkBuddyToolChoice(context.body, safeToOriginal);
       context.headers.set('User-Agent', WORKBUDDY_USER_AGENT);
       context.headers.set('X-Product', 'SaaS');
       context.headers.set('X-IDE-Type', 'WorkBuddy');
-      context.headers.set('x-requested-with', 'XMLHttpRequest');
-      context.headers.set('x-agent-intent', 'craft');
+      context.headers.set('X-Requested-With', 'XMLHttpRequest');
+      context.headers.set('X-Agent-Intent', 'craft');
+      context.headers.set('X-Agent-Purpose', 'conversation');
+      context.headers.set('X-IDE-Name', 'WorkBuddy');
+      context.headers.set('X-IDE-Version', WORKBUDDY_UA_VERSION);
+      context.headers.set('X-Agent-Type', 'main');
       const next = round(
         conversationKey(context.executionId, context.body),
         continuesTurn(context.body),
@@ -176,11 +188,17 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
       context.headers.set('x-conversation-request-id', next.conversationRequestId);
       context.headers.set('x-conversation-message-id', messageId);
       context.headers.set('x-request-id', messageId);
+      if (safeToOriginal.size > 0) {
+        for (const [key, entry] of toolNamesByTurn) {
+          if (context.nowMs - entry.lastSeenMs > TOOL_NAME_TTL_MS) toolNamesByTurn.delete(key);
+        }
+        toolNamesByTurn.set(next.conversationRequestId, { names: safeToOriginal, lastSeenMs: context.nowMs });
+      }
       const messages = context.body.messages;
       if (Array.isArray(messages) && messages.length > 0) {
         const first = messages[0];
         if (first && typeof first === 'object' && !Array.isArray(first) && (first as Record<string, unknown>).role !== 'system') {
-          context.body.messages = [{ role: 'system', content: '' }, ...messages];
+          context.body.messages = [{ role: 'system', content: DEFAULT_SYSTEM_TEXT }, ...messages];
         }
       }
       if (typeof context.body.max_completion_tokens === 'number' && context.body.max_tokens === undefined) {
@@ -193,8 +211,14 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
         if (entry.role === 'developer') entry.role = 'system';
       }
     },
-    afterResponse(context: ProviderResponseHookContext): ProviderResponseHookResult | undefined {
-      if (context.protocol !== 'openai_chat' || context.status < 400) return undefined;
+    async afterResponse(context: ProviderResponseHookContext): Promise<ProviderResponseHookResult | undefined> {
+      if (context.protocol !== 'openai_chat') return undefined;
+      const turnId = context.headers.get('x-conversation-request-id');
+      const toolNames = turnId ? toolNamesByTurn.get(turnId)?.names : undefined;
+      if (context.status < 400) {
+        if (!toolNames?.size || !context.response) return undefined;
+        return { response: await renameWorkBuddyResponse(context.response, toolNames) };
+      }
       const mapped = codeBuddyProtocolError({ status: context.status, body: context.errorBody });
       return mapped === undefined ? undefined : { status: mapped.status, errorBody: mapped.body };
     },
@@ -248,7 +272,7 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
       await fetchCatalog(session, signal);
     },
     async fetchQuotaSnapshot(session: WorkBuddySession, signal?: AbortSignal): Promise<unknown> {
-      const headers = authHeadersForRefresh(store, session);
+      const headers = meterAuthHeaders(session, WORKBUDDY_USER_AGENT);
       const summaryResponse = await fetchImpl(userResourceSummaryUrl(store.build), {
         method: 'POST',
         headers,
@@ -265,6 +289,7 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
         ? (summaryData as Record<string, unknown>).Packages
         : undefined;
       if (Array.isArray(packages) && packages.length > 0) return summaryPayload;
+      if (!session.enterpriseId?.trim()) return summaryPayload;
       const usageResponse = await fetchImpl(enterpriseUserUsageUrl(store.build), {
         method: 'POST',
         headers,

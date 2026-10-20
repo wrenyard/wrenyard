@@ -1,5 +1,6 @@
 import type { ProviderDefinition } from '../base/index.ts';
 import type { ProviderQuota, QuotaSnapshot } from '../base/index.ts';
+import type { ProviderQuotaBinding } from '../base/quota.ts';
 import { object, observation, number } from '../base/quota-parsing.ts';
 import { quotaPool, quotaWindow } from '../base/quota-helpers.ts';
 
@@ -7,16 +8,22 @@ const MONTHLY_POOL = quotaPool('workbuddy/monthly', [
   quotaWindow('monthly', 'full_cycle', 'provider_parser', 'packages/providers/src/workbuddy/quota.ts'),
 ]);
 
+function workBuddyQuotaBindings(definition: ProviderDefinition): readonly ProviderQuotaBinding[] {
+  return definition.models.map((model) => Object.freeze({
+    providerId: definition.id,
+    modelId: model.id,
+    pools: Object.freeze([MONTHLY_POOL]),
+  }));
+}
+
 export function createWorkBuddyQuota(
   definition: ProviderDefinition,
   hasSession: () => Promise<unknown> | unknown,
 ): ProviderQuota {
   return {
-    bindings: definition.models.map((model) => Object.freeze({
-      providerId: definition.id,
-      modelId: model.id,
-      pools: Object.freeze([MONTHLY_POOL]),
-    })),
+    get bindings() {
+      return workBuddyQuotaBindings(definition);
+    },
     defaultPools: [MONTHLY_POOL],
     async read(source): Promise<QuotaSnapshot | undefined> {
       // The quota catch classifies a ClientError as configuration_missing so the

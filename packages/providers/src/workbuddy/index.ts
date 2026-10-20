@@ -1,5 +1,5 @@
 import type { Provider, ProviderContext } from '../base/index.ts';
-import type { WorkBuddyBuild } from './definition.ts';
+import type { WorkBuddyBuild, WorkBuddyBuildId } from './definition.ts';
 import { WORKBUDDY_BUILDS } from './definition.ts';
 import { defaultProviderContext } from './credentials.ts';
 import { createWorkBuddyModelState } from './models.ts';
@@ -16,9 +16,15 @@ export interface WorkBuddyProvider extends Provider {
   refreshCredential(credential: import('../base/provider.ts').ProviderCredential, signal: AbortSignal): Promise<import('../base/provider.ts').ProviderCredential>;
 }
 
+const sharedModelStates = new Map<WorkBuddyBuildId, ReturnType<typeof createWorkBuddyModelState>>();
+
 export function createWorkBuddyProvider(build: WorkBuddyBuild, options: WorkBuddyOptions = {}): WorkBuddyProvider {
   const context = options.context ?? defaultProviderContext();
-  const state = createWorkBuddyModelState(build);
+  let state = sharedModelStates.get(build.id);
+  if (!state) {
+    state = createWorkBuddyModelState(build);
+    sharedModelStates.set(build.id, state);
+  }
   const runtime = createWorkBuddyRuntime({
     store: { context, build },
     state,
