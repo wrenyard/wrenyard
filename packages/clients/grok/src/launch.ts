@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, stat } from 'node:fs/promises';
+import { appendFile, cp, mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRequest } from '@wrenyard/agent-client';
@@ -146,6 +146,83 @@ async function findGrokRunHomeWithSession(env: NodeJS.ProcessEnv, sessionId: str
     return newest?.path;
 }
 
+const interruptedToolResultContent = '[interrupted: previous run was killed before this tool completed]';
+
+/**
+ * Append synthetic `tool_result` lines for assistant tool calls that never
+ * completed before the previous run died. Grok replay would otherwise wait
+ * forever on resume. Fails open when the session tree or history is missing.
+ */
+async function repairInterruptedToolCalls(home: string, sessionId: string): Promise<void> {
+    const sessionsDir = join(home, 'sessions');
+    let chatHistoryPath: string | undefined;
+    try {
+        const cwdDirs = await readdir(sessionsDir);
+        for (const cwdDir of cwdDirs) {
+            const candidate = join(sessionsDir, cwdDir, sessionId, 'chat_history.jsonl');
+            try {
+                const info = await stat(candidate);
+                if (!info.isFile())
+                    continue;
+                chatHistoryPath = candidate;
+                break;
+            }
+            catch {
+                continue;
+            }
+        }
+    }
+    catch {
+        return;
+    }
+    if (chatHistoryPath === undefined)
+        return;
+    let raw: string;
+    try {
+        raw = await readFile(chatHistoryPath, 'utf8');
+    }
+    catch {
+        return;
+    }
+    const toolCallIds = new Set<string>();
+    const resultIds = new Set<string>();
+    for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed.length === 0)
+            continue;
+        let record: unknown;
+        try {
+            record = JSON.parse(trimmed);
+        }
+        catch {
+            continue;
+        }
+        if (record === null || typeof record !== 'object')
+            continue;
+        const entry = record as Record<string, unknown>;
+        if (entry.type === 'assistant' && Array.isArray(entry.tool_calls)) {
+            for (const toolCall of entry.tool_calls) {
+                if (toolCall !== null && typeof toolCall === 'object' && typeof (toolCall as Record<string, unknown>).id === 'string')
+                    toolCallIds.add((toolCall as Record<string, unknown>).id as string);
+            }
+        }
+        if (entry.type === 'tool_result' && typeof entry.tool_call_id === 'string')
+            resultIds.add(entry.tool_call_id);
+    }
+    const dangling = [...toolCallIds].filter((id) => !resultIds.has(id));
+    if (dangling.length === 0)
+        return;
+    const suffix = dangling.map((id) => JSON.stringify({
+        type: 'tool_result',
+        tool_call_id: id,
+        content: interruptedToolResultContent,
+    })).join('\n') + '\n';
+    try {
+        await appendFile(chatHistoryPath, suffix, 'utf8');
+    }
+    catch { /* resume must not fail because repair could not write */ }
+}
+
 /**
  * Preflight the gateway `/models` listing for the requested route. This check
  * fails open: any fetch, timeout, parse, or non-JSON error means "unknown",
@@ -230,6 +307,7 @@ export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv):
                 throw new Error(`native Grok resume snapshot for session ${request.resumeSessionId} was not found`);
             }
         }
+        await repairInterruptedToolCalls(home, request.resumeSessionId);
     }
     else if (request.mode !== 'gateway') {
         const userHome = join(homedir(), '.grok');
