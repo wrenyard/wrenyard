@@ -118,8 +118,7 @@ const effortLadder = (levels: readonly ReasoningEffort[]): Readonly<Record<strin
 export const codeBuddyClient: ClientDefinition = {
   id: 'codebuddy',
   nativeProvider: 'codebuddy',
-  unsupportedGatewayProviders: ['opencode-go'],
-  gatewayProtocols: ['openai_chat'],
+  gatewayProtocols: [],
   taskCapable: true,
 };
 

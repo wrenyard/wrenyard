@@ -440,17 +440,18 @@ export async function resolveRuntimeTaskPlans(
     }
     return pending;
   };
-  return Object.fromEntries(await Promise.all(Object.entries(plans).map(async ([target, plan]) => {
+  return Object.fromEntries((await Promise.all(Object.entries(plans).map(async ([target, plan]) => {
     const provider = catalog.provider(plan.provider);
     if (!provider) return [target, plan] as const;
     const credential = await resolveCredential(provider);
+    if (plan.mode === 'gateway' && credential === undefined) return null;
     // A thinking mapping may already have substituted the upstream model; that
     // exact selection wins over the provider-level runtime remap.
     if (plan.upstreamModel !== undefined) return [target, plan] as const;
     const upstreamModel = runtime.resolveUpstreamModel(provider, plan.model, credential);
     if (upstreamModel === plan.model) return [target, plan] as const;
     return [target, { ...plan, upstreamModel }] as const;
-  })));
+  }))).filter((entry): entry is readonly [string, DispatchPlan] => entry !== null));
 }
 
 export function upstreamAuthHeaders(provider: ProviderDefinition, credential: ProviderCredential, protocol: string): Headers {
