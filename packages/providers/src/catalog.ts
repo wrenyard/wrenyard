@@ -11,7 +11,16 @@ export const BUILTIN_CLIENTS: readonly ClientDefinition[] = [
   { id: 'codex', nativeProvider: 'chatgpt', gatewayProtocols: ['openai_responses'], taskCapable: true, supportsNativeWebSearch: true },
   // Cursor CLI gained WebSearch/WebFetch per https://cursor.com/changelog/cli-jan-16-2026
   // (checked 2026-09-10).
-  { id: 'cursor', nativeProvider: 'cursor', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'], taskCapable: true, supportsNativeWebSearch: true },
+  {
+    id: 'cursor',
+    nativeProvider: 'cursor',
+    // Native Cursor CLI ignores gateway-mode runs and always launches with this machine's account,
+    // so it cannot serve WorkBuddy catalog models and must not pair with WorkBuddy providers in gateway plans.
+    unsupportedGatewayProviders: ['opencode-go', 'workbuddy', 'workbuddy-ai'],
+    gatewayProtocols: ['openai_chat'],
+    taskCapable: true,
+    supportsNativeWebSearch: true,
+  },
   { id: 'dsh', forwardsGatewayReasoningEffort: true, unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'] },
   {
     id: 'grok',

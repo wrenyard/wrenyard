@@ -1,7 +1,7 @@
 import { turnUsageRecord } from '@wrenyard/agent-client/native';
 import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
-    finishedEvent, jsonStringValue, messageEvent, readNativeRecords, reasoningRecord, recordOf, runFinishedRecord, sessionIdOf, stringOf, textOf, toolCallRecord, toolResultRecord,
+    errorValue, finishedEvent, jsonStringValue, messageEvent, readNativeRecords, reasoningRecord, recordOf, runFinishedRecord, sessionIdOf, stringOf, textOf, toolCallRecord, toolResultRecord,
 } from '@wrenyard/agent-client/native';
 import { ResponseTpsSampler, completeUsageTokens, hasNormalizedFailureField } from '@wrenyard/agent-client/statistics';
 
@@ -102,7 +102,30 @@ export async function* decodeCodeBuddy(
                     sampler.takeSamples(data);
                 yield { type: 'output', record: turnUsageRecord(data) };
             }
-            yield finishedEvent('codebuddy', sessionId, output, failed);
+            let terminalOutput = output;
+            if (failed) {
+                const textOutput = textOf(record);
+                let errorText = '';
+                for (const key of ['error', 'message'] as const) {
+                    if (record[key] === undefined)
+                        continue;
+                    const value = errorValue(record[key], '');
+                    if (typeof value === 'string') {
+                        if (value)
+                            errorText = value;
+                    }
+                    else if (value && typeof value === 'object' && !Array.isArray(value)) {
+                        const fromObject = stringOf(value as Record<string, unknown>, 'message') || jsonStringValue(value);
+                        if (fromObject)
+                            errorText = fromObject;
+                    }
+                    if (errorText)
+                        break;
+                }
+                if (errorText && errorText !== textOutput)
+                    terminalOutput = textOutput ? `${textOutput}\n${errorText}` : errorText;
+            }
+            yield finishedEvent('codebuddy', sessionId, terminalOutput, failed);
         }
     }
 }
