@@ -1296,7 +1296,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       // commit and is best-effort: a failure here can never roll back the
       // committed terminal result, never leak the repo write lock, and never
       // discard the usage/events captured before the failure.
-      if (committed && terminal.status === 'done') {
+      if (committed && (terminal.status === 'done' || terminal.status === 'timeout')) {
         try {
           this.persistNativeSessionIfCaptured(entry, endedAt)
         } catch (sessionError) {
@@ -1305,6 +1305,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
             `[foreman] Failed to persist native session for ${entry.executionId}: ${errorMessage(sessionError)}`,
           )
         }
+      }
+      if (committed && terminal.status === 'done') {
         // The execution's usage is durable at this point, so the local speed
         // window can pick up its paired sample. This is best-effort: a failure
         // must never reject an execution that already committed.
@@ -1607,16 +1609,31 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     if (entry.terminalGeneration > 0) return
     const settled = await this.raceCancellationSettlement(entry)
     if (settled === 'wait' || entry.terminalGeneration > 0) return
-    const won = this.reconcileTimeout(entry.executionId, nowIso())
+    const endedAt = nowIso()
+    const won = this.reconcileTimeout(entry.executionId, endedAt)
     let result: ExecutionResult | undefined
     if (won) {
+      const messageOutput = (entry.finalOutput ?? entry.outputParts.join('')).trim() || null
+      const processOutput = entry.processTail.trim() || null
+      const finalText = entry.finalOutput?.trim()
+      const output = processOutput === null
+        ? messageOutput
+        : finalText && !processOutput.includes(finalText) ? `${processOutput}\n${finalText}` : processOutput
       result = {
         executionId: entry.executionId,
         status: 'timeout',
-        output: (entry.finalOutput ?? entry.outputParts.join('')).trim() || null,
+        output,
         error: 'timeout',
         exitCode: null,
         killReason: 'timeout',
+      }
+      try {
+        this.persistNativeSessionIfCaptured(entry, endedAt)
+      } catch (sessionError) {
+        this.log(
+          'warn',
+          `[foreman] Failed to persist native session for ${entry.executionId}: ${errorMessage(sessionError)}`,
+        )
       }
     } else {
       const row = this.getExecution(entry.executionId)
@@ -2263,8 +2280,6 @@ function normalizeClientEvent(event: StreamEventRecord): StreamEventRecord | und
 }
 
 function detectNativeSession(event: StreamEventRecord): { nativeSessionId: string; clientFamily: ClientFamily } | undefined {
-  if (stringProp(event, 'type') !== 'run_finished') return undefined
-
   const nativeSessionId = stringProp(event, 'native_session_id')
   const clientFamily = stringProp(event, 'client_family')
   if (nativeSessionId && isClientFamily(clientFamily)) {
