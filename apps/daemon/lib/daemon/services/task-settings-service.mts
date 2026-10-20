@@ -952,6 +952,24 @@ export class TaskSettingsService {
   async snapshot(params: TaskSettingsSnapshotParams = {}): Promise<TaskSettingsSnapshotResult> {
     const { record, revision } = this.readConfigRecord()
     const tasks = tasksSectionOf(record)
+    const snapshotSettingsSection = tasks?.settings
+    this.maybeWarnStoredLegacyTimeout('global', snapshotSettingsSection?.global)
+    const snapshotByTask = snapshotSettingsSection?.byTask
+    if (
+      snapshotByTask !== undefined &&
+      snapshotByTask !== null &&
+      typeof snapshotByTask === 'object' &&
+      !Array.isArray(snapshotByTask)
+    ) {
+      for (const storedIdentity of Object.keys(snapshotByTask)) {
+        if (Object.prototype.hasOwnProperty.call(snapshotByTask, storedIdentity)) {
+          this.maybeWarnStoredLegacyTimeout(
+            storedIdentity,
+            (snapshotByTask as Record<string, unknown>)[storedIdentity],
+          )
+        }
+      }
+    }
     const userGlobal = readGlobalTaskSettings(tasks, record)
 
     const summaries = await this.collectSnapshotSummaries(params)
@@ -1091,6 +1109,8 @@ export class TaskSettingsService {
     // request; both passes below use this identical weight set and this
     // identical global routing exclusion set.
     const currentRecord = this.readConfigRecord().record
+    const routingTestSettingsSection = tasksSectionOf(currentRecord)?.settings
+    this.maybeWarnStoredLegacyTimeout('global', routingTestSettingsSection?.global)
     const globalSettings = readGlobalTaskSettings(tasksSectionOf(currentRecord), currentRecord)
     const routingWeights = globalSettings?.routingWeights
     const requirements = mergeRoutingExclusions(routingFormRequirements(params.automatic), globalSettings?.dispatch)
@@ -1165,6 +1185,24 @@ export class TaskSettingsService {
   async routingTestTasks(_params: TaskRoutingTestTasksParams = {}): Promise<TaskRoutingTestTasksResult> {
     const currentRecord = this.readConfigRecord().record
     const settings = tasksSectionOf(currentRecord)
+    const routingTestTasksSettingsSection = settings?.settings
+    this.maybeWarnStoredLegacyTimeout('global', routingTestTasksSettingsSection?.global)
+    const routingTestTasksByTask = routingTestTasksSettingsSection?.byTask
+    if (
+      routingTestTasksByTask !== undefined &&
+      routingTestTasksByTask !== null &&
+      typeof routingTestTasksByTask === 'object' &&
+      !Array.isArray(routingTestTasksByTask)
+    ) {
+      for (const storedIdentity of Object.keys(routingTestTasksByTask)) {
+        if (Object.prototype.hasOwnProperty.call(routingTestTasksByTask, storedIdentity)) {
+          this.maybeWarnStoredLegacyTimeout(
+            storedIdentity,
+            (routingTestTasksByTask as Record<string, unknown>)[storedIdentity],
+          )
+        }
+      }
+    }
     const userGlobal = readGlobalTaskSettings(settings, currentRecord) ?? undefined
     const summaries = await this.collectSnapshotSummaries({})
     const tasks: TaskRoutingTestTask[] = summaries.map((summary) => {
@@ -1262,6 +1300,8 @@ export class TaskSettingsService {
     }
 
     const tasks = tasksSectionOf(current.record)
+    const saveGlobalSettingsSection = tasks?.settings
+    this.maybeWarnStoredLegacyTimeout('global', saveGlobalSettingsSection?.global)
     const existingGlobal = readGlobalTaskSettings(tasks, current.record)
     const nextGlobal = this.applyPatchToLayer(existingGlobal, params.patch)
 
@@ -1308,6 +1348,15 @@ export class TaskSettingsService {
     })
 
     const tasks = tasksSectionOf(current.record)
+    const saveTaskSettingsSection = tasks?.settings
+    const saveTaskByTask = saveTaskSettingsSection?.byTask
+    if (
+      saveTaskByTask !== undefined &&
+      saveTaskByTask !== null &&
+      Object.prototype.hasOwnProperty.call(saveTaskByTask, identity)
+    ) {
+      this.maybeWarnStoredLegacyTimeout(identity, (saveTaskByTask as Record<string, unknown>)[identity])
+    }
     const baselineLayer = readPerTaskSettings(tasks, identity)
     const nextLayer = this.applyPatchToLayer(baselineLayer, params.patch)
 
