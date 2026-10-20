@@ -15,7 +15,7 @@ const FAMILIES = ['opencode', 'codebuddy', 'pi'] as const
 const SHARED_CLIENT_DIRS: Record<typeof FAMILIES[number], readonly string[]> = {
   opencode: ['config'],
   codebuddy: ['agent-config'],
-  pi: [],
+  pi: ['agent', 'sessions'],
 }
 
 interface Marker {

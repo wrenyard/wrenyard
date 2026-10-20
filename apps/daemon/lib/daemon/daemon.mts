@@ -1352,6 +1352,7 @@ async function createForemanDaemonResources(
     dsh: 'DSH',
     grok: 'Grok',
     opencode: 'OpenCode',
+    pi: 'Pi',
   }
   // npm package backing each client, when one is published. Clients without an
   // entry (e.g. cursor) have no supported install source and are managed
@@ -1363,6 +1364,7 @@ async function createForemanDaemonResources(
     opencode: 'opencode-ai',
     codebuddy: '@tencent-ai/codebuddy-code',
     dsh: '@deepseek-ai/dsh',
+    pi: '@mariozechner/pi-coding-agent',
   }
   // In-flight install/upgrade jobs, keyed by client id, and the last recorded
   // failure message per client. Shared so client.list reflects live state.
