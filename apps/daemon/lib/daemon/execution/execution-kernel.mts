@@ -678,7 +678,9 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         failureCategory: null,
         startedAt: factsContext.startedAt,
         endedAt: record.finishedAt,
-        timedOut: isTaskRunTimedOut(factsContext),
+        // Time-limit warning resume saves a truncated run as done; tasks.execution_id
+        // points at the resume attempt, so the local truncatedByTimeLimit flag is reliable.
+        timedOut: isTaskRunTimedOut(factsContext) || truncatedByTimeLimit,
         checkoutPath: runCheckoutPath,
         worktreeId: executionOptions.worktreeId ?? factsContext.worktree,
       })
