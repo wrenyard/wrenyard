@@ -353,7 +353,7 @@ function botSystemPrompt(entry: BotAgentEntry, all: Iterable<BotAgentEntry>): st
   const roster = peers.length === 0
     ? 'No other bot is enabled in this group right now.'
     : [
-      'Other bots enabled in this group; address one with @id or @name:',
+      'Other bots enabled in this group; address one with @id or @name, or reach one with the message tool by its id:',
       ...peers.map(peer => {
         const icon = peer.identity?.icon === undefined ? '' : `${peer.identity.icon} `
         const description = peer.identity?.description === undefined ? '' : ` — ${peer.identity.description}`
