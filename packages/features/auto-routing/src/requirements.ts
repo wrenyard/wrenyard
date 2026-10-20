@@ -1,13 +1,13 @@
 /** Auxiliary, task and bot requirements as data; no IO or selection logic. */
 import type { IntelligenceTier, ModelCapability } from '@wrenyard/models';
-import type { QuotaState } from './types.ts';
+import type { QuotaState, ScoreWeights } from './types.ts';
 
 /** Every role that may issue an auxiliary call. */
 export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch' | 'document' | 'todo' | 'vcs' | 'project' | 'reply' | 'status' | 'suggestion';
 
-/** One tier pool in a bot's step-down ladder. */
+/** One tier pool in a bot or auxiliary role's step-down ladder. */
 export interface BotLadderStep {
-  readonly intelligence: readonly ('premium' | 'high' | 'mid')[];
+  readonly intelligence: readonly ('premium' | 'high' | 'mid' | 'low')[];
   /** Exhausted routes are never used, so no ladder step may name that state. */
   readonly quotaState?: Exclude<QuotaState, 'exhausted'>;
 }
@@ -21,21 +21,43 @@ export interface RoleReasoningRequirement {
   requiredCapabilities: readonly ModelCapability[];
   /** Ordered tier pools tried in sequence; absent keeps the plain ranked order. */
   ladder?: readonly BotLadderStep[];
+  /** Optional per-role ranking weights; absent uses the global routing settings. */
+  scoreWeights?: ScoreWeights;
+  /** Optional post-selection effort rule; high-or-above is reserved for bots. */
+  reasoningEffortRule?: 'high-or-above';
 }
 
 const TEXT: readonly ModelCapability[] = ['text'];
+
+/** Speed-first auxiliary weights (S=speed, P=price, Q=quota, I=intelligence); intelligence is not scored; these take precedence over the global routing settings for auxiliary roles. */
+export const AUXILIARY_SCORE_WEIGHTS: ScoreWeights = { S: 0.6, P: 0.2, Q: 0.2, I: 0 };
+
+/** Auxiliary roles try low/mid models with abundant quota first, then low/mid models with sufficient quota, then the ordinary ranked order over every remaining admitted route (the last step has no quota-state restriction; exhausted routes are always dropped). */
+export const AUXILIARY_LADDER: readonly BotLadderStep[] = [
+  { intelligence: ['low', 'mid'], quotaState: 'abundant' },
+  { intelligence: ['low', 'mid'], quotaState: 'sufficient' },
+  { intelligence: ['low', 'mid', 'high', 'premium'] },
+];
+
+/** The dispatch compiler tries mid models first, then low models, then the ordinary ranked order over the rest. */
+export const DISPATCH_LADDER: readonly BotLadderStep[] = [
+  { intelligence: ['mid'] },
+  { intelligence: ['low'] },
+  { intelligence: ['low', 'mid', 'high', 'premium'] },
+];
+
 export const ROLE_REQUIREMENTS: Readonly<Record<AuxiliaryCallRole, RoleReasoningRequirement>> = {
-  title: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT },
-  status: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT },
-  suggestion: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT },
-  'memory-search': { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT },
-  'search': { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT },
-  dispatch: { intelligenceMin: 'mid', intelligenceExpected: 'high', expectedTps: 100, minimumContextWindow: 131072, requiredCapabilities: TEXT },
-  document: { intelligenceMin: 'mid', intelligenceExpected: 'high', expectedTps: 100, minimumContextWindow: 131072, requiredCapabilities: TEXT },
-  vcs: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT },
-  todo: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT },
-  project: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT },
-  reply: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT },
+  title: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 400, minimumContextWindow: 0, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
+  status: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 400, minimumContextWindow: 0, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
+  suggestion: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 400, minimumContextWindow: 0, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
+  'memory-search': { intelligenceMin: 'low', intelligenceExpected: 'mid', expectedTps: 400, minimumContextWindow: 0, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
+  'search': { intelligenceMin: 'low', intelligenceExpected: 'mid', expectedTps: 400, minimumContextWindow: 131072, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
+  dispatch: { intelligenceMin: 'low', intelligenceExpected: 'high', expectedTps: 400, minimumContextWindow: 131072, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: DISPATCH_LADDER },
+  document: { intelligenceMin: 'low', intelligenceExpected: 'high', expectedTps: 400, minimumContextWindow: 131072, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
+  vcs: { intelligenceMin: 'low', intelligenceExpected: 'mid', expectedTps: 400, minimumContextWindow: 131072, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
+  todo: { intelligenceMin: 'low', intelligenceExpected: 'mid', expectedTps: 400, minimumContextWindow: 131072, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
+  project: { intelligenceMin: 'low', intelligenceExpected: 'mid', expectedTps: 400, minimumContextWindow: 131072, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
+  reply: { intelligenceMin: 'low', intelligenceExpected: 'mid', expectedTps: 400, minimumContextWindow: 131072, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
 };
 
 /**
@@ -50,9 +72,12 @@ export const TASK_REQUIREMENT: RoleReasoningRequirement = ROLE_REQUIREMENTS.repl
  *  model in a usable state. Exhausted routes are never used. Low stays
  *  excluded by the minimum gate. */
 export const BOT_REQUIREMENT: RoleReasoningRequirement = {
-  ...ROLE_REQUIREMENTS.reply,
   intelligenceMin: 'mid',
   intelligenceExpected: 'premium',
+  expectedTps: 200,
+  minimumContextWindow: 131072,
+  requiredCapabilities: TEXT,
+  reasoningEffortRule: 'high-or-above',
   ladder: [
     { intelligence: ['premium', 'high'], quotaState: 'abundant' },
     { intelligence: ['premium', 'high'], quotaState: 'sufficient' },

@@ -303,7 +303,8 @@ function createSelector(
       if (candidate) inputs.push(candidate); else reject('invalid model evidence');
     });
     const weights = settings?.routingWeights;
-    const scoreWeights = weights ? { P: weights.price, S: weights.speed, Q: weights.quota, I: weights.intelligence } : undefined;
+    const scoreWeights = requirements.scoreWeights
+      ?? (weights ? { P: weights.price, S: weights.speed, Q: weights.quota, I: weights.intelligence } : undefined);
     // Scores are per candidate, so filtering the ranked list keeps the ranking of any layer.
     const ranked = new AutoRouter().rank(inputs, scoreWeights);
     for (const excluded of ranked.excluded) reject(excluded.reason);
@@ -328,7 +329,9 @@ function createSelector(
       // one step's quotaState, but the mid step has no state restriction, so
       // each route is emitted at most once, at its first matching step. The
       // global effort layer below is intentionally skipped: it could drop every
-      // mid model that lacks the preferred effort. Candidates matching no step
+      // auxiliary model that lacks the bot's preferred effort. Auxiliary routes
+      // use their model's lowest declared level; only bots use high-or-above.
+      // Candidates matching no step
       // are dropped defensively.
       const emitted = new Set<string>();
       const ladderPool = ladder.flatMap(step => admitted.filter(({ model, tier, quotaState }) => {
@@ -342,9 +345,11 @@ function createSelector(
       if (!ladderPool.length) throw new Error(`Auxiliary role ${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
       return ladderPool.map(({ model, levels }) => ({
         model,
-        // The bot rule: high when the model declares it, otherwise the nearest
-        // level above high, otherwise the model's highest level.
-        reasoningEffort: resolveReasoningEffort('high', levels),
+        // The high-or-above rule is bot-only; auxiliary ladders use the model's
+        // lowest declared level.
+        reasoningEffort: requirements.reasoningEffortRule === 'high-or-above'
+          ? resolveReasoningEffort('high', levels)
+          : lowestReasoningEffort(levels),
       }));
     }
     // Effort is a post-selection parameter: every admitted route is returned at
