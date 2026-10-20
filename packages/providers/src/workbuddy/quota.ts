@@ -7,7 +7,10 @@ const MONTHLY_POOL = quotaPool('workbuddy/monthly', [
   quotaWindow('monthly', 'full_cycle', 'provider_parser', 'packages/providers/src/workbuddy/quota.ts'),
 ]);
 
-export function createWorkBuddyQuota(definition: ProviderDefinition): ProviderQuota {
+export function createWorkBuddyQuota(
+  definition: ProviderDefinition,
+  hasSession: () => Promise<unknown> | unknown,
+): ProviderQuota {
   return {
     bindings: definition.models.map((model) => Object.freeze({
       providerId: definition.id,
@@ -16,6 +19,18 @@ export function createWorkBuddyQuota(definition: ProviderDefinition): ProviderQu
     })),
     defaultPools: [MONTHLY_POOL],
     async read(source): Promise<QuotaSnapshot | undefined> {
+      // The quota catch classifies a ClientError as configuration_missing so the
+      // provider does not appear activated; providers cannot import
+      // @wrenyard/clients, so return the same snapshot shape instead.
+      if (!await hasSession()) {
+        return {
+          provider: definition.id,
+          status: 'error',
+          stale: false,
+          code: 'configuration_missing',
+          error: 'Provider quota unavailable',
+        };
+      }
       return normalizeWorkBuddyQuota(definition.id, observation(await source.read()));
     },
   };

@@ -280,15 +280,8 @@ function projectCatalog(
     const quota = byId.get(id);
     const authMode = discoveredStatus?.authMode ?? 'none';
     const projectedQuota = quota ? projectProvider(id, quota, lastSuccessAt) : undefined;
-    const configured = projectedQuota?.code === 'configuration_missing'
-      || projectedQuota?.code === 'authentication_required'
-      ? false
-      : projectedQuota?.code === 'quota_query_failed'
-        ? true
-        : projectedQuota?.status === 'ok'
-          ? true
-          : discoveredStatus?.configured
-            ?? (quota !== undefined && quota.status !== 'unavailable');
+    const configured = discoveredStatus?.configured
+      ?? (quota !== undefined && quota.status !== 'unavailable');
     if (projectedQuota && isQuotaUnavailable(projectedQuota.status)) {
       // CodeBuddy never advertises a quota lookup source: only the locally
       // observed exhaustion is ever projected, so a connected-but-unobserved
