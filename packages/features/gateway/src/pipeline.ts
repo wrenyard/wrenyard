@@ -19,13 +19,14 @@ import type { CircuitPhase, MarkableFailure, RouteStateStore, RouteStatus } from
 import { ResponseSampler, type ResponseTpsContract } from './response-tps.ts';
 import { repairUpstreamResponse, relayResponse } from './relay.ts';
 import { gatewayErrorBody, mapUpstreamErrorBody, streamErrorFact, upstreamErrorFact, type UpstreamErrorFact } from './errors.ts';
-import { applyReasoningFields, type GatewayProtocolModule, type GatewayUsage } from './protocols/types.ts';
+import { applyReasoningFields, type GatewayProtocolModule, type GatewayUsage, type ResponseObserver } from './protocols/types.ts';
 
 export interface GatewayRequestCompletedEvent {
   protocol: GatewayProtocol;
   role?: string;
   sessionId?: string;
-  usage?: GatewayUsage;
+  /** `partial: true` marks usage captured mid-stream from an aborted request. */
+  usage?: GatewayUsage & { partial?: boolean };
   reasoningParameters?: Record<string, unknown>;
   routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'access_denied' | 'model_unavailable';
   routeUntil?: string;
@@ -424,6 +425,10 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         ...(attemptId === undefined ? {} : { attemptId }),
       };
       let usage: GatewayUsage | undefined;
+      // The response observers live outside the relay call so the catch path
+      // can still record the partial usage and TPS state of an aborted stream.
+      let observer: ResponseObserver | undefined;
+      let sampler: ResponseSampler | undefined;
       let activeCredential = credential;
       /**
        * Record one route fault through the same classification path, correlated
@@ -580,8 +585,8 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         // The selected protocol module translates its own generation events
         // into protocol-neutral signals for the shared TPS sampler; the sample
         // model is the requested canonical public model.
-        const sampler = new ResponseSampler({ now: options.now, model: registeredModel, requestStartedAtMs });
-        const observer = module.createObserver();
+        sampler = new ResponseSampler({ now: options.now, model: registeredModel, requestStartedAtMs });
+        observer = module.createObserver();
         const translator = module.createTpsTranslator();
         const relayed = await raceAbort(relayResponse(repaired, response, {
           module, provider: resolved.provider, providers: options.providers,
@@ -669,7 +674,17 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         } else {
           response.destroy();
         }
-        await finish({ ...forwarded, status, ...faultFact, ...(usage ? { usage } : {}) });
+        // A cancelled or timed-out stream that already produced output still
+        // consumed the tokens it reported: record the usage the observer saw,
+        // marked partial, plus any TPS sample the sampler settled. A request
+        // that never streamed output records no usage.
+        const partialUsage = usage === undefined && response.headersSent ? observer?.result() : undefined;
+        await finish({
+          ...forwarded, status, ...faultFact,
+          ...(partialUsage === undefined ? {} : { usage: { ...partialUsage, partial: true } }),
+          ...(usage ? { usage } : {}),
+          ...(sampler?.sample() ?? {}),
+        });
       } finally {
         if (fetchTimer !== undefined) clearTimeout(fetchTimer);
         if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
