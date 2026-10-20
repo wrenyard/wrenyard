@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -172,9 +171,16 @@ async function launchPiGateway(
                 ]
                 : []),
         ];
+        const sessionsDir = clientStateDirForEnv(env, 'pi', 'sessions');
+        await mkdir(sessionsDir, { recursive: true, mode: 0o700 });
         const args = [
             ...basePiArgs(request, 'wrenyard'),
-            '--no-session',
+            '--session-dir', sessionsDir,
+            '--no-skills',
+            '--no-prompt-templates',
+            '--no-themes',
+            ...(mcpServers.length === 0 ? ['--no-extensions'] as const : []),
+            ...(request.resumeSessionId ? ['--session', request.resumeSessionId] as const : []),
         ];
         return {
             executable,
@@ -206,11 +212,10 @@ async function launchPiNative(
     const mcpServers = resolveMcpServers(request.mcpServers);
     if (mcpServers.length > 0)
         await configurePiMcp(agentDir, mcpServers);
-    const sessionId = request.resumeSessionId || randomBytes(16).toString('hex');
     const args = [
         ...basePiArgs(request, request.provider),
-        '--session', sessionId,
         '--session-dir', sessionsDir,
+        ...(request.resumeSessionId ? ['--session', request.resumeSessionId] as const : []),
     ];
     return {
         executable,
