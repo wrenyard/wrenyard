@@ -125,7 +125,7 @@ function flushUsage(usage: {
 
 /**
  * Decode Pi JSONL records into shared agent events. Terminal success requires
- * `agent_settled` without abort, a final assistant `message_end` with stopReason
+ * `agent_end` (or `agent_settled`) without abort, a final assistant `message_end` with stopReason
  * `stop`, and a clean process exit.
  */
 export async function* decodePi(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent> {
@@ -227,7 +227,8 @@ export async function* decodePi(events: AsyncIterable<StreamChunk>): AsyncGenera
             }
             continue;
         }
-        if (type === 'agent_settled') {
+        // Pi 0.73 ends a run with agent_end; agent_settled is accepted for other versions.
+        if (type === 'agent_settled' || type === 'agent_end') {
             settled = true;
             if (record.aborted === true)
                 settledAborted = true;
