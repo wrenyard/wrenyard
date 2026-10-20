@@ -114,18 +114,16 @@ const BOT_STATE_VIEW: Record<BotState, { label: string; tone: StatusTone }> = {
 
 const MODE_LABELS: Record<BotMode, string> = { dryRun: '试运行', live: '正式' };
 
-/** Chinese label and tone of every workspace-todo status. `done` (execution
- *  finished) and `accepted` (acceptance passed) are deliberately distinct. */
+/** Chinese label and tone of every workspace-todo status. */
 const TODO_STATUS_VIEW: Record<TodoStatus, { label: string; tone: StatusTone }> = {
   open: { label: '待处理', tone: 'muted' },
   in_progress: { label: '进行中', tone: 'running' },
   done: { label: '执行完成', tone: 'warning' },
-  accepted: { label: '验收完成', tone: 'success' },
   cancelled: { label: '已取消', tone: 'muted' },
 };
 
 /** Every status in dropdown order. */
-const TODO_STATUS_ORDER: readonly TodoStatus[] = ['open', 'in_progress', 'done', 'accepted', 'cancelled'];
+const TODO_STATUS_ORDER: readonly TodoStatus[] = ['open', 'in_progress', 'done', 'cancelled'];
 
 const TODO_KEYS = { list: ['todo', 'list'] as const };
 

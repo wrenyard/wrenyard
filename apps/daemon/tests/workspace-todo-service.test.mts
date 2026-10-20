@@ -117,23 +117,21 @@ test('files are authoritative: a new service instance reads the same todos', asy
   }
 })
 
-test('done and accepted remain distinct stored statuses', async () => {
+test('a stored legacy accepted status reads as done', async () => {
   const root = makeRoot()
   try {
     const service = new WorkspaceTodoService(root)
-    const todo = await service.createTodo({ title: 'Distinct', request: 'r', acceptance: 'a' })
+    const todo = await service.createTodo({ title: 'Legacy', request: 'r', acceptance: 'a' })
 
     const done = await service.updateTodo({ id: todo.id, status: 'done' })
     assert.equal(done.status, 'done')
     assert.equal((await service.getTodo(todo.id)).status, 'done')
 
-    const accepted = await service.updateTodo({ id: todo.id, status: 'accepted' })
-    assert.equal(accepted.status, 'accepted')
-    assert.notEqual(done.status, accepted.status)
-    assert.equal((await service.getTodo(todo.id)).status, 'accepted')
-
-    // The status is written to the file, not held in memory.
-    assert.match(readFileSync(join(root, 'todos', `${todo.id}.md`), 'utf-8'), /status: accepted/)
+    // A legacy file storing `accepted` is normalized to `done` on read.
+    const file = join(root, 'todos', `${todo.id}.md`)
+    writeFileSync(file, readFileSync(file, 'utf-8').replace('status: done', 'status: accepted'), 'utf-8')
+    assert.equal((await service.getTodo(todo.id)).status, 'done')
+    assert.match(readFileSync(file, 'utf-8'), /status: accepted/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

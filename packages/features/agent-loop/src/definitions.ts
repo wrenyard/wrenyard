@@ -152,7 +152,7 @@ function todoSystemPrompt(): string {
     'Rules:',
     '- Use only these native methods. Never read or edit todo files directly, and never dispatch a task or an external task for todo work.',
     '- For a read, return the actual todo contents from the result: id, title, status, dependencies, request, acceptance and attachments as reported. Do not replace them with a summary.',
-    '- done means execution finished; accepted means acceptance passed. They are distinct statuses. Never claim a todo is accepted from implementation alone; set accepted only when the intent says the acceptance criteria were verified.',
+    '- A todo status is one of open, in_progress, done or cancelled; done means execution finished. Set done only when the intent says the work is complete.',
     '- An update changes only the fields the intent names. Omit every other field so the store keeps it unchanged.',
     '- Change a status, project label, dependency, request, acceptance or attachment only when the intent asks for that change and is authorized for it. When the intent does not authorize a change, leave it out and say so in the summary.',
     '- There is no delete. Never try to remove a todo; report that removal is unsupported.',

@@ -255,7 +255,7 @@ export interface InboxClientOptions extends RunAdapterOptions {
   /**
    * Optional, read-only supplement for dependency gating: an id this returns
    * true for counts as a finished dependency for intake even when its file is
-   * not yet `done`/`accepted`. It never changes a dependency's own status,
+   * not yet `done`. It never changes a dependency's own status,
    * never rescues a missing or cancelled dependency, and when absent gating is
    * exactly the on-disk check.
    */
@@ -346,7 +346,7 @@ function createWorkspaceInboxClient(
     async complete(id: string) {
       const todo = await getWorkspaceTodo(service, id)
       if (todo === null) return { ok: false }
-      if (todo.status !== 'accepted' && todo.status !== 'done') {
+      if (todo.status !== 'done') {
         await service.updateTodo({ id, status: 'done' })
       }
       return { ok: true }
@@ -377,7 +377,7 @@ async function getWorkspaceTodo(service: WorkspaceTodoService, id: string): Prom
 
 /**
  * A todo is dispatchable when it is open work and every dependency is finished
- * on disk (`done`/`accepted`). The optional callback may additionally treat an
+ * on disk (`done`; legacy stored `accepted` reads as `done`). The optional callback may additionally treat an
  * unfinished dependency as finished, but it can never rescue a missing or
  * cancelled dependency, and it never changes the todo's own status or `open`.
  */
@@ -390,7 +390,7 @@ function isWorkspaceTodoDispatchable(
   return todo.depends_on.every((id) => {
     const dependency = todos.get(id)
     if (dependency === undefined) return false
-    if (dependency.status === 'done' || dependency.status === 'accepted') return true
+    if (dependency.status === 'done') return true
     if (dependency.status === 'cancelled') return false
     return isDependencyCompleted?.(id) === true
   })

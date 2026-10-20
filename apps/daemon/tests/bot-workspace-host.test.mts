@@ -253,9 +253,9 @@ test('a cancelled workspace source is not resurrected by a dispatch status write
   }
 })
 
-// ── 3. done is persisted before accepted ────────────────────────────────────
+// ── 3. done is persisted before acceptance ──────────────────────────────────
 
-test('the review-ready gate persists done before acceptance persists accepted', async () => {
+test('the review-ready gate persists done before the item is accepted', async () => {
   const fixture = makeFixture('lifecycle', 'live')
   try {
     await withConfigHome(fixture.home, async () => {
@@ -350,30 +350,29 @@ test('the review-ready gate persists done before acceptance persists accepted', 
       assert.equal(store.getItem(bot.id, item.id).state, 'ready')
       assert.equal(todoStatus(fixture.root, todo.id), 'done')
 
-      // Acceptance: lane, rebase, then the passing run that writes `accepted`.
+      // Acceptance: lane, rebase, then the passing run; the todo stays `done`.
       await host.tick(bot.id)
       await host.tick(bot.id)
       await host.tick(bot.id)
       await host.tick(bot.id)
       assert.equal(store.getItem(bot.id, item.id).state, 'accepted')
-      assert.equal(todoStatus(fixture.root, todo.id), 'accepted')
+      assert.equal(todoStatus(fixture.root, todo.id), 'done')
 
-      // The two writes are separate, and `done` was persisted first.
+      // The ready gate already persisted `done`; acceptance writes no status.
       const writes = store.listLog(bot.id, 0)
         .filter(entry => entry.code === 'todo.status')
         .map(entry => entry.message)
-      assert.equal(writes.length, 2)
+      assert.equal(writes.length, 1)
       assert.match(writes[0] ?? '', /set to done/)
-      assert.match(writes[1] ?? '', /set to accepted/)
     })
   } finally {
     removeFixture(fixture)
   }
 })
 
-// ── 4. an accepted todo passes the pre-completion gate ──────────────────────
+// ── 4. a done todo passes the pre-completion gate ───────────────────────────
 
-test('an accepted todo passes the pre-completion source gate and is never downgraded', async () => {
+test('a done todo passes the pre-completion source gate and is never downgraded', async () => {
   const fixture = makeFixture('completing', 'live')
   try {
     await withConfigHome(fixture.home, async () => {
@@ -385,18 +384,18 @@ test('an accepted todo passes the pre-completion source gate and is never downgr
       // Warm-up pass so the completion tick does not poll first.
       await host.tick(bot.id)
 
-      const todo = await service.createTodo({ title: 'Accepted work', request: 'r', acceptance: 'a' })
-      await service.updateTodo({ id: todo.id, status: 'accepted' })
+      const todo = await service.createTodo({ title: 'Done work', request: 'r', acceptance: 'a' })
+      await service.updateTodo({ id: todo.id, status: 'done' })
       const item = store.createItem({ botId: bot.id, sourceId: todo.id, state: 'completing', project: 'alpha' })
       assert.equal(store.acquireLane({ project: 'alpha', botId: bot.id, itemId: item.id }), true)
       store.beginStep({ itemId: item.id, kind: 'inbox.complete', idemKey: `${item.id}:1:inbox.complete:1` })
 
       await host.tick(bot.id)
 
-      // The source gate admitted the accepted todo and the completion write left
-      // it accepted: no downgrade to in_progress or done, no status write at all.
+      // The source gate admitted the done todo and the completion write left
+      // it done: no downgrade to in_progress, no status write at all.
       assert.equal(store.findStepByIdemKey(`${item.id}:1:inbox.complete:1`)?.status, 'done')
-      assert.equal(todoStatus(fixture.root, todo.id), 'accepted')
+      assert.equal(todoStatus(fixture.root, todo.id), 'done')
       assert.equal(store.getItem(bot.id, item.id).state, 'completing')
       assert.equal(store.listLog(bot.id, 0).some(entry => entry.code === 'todo.status'), false)
     })

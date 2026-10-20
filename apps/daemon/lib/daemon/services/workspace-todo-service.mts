@@ -8,8 +8,7 @@
  * per-record writes, and an unchanged scan reuses cached parses and touches no
  * database. An externally edited index is repaired by a rebuild. There is
  * deliberately no deletion of todos (cancel is a status).
- * Every write is validated and atomic, `done` (execution finished) and
- * `accepted` (acceptance passed) remain distinct stored states, and dependency
+ * Every write is validated and atomic, and dependency
  * existence plus acyclicity are checked on writes only so reads can still
  * surface externally broken dependencies.
  */
@@ -77,11 +76,11 @@ const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-
 /** The only front matter fields a todo file may declare. */
 const FRONT_MATTER_KEYS = new Set(['id', 'title', 'status', 'project', 'depends_on', 'created', 'updated'])
 
-/** Execution-finished (`done`) and acceptance-passed (`accepted`) are separate. */
-export type TodoStatus = 'open' | 'in_progress' | 'done' | 'accepted' | 'cancelled'
+/** The valid todo statuses; a stored legacy `accepted` reads as `done`. */
+export type TodoStatus = 'open' | 'in_progress' | 'done' | 'cancelled'
 
 /** The complete, ordered set of valid todo statuses. */
-export const TODO_STATUSES: readonly TodoStatus[] = ['open', 'in_progress', 'done', 'accepted', 'cancelled']
+export const TODO_STATUSES: readonly TodoStatus[] = ['open', 'in_progress', 'done', 'cancelled']
 
 /** A workspace todo as stored in its Markdown file. */
 export interface Todo {
@@ -683,7 +682,7 @@ function readIndexRows(db: DatabaseInstance): TodoIndexRecord[] {
   return rows.map((row) => ({
     id: row.id,
     title: row.title,
-    status: row.status as TodoStatus,
+    status: row.status === 'accepted' ? 'done' : (row.status as TodoStatus),
     ...(row.project === null ? {} : { project: row.project }),
     depends_on: JSON.parse(row.depends_on) as string[],
     created: row.created,
@@ -713,6 +712,12 @@ function requireStatus(value: unknown, id: string): TodoStatus {
     throw new WorkspaceTodoError('bad_status', `Todo ${id}: status must be one of ${TODO_STATUSES.join(', ')}`)
   }
   return value as TodoStatus
+}
+
+/** Read a stored status; the retired `accepted` presents as `done`, never written back. */
+function readStatus(value: unknown, id: string): TodoStatus {
+  if (value === 'accepted') return 'done'
+  return requireStatus(value, id)
 }
 
 /** Require a nonempty project label without control characters. */
@@ -858,7 +863,7 @@ function parseTodoFile(filePath: string, content: string): Todo {
     throw new WorkspaceTodoError('bad_id', `Todo ${id}: front matter id "${declaredId}" does not match the file name`)
   }
   const title = requireTitle(record.title, id)
-  const status = requireStatus(record.status, id)
+  const status = readStatus(record.status, id)
   const project = record.project === undefined ? undefined : requireProject(record.project, id)
   const depends_on = requireDependencies(record.depends_on, id)
   const created = requireTimestamp(record.created, id, 'created')

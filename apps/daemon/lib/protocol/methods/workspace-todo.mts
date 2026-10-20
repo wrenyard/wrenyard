@@ -5,8 +5,6 @@
  * workspace root; every method addresses them by their short stable id. The
  * store is authoritative on the daemon, so no schema ever accepts a filesystem
  * root: the caller can only name a todo and its fields, never where it lives.
- * Execution-finished (`done`) and acceptance-passed (`accepted`) are separate
- * stored statuses.
  */
 
 import type { JsonSchema } from '../jsonrpc.mts'
@@ -17,13 +15,13 @@ import type { Todo, TodoCreateInput, TodoUpdateInput } from '../../daemon/servic
 export type { Todo, TodoStatus, TodoCreateInput, TodoUpdateInput } from '../../daemon/services/workspace-todo-service.mts'
 
 /** The complete, ordered set of valid todo statuses shared by every schema. */
-const TODO_STATUS_VALUES = ['open', 'in_progress', 'done', 'accepted', 'cancelled'] as const
+const TODO_STATUS_VALUES = ['open', 'in_progress', 'done', 'cancelled'] as const
 
 /** Status discriminator shared by every todo schema. */
 const todoStatusProperty = {
   type: 'string',
   enum: TODO_STATUS_VALUES,
-  description: "The todo status: 'open', 'in_progress', 'done', 'accepted' or 'cancelled'. 'done' (execution finished) and 'accepted' (acceptance passed) are distinct.",
+  description: "The todo status: 'open', 'in_progress', 'done' or 'cancelled'.",
 } as const satisfies JsonSchema
 
 /** The complete todo record returned by get/create/update and inside list. */

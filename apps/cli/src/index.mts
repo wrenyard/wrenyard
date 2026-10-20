@@ -155,7 +155,7 @@ Usage:
   wrenyard todo list [--config path] [--json]
   wrenyard todo add --title <t> [--request <text>] [--acceptance <text>] [--project <p>] [--depends-on <id>]... [--attach <path>]... [--config path] [--json]
   wrenyard todo show <id> [--config path] [--json]
-  wrenyard todo set-status <id> <open|in_progress|done|accepted|cancelled> [--config path] [--json]
+  wrenyard todo set-status <id> <open|in_progress|done|cancelled> [--config path] [--json]
   wrenyard taskgraph create <json-params> [--config path] [--json]
   wrenyard taskgraph patch <json-params> [--config path] [--json]
   wrenyard taskgraph status <json-params> [--config path] [--json]

@@ -1705,13 +1705,11 @@ export interface BotMethodMap {
  * Workspace todos are the bot's native task source: one Markdown file per todo
  * under the daemon-owned workspace `todos/` directory. The daemon owns the
  * files and every method; a caller names a todo and its fields, never where it
- * lives. Execution-finished (`done`) and acceptance-passed (`accepted`) are
- * distinct stored statuses. These wire types mirror the daemon's workspace-todo
- * DTOs exactly.
+ * lives. These wire types mirror the daemon's workspace-todo DTOs exactly.
  */
 
 /** The complete, ordered set of valid todo statuses. */
-export type TodoStatus = 'open' | 'in_progress' | 'done' | 'accepted' | 'cancelled';
+export type TodoStatus = 'open' | 'in_progress' | 'done' | 'cancelled';
 
 /** One workspace todo, as stored in its Markdown file. */
 export interface Todo {

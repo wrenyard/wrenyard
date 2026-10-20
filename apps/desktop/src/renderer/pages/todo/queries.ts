@@ -27,7 +27,7 @@ export function useTodosQuery() {
 /** Statuses shown in the project sections. */
 export const ACTIVE_TODO_STATUSES = ['open', 'in_progress'] as const;
 /** Statuses shown in the bottom completed section. */
-export const COMPLETED_TODO_STATUSES = ['done', 'accepted', 'cancelled'] as const;
+export const COMPLETED_TODO_STATUSES = ['done', 'cancelled'] as const;
 
 /** Whether a todo belongs in the active project sections. */
 export function isActiveTodo(todo: Todo): boolean {
@@ -47,7 +47,6 @@ export const TODO_STATUS_LABEL: Record<Todo['status'], string> = {
   open: '未开始',
   in_progress: '进行中',
   done: '已完成',
-  accepted: '已验收',
   cancelled: '已取消',
 };
 

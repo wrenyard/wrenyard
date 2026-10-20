@@ -23,7 +23,6 @@ export const STATUS_META: Record<Todo['status'], StatusMeta> = {
   open: { Icon: Circle, tone: 'text-muted-foreground' },
   in_progress: { Icon: CircleDot, tone: 'text-primary' },
   done: { Icon: CircleCheck, tone: 'text-muted-foreground' },
-  accepted: { Icon: CircleCheck, tone: 'text-muted-foreground' },
   cancelled: { Icon: CircleSlash, tone: 'text-muted-foreground' },
 };
 

@@ -614,8 +614,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
    * intended transition is recorded as a log row instead of faking a write.
    *
    * The write is guarded so it never clobbers a terminal source: a cancelled
-   * todo refuses every transition, and an accepted todo is never downgraded to
-   * `in_progress` or `done`. Reading or writing failure is logged and rethrown,
+   * todo refuses every transition, and a done todo is never downgraded to
+   * `in_progress`. Reading or writing failure is logged and rethrown,
    * so the calling step fails and retries instead of the bot committing its own
    * transition while the source file stayed unchanged.
    */
@@ -642,8 +642,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       if (todo.status === 'cancelled') {
         throw new WorkspaceTodoError('cancelled', `workspace todo ${sourceId} is cancelled; refusing to set it to ${status}`)
       }
-      if (todo.status === 'accepted' && (status === 'in_progress' || status === 'done')) {
-        throw new WorkspaceTodoError('accepted', `workspace todo ${sourceId} is accepted; refusing to downgrade it to ${status}`)
+      if (todo.status === 'done' && status === 'in_progress') {
+        throw new WorkspaceTodoError('done', `workspace todo ${sourceId} is done; refusing to downgrade it to ${status}`)
       }
       await workspaceTodoService.updateTodo({ id: sourceId, status })
       store.appendLog({
@@ -666,7 +666,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   /**
    * Native-only dispatch safeguard. Immediately before dispatch a workspace todo
    * is re-read so an item whose source was withdrawn, or whose dependency is no
-   * longer `done`/`accepted` (unfinished or cancelled), is not dispatched.
+   * longer `done` (unfinished or cancelled), is not dispatched.
    * `list`/`get` already treat such a todo as not open; this re-check closes the
    * gap between admission and dispatch.
    *
@@ -1447,7 +1447,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     blocks.push([
       `Dependency context (workspace dry run): this item depends_on ${dependsOn.join(', ')}.`,
       'Those values are workspace todo ids, not Git commit hashes.',
-      'It was admitted because each dependency is done or accepted on disk, or a matching completed same-bot dry-run run recorded it finished.',
+      'It was admitted because each dependency is done on disk, or a matching completed same-bot dry-run run recorded it finished.',
       "A dry run never merges a predecessor's changes into main, so a predecessor's artifacts may be absent from the current branch.",
       'Treat scheduling completion as distinct from artifact availability: if a prerequisite artifact is genuinely missing, report it in your reply instead of weakening or bypassing the requirement.',
     ].join(' '))
@@ -2562,8 +2562,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       }
       const gate = await checkReadyGate(item)
       if (gate.ok) {
-        // Execution is finished: a native workspace todo reaches `done` here,
-        // before acceptance later persists `accepted`. The guarded write runs
+        // Execution is finished: a native workspace todo reaches `done` here.
+        // The guarded write runs
         // before the `ready` transition, so a refused or failed write keeps the
         // item out of acceptance and the step retries.
         await reflectNativeTodoStatus(bot, config, item.sourceId, 'done', dryRun)
@@ -2750,11 +2750,10 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         code: 'acceptance.passed',
         message: `all ${checks.length} check(s) verified`,
       })
-      // Acceptance is a source status of its own. A native workspace todo moves
-      // to `accepted`, which is independent of the later `complete` (execution
-      // finished) write and is never downgraded by it; a dry run records the
-      // would-be status instead of writing it.
-      await reflectNativeTodoStatus(bot, config, item.sourceId, 'accepted', dryRun)
+      // Acceptance passed: a native workspace todo stays `done` (the write is
+      // a no-op when the review-ready gate already persisted it); a dry run
+      // records the would-be status instead of writing it.
+      await reflectNativeTodoStatus(bot, config, item.sourceId, 'done', dryRun)
       return {
         output,
         to: 'accepted',
@@ -3208,10 +3207,10 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
    * retryable, never a withdrawal.
    *
    * The `open` flag of a workspace inbox means "dispatchable", so `done` and
-   * `accepted` report it false even though the source is not withdrawn. A
+   * `done` reports it false even though the source is not withdrawn. A
    * workspace source is therefore read through the todo service: it is `gone`
    * only when the todo is missing or cancelled, `changed` when the inbox
-   * fingerprint differs for any other state (including `done`/`accepted`), and
+   * fingerprint differs for any other state (including `done`), and
    * `retry` on any other read error. A command (Things) or MCP inbox keeps the
    * open-flag check.
    */
@@ -3309,7 +3308,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       // are unaffected, and every other step still runs.
       if (isBackedOff(bot.id)) return
       // Native-only safeguard: a workspace todo whose source was withdrawn, or
-      // whose dependency is no longer done/accepted, is held instead of being
+      // whose dependency is no longer done, is held instead of being
       // dispatched against stale source state. A failed re-read leaves the item
       // `verified` (neither parked nor dispatched) so the check retries later.
       const sourceState = await nativeSourceDispatchable(bot, config, item.sourceId)

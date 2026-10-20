@@ -89,9 +89,8 @@ test('list and get expose only open/in_progress todos whose dependencies are fin
     assert.deepEqual(afterDone.items.map((item) => item.id).sort(), [beta.id, epsilon.id].sort())
     assert.equal((await inbox.get(beta.id)).item?.open, true)
 
-    // An accepted dependency is equally satisfying, and a done or cancelled
-    // todo is never itself listed as open work.
-    await service.updateTodo({ id: epsilon.id, status: 'accepted' })
+    // A done or cancelled todo is never itself listed as open work.
+    await service.updateTodo({ id: epsilon.id, status: 'done' })
     const finalIds = (await inbox.list()).items.map((item) => item.id)
     assert.equal(finalIds.includes(alpha.id), false)
     assert.equal(finalIds.includes(delta.id), false)
@@ -184,31 +183,21 @@ test('a cancelled or missing dependency stays blocked even when the callback rep
   }
 })
 
-test('a done or accepted dependency satisfies gating without any callback', async () => {
+test('a done dependency satisfies gating without any callback', async () => {
   const { root, service, inbox } = makeInbox()
   try {
     const done = await service.createTodo({ title: 'Done dependency', request: 'r', acceptance: 'a' })
     await service.updateTodo({ id: done.id, status: 'done' })
-    const accepted = await service.createTodo({ title: 'Accepted dependency', request: 'r', acceptance: 'a' })
-    await service.updateTodo({ id: accepted.id, status: 'accepted' })
     const afterDone = await service.createTodo({
       title: 'After done',
       depends_on: [done.id],
       request: 'r',
       acceptance: 'a',
     })
-    const afterAccepted = await service.createTodo({
-      title: 'After accepted',
-      depends_on: [accepted.id],
-      request: 'r',
-      acceptance: 'a',
-    })
 
     assert.equal((await inbox.get(afterDone.id)).item?.open, true)
-    assert.equal((await inbox.get(afterAccepted.id)).item?.open, true)
     const ids = (await inbox.list()).items.map((item) => item.id)
     assert.equal(ids.includes(afterDone.id), true)
-    assert.equal(ids.includes(afterAccepted.id), true)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -216,18 +205,17 @@ test('a done or accepted dependency satisfies gating without any callback', asyn
 
 // ── complete / release / annotate ───────────────────────────────────────────
 
-test('complete writes done and never downgrades an already accepted todo', async () => {
+test('complete writes done and leaves an already done todo alone', async () => {
   const { root, service, inbox } = makeInbox()
   try {
     const todo = await service.createTodo({ title: 'To finish', request: 'r', acceptance: 'a' })
     assert.deepEqual(await inbox.complete(todo.id), { ok: true })
     assert.equal((await service.getTodo(todo.id)).status, 'done')
 
-    const accepted = await service.createTodo({ title: 'Accepted', request: 'r', acceptance: 'a' })
-    await service.updateTodo({ id: accepted.id, status: 'accepted' })
-    assert.deepEqual(await inbox.complete(accepted.id), { ok: true })
-    // Acceptance is a distinct stored state and is preserved.
-    assert.equal((await service.getTodo(accepted.id)).status, 'accepted')
+    const alreadyDone = await service.createTodo({ title: 'Already done', request: 'r', acceptance: 'a' })
+    await service.updateTodo({ id: alreadyDone.id, status: 'done' })
+    assert.deepEqual(await inbox.complete(alreadyDone.id), { ok: true })
+    assert.equal((await service.getTodo(alreadyDone.id)).status, 'done')
 
     assert.deepEqual(await inbox.complete('nope'), { ok: false })
   } finally {

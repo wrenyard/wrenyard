@@ -8,7 +8,7 @@ import {
 } from '../shared.mts'
 
 /** The exact statuses `todo set-status` accepts, shared with the daemon store. */
-const TODO_STATUSES = ['open', 'in_progress', 'done', 'accepted', 'cancelled'] as const
+const TODO_STATUSES = ['open', 'in_progress', 'done', 'cancelled'] as const
 
 type TodoStatus = (typeof TODO_STATUSES)[number]
 

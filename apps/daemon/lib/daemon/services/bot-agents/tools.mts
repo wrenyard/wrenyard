@@ -117,7 +117,7 @@ const TODO_TOOL: ToolSpec = {
   description: [
     'Manage the built-in workspace todos, the same store the `wrenyard todo` command uses.',
     'A todo carries a title, a request and its acceptance criteria; its status moves from open through',
-    'in_progress and done to accepted, or to cancelled.',
+    'in_progress to done, or to cancelled.',
   ].join(' '),
   parameters: {
     type: 'object',
@@ -149,7 +149,7 @@ const TODO_TOOL: ToolSpec = {
       },
       status: {
         type: 'string',
-        enum: ['open', 'in_progress', 'done', 'accepted', 'cancelled'],
+        enum: ['open', 'in_progress', 'done', 'cancelled'],
         description: 'New status; required for set_status.',
       },
       text: {
