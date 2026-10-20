@@ -9,13 +9,14 @@ const USAGE = `Usage: wrenyard clients <list | prune>
   list    [--config path] [--json]
   prune   [--dry-run | --apply] [--older-than-days N] [--config path] [--json]`
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
-const FAMILIES = ['opencode', 'codebuddy', 'pi'] as const
+const FAMILIES = ['opencode', 'codebuddy', 'pi', 'grok'] as const
 
 // Shared, never-pruned client state homes that live beside the owned `runs` root.
 const SHARED_CLIENT_DIRS: Record<typeof FAMILIES[number], readonly string[]> = {
   opencode: ['config'],
   codebuddy: ['agent-config'],
   pi: ['agent', 'sessions'],
+  grok: ['sessions'],
 }
 
 interface Marker {

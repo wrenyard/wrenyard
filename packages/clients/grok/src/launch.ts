@@ -1,9 +1,9 @@
-import { appendFile, cp, mkdir, readFile, readdir, stat } from 'node:fs/promises';
+import { appendFile, cp, readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRequest } from '@wrenyard/agent-client';
 import { resolveMcpServers, requireHttpServer, type ResolvedMcpServer } from '@wrenyard/agent-client/mcp';
-import { assertLaunch, clientStateDirForEnv, stringEnv } from '@wrenyard/agent-client/native';
+import { assertLaunch, clientStateDirForEnv, createOwnedClientRunHome, stringEnv } from '@wrenyard/agent-client/native';
 import type { ProcessSpec } from '@wrenyard/execution';
 import { inspectGrok } from './installation.ts';
 
@@ -224,6 +224,35 @@ async function repairInterruptedToolCalls(home: string, sessionId: string): Prom
 }
 
 /**
+ * Snapshot a Grok run home so resume data survives settle cleanup. For each
+ * session id under `<home>/sessions/<encoded-cwd>/<sessionId>` the whole run
+ * home is force-copied to `<sessionsStateDir>/<sessionId>`. A run home with
+ * no sessions subtree produced nothing resumable, so the call is a no-op.
+ */
+export async function preserveGrokSessionSnapshot(sessionsStateDir: string, homePath: string): Promise<void> {
+    const sessionsRoot = join(homePath, 'sessions');
+    let projectDirs: string[];
+    try {
+        projectDirs = await readdir(sessionsRoot);
+    }
+    catch {
+        return;
+    }
+    for (const projectDir of projectDirs) {
+        const projectPath = join(sessionsRoot, projectDir);
+        let sessionIds: string[];
+        try {
+            sessionIds = await readdir(projectPath);
+        }
+        catch {
+            continue;
+        }
+        for (const sessionId of sessionIds)
+            await cp(homePath, join(sessionsStateDir, sessionId), { recursive: true, force: true });
+    }
+}
+
+/**
  * Preflight the gateway `/models` listing for the requested route. This check
  * fails open: any fetch, timeout, parse, or non-JSON error means "unknown",
  * not "rejected". The launch is rejected only when every matching model
@@ -286,8 +315,16 @@ export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv):
     // leaves an isolated home behind.
     const mcpToml = grokMcpToml(mcpServers);
     const mcpPermissionArgs = grokMcpPermissionArgs(mcpServers);
-    const home = clientStateDirForEnv(env, 'grok', 'runs', `${Date.now().toString(36)}`);
-    await mkdir(home, { recursive: true });
+    const owned = await createOwnedClientRunHome(env, 'grok');
+    const home = owned.path;
+    // Grok resume reads session data from the run home, so before settle
+    // cleanup deletes it, snapshot the whole home under each session id the
+    // run produced (sessions/<encoded-cwd>/<sessionId>). No sessions subtree
+    // means nothing resumable was written, so the hook is a no-op.
+    const sessionsStateDir = clientStateDirForEnv(env, 'grok', 'sessions');
+    owned.preserveSession = async (homePath: string) => {
+        await preserveGrokSessionSnapshot(sessionsStateDir, homePath);
+    };
     if (request.resumeSessionId) {
         const snapshot = clientStateDirForEnv(env, 'grok', 'sessions', request.resumeSessionId);
         try {
@@ -359,5 +396,6 @@ export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv):
             { path: promptPath, data: request.prompt, cleanup: 'completion' },
             ...(config ? [{ path: join(home, 'config.toml'), data: config, cleanup: 'completion' as const }] : []),
         ],
+        ownedRunHome: owned,
     };
 }

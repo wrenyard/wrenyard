@@ -36,7 +36,7 @@ export interface ProcessSpec {
   readonly env: Readonly<Record<string, string>>;
   readonly stdin?: string | Uint8Array;
   readonly files?: readonly ProcessFile[];
-  readonly ownedRunHome?: { readonly path: string; readonly metadataPath: string; readonly clientFamily: string; readonly runId: string };
+  readonly ownedRunHome?: { readonly path: string; readonly metadataPath: string; readonly clientFamily: string; readonly runId: string; preserveSession?: (homePath: string) => Promise<void> };
 }
 
 export interface ExecutionResult {
@@ -492,6 +492,12 @@ async function cleanupOwnedRunHome(home: ProcessSpec['ownedRunHome'], success: b
   let marker: Record<string, unknown>;
   try { marker = JSON.parse(await readFile(home.metadataPath, 'utf8')) as Record<string, unknown>; } catch { return; }
   if (marker.version !== 1 || marker.client_family !== home.clientFamily || marker.run_id !== home.runId || marker.state !== 'active') return;
+  if (!rollback && home.preserveSession) {
+    // A snapshot failure leaves the run home and its active marker untouched
+    // so session data needed for resume is never deleted before it is saved.
+    try { await home.preserveSession(home.path); }
+    catch { return; }
+  }
   if (!rollback) {
     marker.state = success ? 'done' : 'failed';
     marker.finished_at = new Date().toISOString();

@@ -340,8 +340,13 @@ export function clientStateDirForEnv(env: NodeJS.ProcessEnv, ...parts: string[])
 export interface OwnedClientRunHome {
     readonly path: string;
     readonly metadataPath: string;
-    readonly clientFamily: 'opencode' | 'codebuddy' | 'pi';
+    readonly clientFamily: 'opencode' | 'codebuddy' | 'pi' | 'grok';
     readonly runId: string;
+    /**
+     * Called before settle cleanup deletes the run home. A rejection aborts
+     * deletion: the run home and its `active` marker are left in place.
+     */
+    preserveSession?: (homePath: string) => Promise<void>;
 }
 
 /** Launch provenance phase recorded on an owned run marker. */
@@ -359,7 +364,7 @@ export type OwnedRunLaunchPhase = 'prepared' | 'spawning' | 'running';
  */
 export interface OwnedRunMarker {
     readonly version: 1;
-    readonly client_family: 'opencode' | 'codebuddy' | 'pi';
+    readonly client_family: 'opencode' | 'codebuddy' | 'pi' | 'grok';
     readonly run_id: string;
     readonly state: 'active' | 'done' | 'failed';
     readonly created_at: string;
@@ -390,7 +395,7 @@ export function parseOwnedRunMarker(value: unknown): OwnedRunMarker | undefined 
     const marker = value as Record<string, unknown>;
     if (marker.version !== 1)
         return undefined;
-    if (marker.client_family !== 'opencode' && marker.client_family !== 'codebuddy' && marker.client_family !== 'pi')
+    if (marker.client_family !== 'opencode' && marker.client_family !== 'codebuddy' && marker.client_family !== 'pi' && marker.client_family !== 'grok')
         return undefined;
     if (typeof marker.run_id !== 'string' || !marker.run_id)
         return undefined;
