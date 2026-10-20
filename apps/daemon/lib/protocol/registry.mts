@@ -129,61 +129,6 @@ export type {
   RoutineDeleteParams, RoutineDeleteResult,
 } from './methods/routine.mts'
 import {
-  botListParamsSchema,
-  botListResultSchema,
-  botCreateParamsSchema,
-  botCreateResultSchema,
-  botUpdateParamsSchema,
-  botUpdateResultSchema,
-  botControlParamsSchema,
-  botControlResultSchema,
-  botDeleteParamsSchema,
-  botDeleteResultSchema,
-  botTickParamsSchema,
-  botTickResultSchema,
-  botConfigValidateParamsSchema,
-  botConfigValidateResultSchema,
-  botItemsParamsSchema,
-  botItemsResultSchema,
-  botItemGetParamsSchema,
-  botItemGetResultSchema,
-  botItemActionParamsSchema,
-  botItemActionResultSchema,
-  botLogParamsSchema,
-  botLogResultSchema,
-  botHealthParamsSchema,
-  botHealthResultSchema,
-  type BotListParams, type BotListResult,
-  type BotCreateParams, type BotCreateResult,
-  type BotUpdateParams, type BotUpdateResult,
-  type BotControlParams, type BotControlResult,
-  type BotDeleteParams, type BotDeleteResult,
-  type BotTickParams, type BotTickResult,
-  type BotConfigValidateParams, type BotConfigValidateResult,
-  type BotItemsParams, type BotItemsResult,
-  type BotItemGetParams, type BotItemGetResult,
-  type BotItemActionParams, type BotItemActionResult,
-  type BotLogParams, type BotLogResult,
-  type BotHealthParams, type BotHealthResult,
-} from './methods/bot.mts'
-export type {
-  BotState, BotMode, BotModel, BotRecord,
-  BotAcceptanceCheck, BotItemRecord, BotLogRecord, BotTickLag, BotHealthError, BotHealth,
-  BotControlAction, BotItemAction,
-  BotListParams, BotListResult,
-  BotCreateParams, BotCreateResult,
-  BotUpdateParams, BotUpdateResult,
-  BotControlParams, BotControlResult,
-  BotDeleteParams, BotDeleteResult,
-  BotTickParams, BotTickResult,
-  BotConfigValidateParams, BotConfigValidateResult,
-  BotItemsParams, BotItemsResult,
-  BotItemGetParams, BotItemGetResult,
-  BotItemActionParams, BotItemActionResult,
-  BotLogParams, BotLogResult,
-  BotHealthParams, BotHealthResult,
-} from './methods/bot.mts'
-import {
   activitySnapshotParamsSchema,
   activitySnapshotResultSchema,
   type ActivitySnapshotParams,
@@ -992,18 +937,6 @@ export interface ForemanMethodParams {
   'agent.wake': AgentWakeParams
   'agent.group.events': AgentGroupEventsParams
   'agent.group.send': AgentGroupSendParams
-  'bot.list': BotListParams
-  'bot.create': BotCreateParams
-  'bot.update': BotUpdateParams
-  'bot.control': BotControlParams
-  'bot.delete': BotDeleteParams
-  'bot.tick': BotTickParams
-  'bot.config.validate': BotConfigValidateParams
-  'bot.items': BotItemsParams
-  'bot.item.get': BotItemGetParams
-  'bot.item.action': BotItemActionParams
-  'bot.log': BotLogParams
-  'bot.health': BotHealthParams
 }
 
 export interface ForemanMethodResults {
@@ -1116,18 +1049,6 @@ export interface ForemanMethodResults {
   'agent.wake': AgentWakeResult
   'agent.group.events': AgentGroupEventsResult
   'agent.group.send': AgentGroupSendResult
-  'bot.list': BotListResult
-  'bot.create': BotCreateResult
-  'bot.update': BotUpdateResult
-  'bot.control': BotControlResult
-  'bot.delete': BotDeleteResult
-  'bot.tick': BotTickResult
-  'bot.config.validate': BotConfigValidateResult
-  'bot.items': BotItemsResult
-  'bot.item.get': BotItemGetResult
-  'bot.item.action': BotItemActionResult
-  'bot.log': BotLogResult
-  'bot.health': BotHealthResult
 }
 
 export type ForemanMethod = keyof ForemanMethodParams & keyof ForemanMethodResults
@@ -1560,18 +1481,6 @@ export const methodRegistry: {
   'agent.wake': { params: agentWakeParamsSchema, result: agentWakeResultSchema },
   'agent.group.events': { params: agentGroupEventsParamsSchema, result: agentGroupEventsResultSchema },
   'agent.group.send': { params: agentGroupSendParamsSchema, result: agentGroupSendResultSchema },
-  'bot.list': { params: botListParamsSchema, result: botListResultSchema },
-  'bot.create': { params: botCreateParamsSchema, result: botCreateResultSchema },
-  'bot.update': { params: botUpdateParamsSchema, result: botUpdateResultSchema },
-  'bot.control': { params: botControlParamsSchema, result: botControlResultSchema },
-  'bot.delete': { params: botDeleteParamsSchema, result: botDeleteResultSchema },
-  'bot.tick': { params: botTickParamsSchema, result: botTickResultSchema },
-  'bot.config.validate': { params: botConfigValidateParamsSchema, result: botConfigValidateResultSchema },
-  'bot.items': { params: botItemsParamsSchema, result: botItemsResultSchema },
-  'bot.item.get': { params: botItemGetParamsSchema, result: botItemGetResultSchema },
-  'bot.item.action': { params: botItemActionParamsSchema, result: botItemActionResultSchema },
-  'bot.log': { params: botLogParamsSchema, result: botLogResultSchema },
-  'bot.health': { params: botHealthParamsSchema, result: botHealthResultSchema },
 }
 
 export function isForemanMethod(method: string): method is ForemanMethod {

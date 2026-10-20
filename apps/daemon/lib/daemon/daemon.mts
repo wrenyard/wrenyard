@@ -24,7 +24,6 @@ import { createIpcServer, type IpcServer } from '../control/ipc-server.mts'
 import { registerSessionHandlers } from '../server/handlers/session.mts'
 import { registerRoutineHandlers } from '../server/handlers/routine.mts'
 import { registerAgentHandlers } from '../server/handlers/agent.mts'
-import { registerBotHandlers } from '../server/handlers/bot.mts'
 import { INVALID_PARAMS, ProtocolError } from '../protocol/errors.mts'
 import { GATEWAY_TOKEN_REPLACEMENT_WARNING } from '../protocol/methods/gateway.mts'
 import type { TaskSettingsLayer } from '../protocol/methods/task.mts'
@@ -42,7 +41,6 @@ import { createDaemonSessionHost } from './services/session-host.mts'
 import { createScheduler, type Scheduler } from './services/scheduler.mts'
 import { migrateDeviceBots } from './services/bot-agents/device-migration.mts'
 import { createBotAgentKernel, type AgentModelRoute, type BotAgentKernel } from './services/bot-agents/kernel.mts'
-import { createBotHost, type BotHost, type BotLoadProbe, type BotTaskRunner } from './services/bot/host.mts'
 import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent.mts'
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
 import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/agent-supervisor.mts'
@@ -247,9 +245,6 @@ interface ForemanDaemonResources {
   /** Daemon-owned scheduled-prompt service; stopped first on shutdown so it
    *  starts no new turns during drain. */
   scheduler: Scheduler
-  /** Daemon-owned Bot mode host; stopped with the scheduler so it starts no new
-   *  bot step during drain or a workspace switch. */
-  botHost: BotHost
   /** Daemon-owned bot agent kernel; stopped with the scheduler so no bot turn
    *  starts during drain or a workspace switch. */
   botAgents: BotAgentKernel
@@ -297,8 +292,6 @@ interface WorkspaceScopedResources {
   workspaceTodoService: WorkspaceTodoService
   session: Session
   scheduler: Scheduler
-  /** Bot mode host for this workspace; replaced whole on a hot switch. */
-  botHost: BotHost
   /** Bot agent kernel for this workspace; replaced whole on a hot switch. */
   botAgents: BotAgentKernel
 }
@@ -327,8 +320,6 @@ export class ForemanDaemon implements RunningForemanDaemon {
   private resources: ForemanDaemonResources | undefined
   /** Held outside resources so a shutdown requested during startup still stops it. */
   private scheduler: Scheduler | undefined
-  /** Bot host held outside resources for the same reason as the scheduler. */
-  private botHost: BotHost | undefined
   /** Bot agent kernel held outside resources for the same reason as the scheduler. */
   private botAgents: BotAgentKernel | undefined
   private readonly lockPath: string
@@ -440,7 +431,6 @@ export class ForemanDaemon implements RunningForemanDaemon {
         workspacePinned: () => this.workspacePinSource !== undefined,
         onScheduler: (scheduler) => { this.scheduler = scheduler },
         onBotAgents: (botAgents) => { this.botAgents = botAgents },
-        onBotHost: (botHost) => { this.botHost = botHost },
         lowDiskState: () => this.lowDiskState,
       })
     } catch (error) {
@@ -508,10 +498,8 @@ export class ForemanDaemon implements RunningForemanDaemon {
     // Stop the scheduler first: no scheduled fire may start a new turn once a
     // shutdown is requested, and drain only waits for admitted work. This runs
     // even before resources exist, so a request during startup stops the
-    // scheduler the instance was handed. The bot host is stopped the same way:
-    // no bot step may start once a shutdown is requested.
+    // scheduler the instance was handed.
     this.scheduler?.stop()
-    this.botHost?.stop()
     // The bot kernel's context must be opted in before its stop closes it:
     // once stopped the engine is closed and the opt-in becomes a no-op, so a
     // live bot turn would lose its resume token.
@@ -556,10 +544,8 @@ export class ForemanDaemon implements RunningForemanDaemon {
       && (activeCounts.activeTaskGraphCount ?? 0) === 0
       && !resources.session.hasRunningTurns()
       // An in-flight scheduler tick is work in progress: a switch must not stage
-      // over a schedule that is mid-fire. A bot tick or reconciliation is the
-      // same kind of work for the bot host.
+      // over a schedule that is mid-fire.
       && !resources.scheduler.ticking
-      && !resources.botHost.ticking
       && resources.rpcRouter.activeWorkRequestCount === 0
   }
   /**
@@ -700,7 +686,6 @@ export class ForemanDaemon implements RunningForemanDaemon {
           httpServer: resources.httpServer,
           session: resources.session,
           scheduler: resources.scheduler,
-          botHost: resources.botHost,
           botAgents: resources.botAgents,
           gateway: resources.gateway,
           restoreGatewayEnvironment: resources.restoreGatewayEnvironment,
@@ -808,8 +793,6 @@ async function createForemanDaemonResources(
     onScheduler?: (scheduler: Scheduler) => void
     /** Receives the bot agent kernel as soon as it exists, before the IPC server. */
     onBotAgents?: (botAgents: BotAgentKernel) => void
-    /** Receives the bot host as soon as it exists, before the IPC server. */
-    onBotHost?: (botHost: BotHost) => void
   },
 ): Promise<ForemanDaemonResources> {
   const operations: OperationHost = {
@@ -1366,98 +1349,6 @@ async function createForemanDaemonResources(
       selectModels,
       log: (level, message) => writeDaemonLog(level, message),
     })
-    // The bot host shares the same workspace scope, the same in-process session
-    // and the same admission gate as the scheduler, and persists into the same
-    // daemon database, so a stopped bot stays stopped across a restart.
-    // The bot host runs its judgment and acceptance tasks through the same
-    // in-process TaskService the session host uses: one run per decision, with
-    // the project (and the item's managed worktree) bound explicitly. Runs are
-    // started detached: the host records each run id and polls it, so no bot
-    // tick ever waits for a model run.
-    //
-    // Runtime selection is automatic: the routing entry's reasoning effort is
-    // forwarded through the same one-shot invocation settings layer other
-    // callers use, and the host records `routing.auto` once per bot.
-    const botTaskRunner: BotTaskRunner = {
-      // Start one task run and hand its run id back at once: the bot host keeps
-      // the step pending and polls the run on later ticks, so a long model run
-      // never blocks a tick or another item.
-      async startTask({ task, project, worktree, input, model }) {
-        try {
-          const invocationSettings: TaskSettingsLayer | undefined = model === undefined
-            ? undefined
-            : { automatic: { expected_reasoning_effort: model.reasoningEffort } }
-          const accepted = await taskService.run({
-            taskId: task,
-            project,
-            input,
-            ...(worktree === undefined ? {} : { worktree }),
-            ...(invocationSettings === undefined ? {} : { invocationSettings }),
-          })
-          if (isTaskRunRejection(accepted)) return { rejected: accepted.error_type }
-          return { runId: accepted.task_run_id }
-        } catch (error) {
-          return { rejected: error instanceof Error ? error.message : String(error) }
-        }
-      },
-      // Read one run's status without waiting for it. `status` is the
-      // non-blocking read; a missing run is `unknown`, which the host fails as
-      // `task run missing` rather than retrying an effect that may have happened.
-      async getTask(runId) {
-        const record = await taskService.status(runId)
-        if (record === null) return { status: 'unknown' }
-        const raw = typeof record.status === 'string' ? record.status : 'unknown'
-        // Keep `queued` distinct from `running` so the bot host can exclude lane
-        // wait from its budgets and stuck-task watchdog; both are waiting states.
-        if (raw === 'queued') return { status: 'queued' }
-        if (raw === 'running') return { status: 'running' }
-        if (raw === 'done') {
-          const finished = await taskService.output(runId)
-          return {
-            status: 'done',
-            ...(finished === null || finished.output === undefined ? {} : { output: finished.output }),
-          }
-        }
-        const status = raw === 'failed' ? 'failed' as const
-          : raw === 'cancelled' ? 'cancelled' as const
-            : raw === 'timeout' ? 'timeout' as const : 'unknown' as const
-        const error = typeof record.error === 'string' && record.error !== '' ? record.error : undefined
-        return { status, ...(error === undefined ? {} : { error }) }
-      },
-      // Cancel one run on request (the bot's stuck-task watchdog). The
-      // supervisor terminates the linked agent execution for this run id.
-      async cancelTask(runId) {
-        await taskService.cancel(runId)
-      },
-    }
-    const botHost = createBotHost({
-      db: runtime.db,
-      workspaceRoot,
-      session,
-      log: writeDaemonLog,
-      canRun: () => !options.isShuttingDown() && options.isSwitching?.() !== true,
-      taskRunner: botTaskRunner,
-      // bot.health reports the device and daemon it runs on: hostname/platform/
-      // arch from this process plus the same suite identity health.ping reports.
-      identity: () => {
-        const identity = readProcessIdentity()
-        return {
-          hostname: hostname(),
-          platform: process.platform,
-          arch: process.arch,
-          daemonVersion: identity.version,
-          mode: identity.mode,
-        }
-      },
-      // bot.health reports the managed operation components (browser, desktop)
-      // so the Bot page can show when a required component is not ready. The
-      // host only ever reads the cached list, never refreshes it.
-      operationComponents: runtime.operationComponents,
-      // Live execution load for the dispatch back-off and the load watchdog,
-      // read straight from the database with no IPC round trip.
-      loadProbe: () => readExecutionLoad(runtime.db),
-      lowDiskState: options.lowDiskState,
-    })
     return {
       workspaceRoot,
       taskService,
@@ -1467,7 +1358,6 @@ async function createForemanDaemonResources(
       workspaceTodoService,
       session,
       scheduler,
-      botHost,
       botAgents,
     }
   }
@@ -1494,7 +1384,6 @@ async function createForemanDaemonResources(
     registerSessionHandlers(rpcRouter, { session: bindings.session })
     registerRoutineHandlers(rpcRouter, { scheduler: bindings.scheduler })
     registerAgentHandlers(rpcRouter, { kernel: bindings.botAgents })
-    registerBotHandlers(rpcRouter, { host: bindings.botHost })
   }
 
   let coreOptions: CoreRpcHandlerOptions
@@ -1940,14 +1829,12 @@ async function createForemanDaemonResources(
   runtime.runner.setTaskRouteState(taskRouteState)
   options.onScheduler?.(workspaceScoped.scheduler)
   options.onBotAgents?.(workspaceScoped.botAgents)
-  options.onBotHost?.(workspaceScoped.botHost)
 
   // During drain, preserve status/cancel/signals and the calls required by
   // admitted work. New top-level dispatch and long polling cannot hold the
   // daemon open or create more work after the shutdown request is accepted.
   const blockedDuringShutdown = new Set([
     'taskgraph.create', 'task.run.create', 'exec.start', 'session.send',
-    'bot.create', 'bot.update', 'bot.control', 'bot.delete', 'bot.tick', 'bot.item.action',
   ])
   // The same rule while a workspace hot switch holds the gate: no new admitting
   // work and no new workspace-mutating request may start, so the state swap
@@ -1964,7 +1851,6 @@ async function createForemanDaemonResources(
     'workspace.doc.create', 'workspace.doc.update', 'workspace.doc.edit', 'workspace.doc.delete',
     'routine.create', 'routine.update', 'routine.run', 'routine.delete',
     'agent.wake',
-    'bot.create', 'bot.update', 'bot.control', 'bot.delete', 'bot.tick', 'bot.item.action',
   ])
   // In-flight requests that mutate workspace-scoped state or admit work count
   // against idleness, so a switch also waits for / refuses while a project,
@@ -1980,7 +1866,6 @@ async function createForemanDaemonResources(
     'workspace.doc.create', 'workspace.doc.update', 'workspace.doc.edit', 'workspace.doc.delete',
     'routine.create', 'routine.update', 'routine.run', 'routine.delete',
     'agent.wake',
-    'bot.create', 'bot.update', 'bot.control', 'bot.delete', 'bot.tick', 'bot.item.action',
   ]
   rpcRouter.setAdmissionGate((method, params) => {
     const longSessionPoll = method === 'session.events'
@@ -1998,7 +1883,7 @@ async function createForemanDaemonResources(
         { code: 'workspace_switch_in_progress', method },
       )
     }
-    if (['taskgraph.signal', 'routine.run', 'agent.wake', 'session.send', 'bot.tick'].includes(method)) {
+    if (['taskgraph.signal', 'routine.run', 'agent.wake', 'session.send'].includes(method)) {
       const disk = options.lowDiskState?.()
       if (disk && disk.status !== 'ok') throw new ProtocolError(
         { code: INVALID_PARAMS.code, message: `low_disk_space: ${disk.status === 'low' ? `available ${disk.availableBytes} bytes is below the ${disk.minimumBytes} byte minimum` : `state-volume sample failed: ${disk.error ?? 'unknown error'}`}; free space on the Wrenyard state volume and retry` },
@@ -2119,9 +2004,6 @@ async function createForemanDaemonResources(
   // A shutdown requested during startup skips start entirely: no interval is
   // armed and the stopped scheduler stays stopped.
   if (!options.isShuttingDown()) await workspaceScoped.scheduler.start()
-  // Begin bot polling only after the IPC server is listening too, for the same
-  // reason: a bot step must never drive a session no client can reach yet.
-  if (!options.isShuttingDown()) await workspaceScoped.botHost.start()
   // Arm the session's deferred recovery only now that IPC is listening: the
   // passes replay session bodies, so they must never run before healthy.
   if (!options.isShuttingDown()) workspaceScoped.session.startBackgroundRecovery()
@@ -2163,11 +2045,6 @@ async function createForemanDaemonResources(
       // then load the new snapshot without firing any schedule.
       await previous.scheduler.flush()
       await staged.scheduler.prepare()
-      // The bot host holds no state file, but it is flushed and prepared for the
-      // same reason as the scheduler: no bot step may fire during the swap, and
-      // the staged host must be ready before it is published.
-      await previous.botHost.flush()
-      await staged.botHost.prepare()
     } catch (error) {
       await teardownWorkspaceBindings(staged)
       return {
@@ -2225,12 +2102,10 @@ async function createForemanDaemonResources(
     resources.session = staged.session
     resources.scheduler = staged.scheduler
     resources.botAgents = staged.botAgents
-    resources.botHost = staged.botHost
     resources.taskService = staged.taskService
     resources.taskgraphService = staged.taskgraphService
     options.onScheduler?.(staged.scheduler)
     options.onBotAgents?.(staged.botAgents)
-    options.onBotHost?.(staged.botHost)
     // Retire the previous workspace before enabling new ticks: its scheduler
     // stops and its workspace-hashed session ledger is closed (history stays on
     // disk), so the old and new writers never overlap.
@@ -2255,11 +2130,6 @@ async function createForemanDaemonResources(
         await staged.scheduler.start()
       } catch (error) {
         writeDaemonLog('warn', 'scheduler failed to start after workspace switch', error)
-      }
-      try {
-        await staged.botHost.start()
-      } catch (error) {
-        writeDaemonLog('warn', 'bot host failed to start after workspace switch', error)
       }
       // Arm deferred session recovery on the new binding only after the switch
       // published and its services started; IPC is already listening here.
@@ -2291,7 +2161,6 @@ async function createForemanDaemonResources(
     gateway,
     session: workspaceScoped.session,
     scheduler: workspaceScoped.scheduler,
-    botHost: workspaceScoped.botHost,
     botAgents: workspaceScoped.botAgents,
     rpcRouter,
     taskService: workspaceScoped.taskService,
@@ -2392,11 +2261,6 @@ async function teardownWorkspaceBindings(bindings: WorkspaceScopedResources): Pr
     writeDaemonLog('warn', 'workspace bot agent kernel shutdown failed', error)
   }
   try {
-    bindings.botHost.stop()
-  } catch (error) {
-    writeDaemonLog('warn', 'workspace bot host shutdown failed', error)
-  }
-  try {
     await bindings.session.close()
   } catch (error) {
     writeDaemonLog('warn', 'workspace session shutdown failed', error)
@@ -2446,8 +2310,6 @@ interface DaemonResourceTeardownHandles {
   scheduler?: Scheduler
   /** Stopped with the scheduler so no bot agent turn starts during teardown. */
   botAgents?: BotAgentKernel
-  /** Stopped with the scheduler so no bot step starts during teardown. */
-  botHost?: BotHost
   gateway?: ModelGateway
   restoreGatewayEnvironment?: () => void
   ipcServer?: IpcServer
@@ -2498,15 +2360,6 @@ async function teardownDaemonResources(handles: DaemonResourceTeardownHandles): 
       await handles.botAgents.stop()
     } catch (error) {
       recordFailure('bot agent kernel shutdown failed', error)
-    }
-  }
-  // Stop the bot host at the same point: a late bot step must not start a new
-  // turn while the ledger and providers are being torn down.
-  if (handles.botHost) {
-    try {
-      handles.botHost.stop()
-    } catch (error) {
-      recordFailure('bot host shutdown failed', error)
     }
   }
   // Stop the session backend immediately after: it owns the append-only ledger
@@ -2977,9 +2830,9 @@ const DB_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000
 /**
  * Live daemon execution load, read from the database directly with no IPC round
  * trip: how many executions are active versus queued, and how long the oldest
- * queued one has waited. The bot uses it to back new work off and to warn.
+ * queued one has waited.
  */
-function readExecutionLoad(db: ForemanDatabase): BotLoadProbe {
+function readExecutionLoad(db: ForemanDatabase) {
   const active = db.prepare<[], { count: number }>(
     "SELECT COUNT(*) AS count FROM executions WHERE status IN ('starting','running')",
   ).get()

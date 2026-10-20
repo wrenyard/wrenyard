@@ -29,7 +29,6 @@ import {
   type TaskRoutingTestResult,
   type TaskRoutingTestTasksResult,
   type AgentMethod,
-  type BotMethod,
   type ExecStartRequest,
   type ExecSnapshotDto,
   type ExecEventsRequest,
@@ -49,7 +48,6 @@ import { registerSessionExecIpc } from './main/ipc/session-exec.js';
 import { registerStorageUsageIpc } from './main/ipc/storage-usage.js';
 import { registerTasksStatsIpc } from './main/ipc/tasks-stats.js';
 import { registerAgentIpc } from './main/ipc/agent.js';
-import { registerBotIpc } from './main/ipc/bot.js';
 import { registerBotTodoIpc, registerTodoIpc } from './main/ipc/todo.js';
 import { registerClientIpc } from './main/ipc/client.js';
 import { registerUpdateDaemonIpc } from './main/ipc/update-daemon.js';
@@ -143,8 +141,6 @@ export interface ShellWindowOptions {
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
   /** Forward one allowlisted agent/routine method to the daemon; results are unchanged. */
   requestAgent(method: AgentMethod, params?: unknown): Promise<unknown>;
-  /** Forward one allowlisted bot method to the daemon; results are unchanged. */
-  requestBot(method: BotMethod, params?: unknown): Promise<unknown>;
   execStart(request: ExecStartRequest): Promise<ExecSnapshotDto>;
   execGet(id: string): Promise<ExecSnapshotDto>;
   execEvents(request: ExecEventsRequest): Promise<ExecEventsResult>;
@@ -372,7 +368,6 @@ export class ShellWindowController {
       registerTasksStatsIpc(ipcMain, deps),
       registerStorageUsageIpc(ipcMain, deps),
       registerAgentIpc(ipcMain, deps),
-      registerBotIpc(ipcMain, deps),
       registerTodoIpc(ipcMain, deps),
       registerBotTodoIpc(ipcMain, deps),
       registerClientIpc(ipcMain, deps),

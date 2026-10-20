@@ -27,7 +27,7 @@ import { ActivityStatusProjector } from './main/activity-status.js';
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RemoteConnectionTestInput, type RemoteConnectionTestResult, type RemoteConnectionSnapshot, type RemoteHostListResult, type RemoteHostMutationResult, type RemoteHostView, type AgentMethod, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome, type OperationComponentAction, type OperationComponentId, type OperationComponentSnapshot, type BotMethod } from './shell-contract.js';
+import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RemoteConnectionTestInput, type RemoteConnectionTestResult, type RemoteConnectionSnapshot, type RemoteHostListResult, type RemoteHostMutationResult, type RemoteHostView, type AgentMethod, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome, type OperationComponentAction, type OperationComponentId, type OperationComponentSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { MiniCardManager } from './mini-cards.js';
 import { Notifier } from './main/notifications/notifier.js';
@@ -1139,12 +1139,6 @@ async function bootstrap(): Promise<void> {
   const requestAgent = async (method: AgentMethod, params?: unknown): Promise<unknown> => {
     return await requestForeman(method, params);
   };
-  // Bot-mode transport. Desktop forwards the allowlisted `bot.*` calls to the
-  // daemon and returns their results unchanged; it never runs a bot step or
-  // decides an item's state itself.
-  const requestBot = async (method: BotMethod, params?: unknown): Promise<unknown> => {
-    return await requestForeman(method, params);
-  };
   // Operation-component transport. The daemon owns installation, authorization
   // and health checks for its own machine; Desktop only forwards the read and
   // the user-triggered action. A dedicated client with a longer budget is used
@@ -2069,7 +2063,6 @@ async function bootstrap(): Promise<void> {
     saveTaskSettings: (request: TaskSettingsSaveRequest) => saveTaskSettings(request),
     requestTaskRoutingTest: (params: TaskRoutingTestParams) => requestTaskRoutingTest(params),
     requestRoutingTestTasks: () => requestRoutingTestTasks(),
-    requestBot: (method: BotMethod, params?: unknown) => requestBot(method, params),
     requestAgent: (method: AgentMethod, params?: unknown) => requestAgent(method, params),
     execStart: (request: ExecStartRequest) => execStart(request),
     execGet: (id: string) => execGet(id),

@@ -609,23 +609,6 @@ function isTerminalTask(db: ForemanDatabase | undefined, id: string): boolean {
   return row !== undefined && TERMINAL_TASK_STATUSES.includes(row.status)
 }
 
-interface BotItemRow {
-  state: string
-  updated_at: string
-  worktree_id: string | null
-}
-
-function readBotItem(db: ForemanDatabase | undefined, botId: string, itemId: string): BotItemRow | undefined {
-  if (db === undefined) return undefined
-  try {
-    return db
-      .prepare<[string, string], BotItemRow>('SELECT state, updated_at, worktree_id FROM bot_item WHERE bot_id = ? AND id = ?')
-      .get(botId, itemId)
-  } catch {
-    return undefined
-  }
-}
-
 function countRows(db: ForemanDatabase | undefined, sql: string, params: string[]): number {
   if (db === undefined) return -1
   try {
@@ -1193,14 +1176,6 @@ async function assessClientEntry(stateRoot: string, name: string): Promise<RawCa
   )
 }
 
-function parseBotOwner(owner: string | undefined): { botId: string; itemId: string } | undefined {
-  if (owner === undefined || !owner.startsWith('bot:')) return undefined
-  const rest = owner.slice('bot:'.length)
-  const slash = rest.indexOf('/')
-  if (slash <= 0 || slash === rest.length - 1) return undefined
-  return { botId: rest.slice(0, slash), itemId: rest.slice(slash + 1) }
-}
-
 interface WorktreeMetadata {
   id?: unknown
   project?: unknown
@@ -1282,11 +1257,6 @@ async function assessWorktree(
   if (normalizedMetadataPath !== expectedPath) {
     return protectedCandidate(id, 'worktrees', expectedPath, ownership, 'metadata path is not the managed worktree root; protected', { logicalBytes: 0, allocatedBytes: 0 }, { metadataPath })
   }
-  const owner = parseBotOwner(typeof metadata.owner === 'string' ? metadata.owner : undefined)
-  if (owner === undefined) {
-    return protectedCandidate(id, 'worktrees', expectedPath, ownership, 'worktree has no managed bot owner; protected', { logicalBytes: 0, allocatedBytes: 0 }, { metadataPath })
-  }
-
   const inspected = await inspectAndMeasure(stateRoot, expectedPath)
   if (inspected.reason === 'path is missing') {
     return protectedCandidate(id, 'worktrees', expectedPath, ownership, 'directory missing/metadata retained', { logicalBytes: 0, allocatedBytes: 0 }, { metadataPath })
@@ -1322,34 +1292,7 @@ async function assessWorktree(
   if (!pm.worktreeIsMergedIntoTarget(project, id)) {
     return protectedAt('worktree HEAD is not merged into the project default branch; protected')
   }
-  const item = readBotItem(db, owner.botId, owner.itemId)
-  if (item === undefined) {
-    return protectedAt('owning bot item could not be read; protected')
-  }
-  if (item.worktree_id !== id) {
-    return protectedAt('owning bot item does not reference this worktree; protected')
-  }
-  if (item.state !== 'completed') {
-    return protectedAt(`owning bot item state '${item.state}' is not completed; protected`)
-  }
-  const ageDays = ageDaysFromIso(item.updated_at, now)
-  if (ageDays === undefined) {
-    return protectedAt('owning bot item has no valid completion time; protected')
-  }
-  return {
-    id,
-    category: 'worktrees',
-    path: expectedPath,
-    ownership,
-    logicalBytes: measure.logicalBytes,
-    allocatedBytes: measure.allocatedBytes,
-    isDir: true,
-    safe: true,
-    safeReason: `merged, clean worktree owned by completed bot item ${owner.botId}/${owner.itemId}`,
-    ageDays,
-    metadataPath,
-    project,
-  }
+  return protectedAt('worktree owner is not recognized; protected')
 }
 
 async function assessUnrecognized(
@@ -2020,36 +1963,7 @@ async function removeEligible(
         if (worktree === undefined || !worktree.clean) {
           return protectedOutcome('worktree is no longer clean and registered; protected')
         }
-        const owner = parseBotOwner(worktree.owner)
-        if (owner === undefined) return protectedOutcome('worktree no longer has a managed bot owner; protected')
-        const item = readBotItem(db, owner.botId, owner.itemId)
-        if (item === undefined || item.worktree_id !== candidate.id || item.state !== 'completed') {
-          return protectedOutcome('completed bot ownership no longer matches this worktree; protected')
-        }
-        const ageDays = ageDaysFromIso(item.updated_at, now)
-        if (ageDays === undefined || ageDays < candidate.selectedThreshold) {
-          return protectedOutcome('completed bot item is within the retention period; protected')
-        }
-        if (!pm.worktreeIsMergedIntoTarget(refreshed.project, candidate.id)) {
-          return protectedOutcome('worktree HEAD is no longer merged into the project default branch; protected')
-        }
-        if (
-          !isSafePathSynchronously(stateRoot, candidate.path, 'directory') ||
-          !isSafePathSynchronously(stateRoot, candidate.metadataPath, 'file')
-        ) {
-          return protectedOutcome('worktree or metadata path failed immediate pre-removal validation; protected')
-        }
-        const referenceReason = activeReferenceReason(db, candidate.id, candidate.path)
-        if (referenceReason !== undefined) return protectedOutcome(referenceReason)
-        const result = await pm.removeWorktree(candidate.id)
-        if (!result.removed) {
-          return failed(result.error ?? 'worktree removal failed')
-        }
-        return removedOutcome(
-          base,
-          { logicalBytes: refreshed.logicalBytes, allocatedBytes: refreshed.allocatedBytes },
-          'removed merged, delivered worktree',
-        )
+        return protectedOutcome('worktree owner is not recognized; protected')
       }
       case 'clients': {
         if (candidate.subtype !== 'run-home') {

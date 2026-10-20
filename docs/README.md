@@ -11,7 +11,6 @@ screenshots ([中文](../README.zh-CN.md)).
 | [Getting started](guides/getting-started.md) | Workspace, providers, project registration and the first conversation |
 | [Bots and routines](guides/bots.md) | Agents that run on routines, open sessions, track todos and message each other |
 | [Supported providers](model-providers.md) | Every built-in provider, how it authenticates and what quota it reports |
-| [Legacy bot mode](guides/bot-mode.md) | The earlier inbox-driven dispatcher (旧版机器人) and its adapters |
 | [Task graphs](taskgraph.md) | Runtime signals for multi-step task graphs |
 
 ## How it works

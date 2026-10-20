@@ -13,7 +13,6 @@ import type {
 } from './common/methods.ts'
 import type { ActivityMethods } from './activity/methods.ts'
 import type { AgentMethods } from './agent/methods.ts'
-import type { BotMethods } from './bot/methods.ts'
 import type { ClientMethods } from './client/methods.ts'
 import type { ComponentsMethods } from './components/methods.ts'
 import type { DaemonMethods } from './daemon/methods.ts'
@@ -32,7 +31,6 @@ import type { WorkspaceMethods } from './workspace/methods.ts'
 export interface ProtocolMethods
   extends ActivityMethods,
     AgentMethods,
-    BotMethods,
     ClientMethods,
     ComponentsMethods,
     DaemonMethods,
@@ -70,7 +68,6 @@ export type ProtocolNotificationUnion = RpcTypedNotificationOf<ProtocolNotificat
 
 export * from './activity/index.ts'
 export * from './agent/index.ts'
-export * from './bot/index.ts'
 export * from './client/index.ts'
 export * from './common/index.ts'
 export * from './components/index.ts'

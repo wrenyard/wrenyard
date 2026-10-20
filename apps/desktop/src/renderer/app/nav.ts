@@ -17,7 +17,6 @@ export const PRIMARY_NAV: readonly ShellNavItem[] = [
   { id: 'tasks', label: '智能体任务', icon: ListChecks },
   { id: 'agents', label: '机器人', icon: Bot },
   { id: 'routines', label: '自动化', icon: CalendarClock },
-  { id: 'bot', label: '旧版机器人', icon: Bot },
 ];
 
 /** Settings lives in the rail footer, not the primary content list. */

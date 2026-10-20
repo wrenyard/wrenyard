@@ -1304,9 +1304,6 @@ export function createDemoShell(control?: DemoControl): DemoShell {
     getGatewaySettings: async () => GATEWAY_SETTINGS,
     saveGatewaySettings: async () => ({ ...GATEWAY_SETTINGS, ok: true }),
     getStorageUsage: async () => STORAGE_USAGE,
-    bot: async () => {
-      throw new Error('The legacy bot is not part of the showcase.');
-    },
     todo: async () => ({ todos: demoTodos }),
     botTodo: (async () => {
       throw new Error('Bot todo mutations are not part of the showcase.');

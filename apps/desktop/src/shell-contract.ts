@@ -88,45 +88,6 @@ import type {
   RoutineUpdateResult,
 } from '@wrenyard/protocol/routine';
 import type {
-  BotAcceptanceCheck,
-  BotComponentId,
-  BotComponentState,
-  BotHealthComponent,
-  BotHealthHost,
-  BotLoad,
-  BotModel,
-  BotConfigValidateParams,
-  BotConfigValidateResult,
-  BotControlAction,
-  BotControlParams,
-  BotControlResult,
-  BotCreateParams,
-  BotCreateResult,
-  BotHealthError,
-  BotHealthParams,
-  BotHostMode,
-  BotItemAction,
-  BotItemActionParams,
-  BotItemActionResult,
-  BotItemGetParams,
-  BotItemGetResult,
-  BotItemRecord,
-  BotItemState,
-  BotItemsParams,
-  BotItemsResult,
-  BotListResult,
-  BotLogParams,
-  BotLogRecord,
-  BotLogResult,
-  BotMethods,
-  BotMode,
-  BotRecord,
-  BotState,
-  BotTickLag,
-  BotTickParams,
-  BotTickResult,
-} from '@wrenyard/protocol/bot';
-import type {
   Todo,
   TodoCreateInput,
   TodoCreateParams,
@@ -390,14 +351,13 @@ export const SHELL_CHANNELS = {
   remoteChanged: 'wrenyard-shell:remote-changed',
   operationComponents: 'wrenyard-shell:operation-components',
   operationComponentAction: 'wrenyard-shell:operation-component-action',
-  botRequest: 'wrenyard-shell:bot-request',
   todoRequest: 'wrenyard-shell:todo-request',
   botTodoRequest: 'wrenyard-shell:bot-todo-request',
   agentRequest: 'wrenyard-shell:agent-request',
   clientRequest: 'wrenyard-shell:client-request',
 } as const;
 
-export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'agents' | 'routines' | 'bot' | 'todo';
+export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'agents' | 'routines' | 'todo';
 
 /* ------------------------------------------------------------------ */
 /* Appearance                                                          */
@@ -1354,137 +1314,6 @@ export type {
 
 
 /* ------------------------------------------------------------------ */
-/* Bot mode                                                            */
-/* ------------------------------------------------------------------ */
-
-/**
- * Bot mode is the daemon's autonomous dispatcher: one bot polls a user-local
- * inbox, drives one session and worktree per item, runs acceptance and delivers
- * one item at a time. The daemon owns lifecycle, persistence and every step;
- * Desktop only reads the projections below and forwards the allowlisted
- * `bot.*` calls. These wire types mirror the daemon's bot DTOs exactly.
- */
-
-/** Lifecycle of one bot. */
-export type { BotState };
-
-/** `live` performs merge/push/complete/notify; `dryRun` only records them. */
-export type { BotMode };
-
-/** One item's lifecycle state, mirrored from the daemon's item machine. */
-export type { BotItemState };
-
-/** The model a bot dispatched an item's session with. */
-export type { BotModel };
-
-export type { BotRecord };
-
-/** One acceptance check recorded for an item. */
-export type { BotAcceptanceCheck };
-
-export type { BotItemRecord };
-
-export type { BotLogRecord };
-
-/** Last and worst delay between a scheduled tick and its actual start. */
-export type { BotTickLag };
-
-export type { BotHealthError };
-
-/** `installed` when the daemon runs from the bundled suite; `source` otherwise. */
-export type { BotHostMode };
-
-/** The device and daemon a bot runs on. */
-export type { BotHealthHost };
-
-/** The managed operation components a bot's acceptance may require. */
-export type { BotComponentId };
-
-export type { BotComponentState };
-
-/** One operation component's current state, mirrored from `components.list`. */
-export type { BotHealthComponent };
-
-/**
- * Live daemon execution load observed at the last tick. `backedOff` is the
- * current dispatch state: true while the bot holds new work because the daemon
- * is loaded.
- */
-export type { BotLoad };
-
-/**
- * Durable endurance numbers for one bot. Kept local: the protocol `BotHealth`
- * additionally requires `lowDisk` and makes `forcedTicks`/`load` non-optional;
- * this Desktop projection tolerates older daemons that omit them.
- */
-export interface BotHealth {
-  uptimeSince: string;
-  ticks: number;
-  /** `bot.tick` passes, which are not cadence ticks; absent from older daemons. */
-  forcedTicks?: number;
-  lastTickAt?: string;
-  tickLagMs: BotTickLag;
-  itemsByState: Record<string, number>;
-  stepsFailed24h: number;
-  adapterErrors24h: number;
-  escalations24h: number;
-  lastError?: BotHealthError;
-  host: BotHealthHost;
-  /** Empty when the daemon's component service is absent or fails. */
-  components: BotHealthComponent[];
-  /** Live load and dispatch back-off state; absent from older daemons. */
-  load?: BotLoad;
-}
-
-export type { BotControlAction, BotItemAction };
-
-/**
- * The exact daemon methods the shell bridge forwards. Any other method is
- * rejected before it can reach the daemon; the daemon itself accepts `bot.*`
- * only over the local IPC transport.
- */
-export const BOT_METHODS = [
-  'bot.list',
-  'bot.create',
-  'bot.control',
-  'bot.tick',
-  'bot.config.validate',
-  'bot.items',
-  'bot.item.get',
-  'bot.item.action',
-  'bot.log',
-  'bot.health',
-] as const;
-
-export type BotMethod = (typeof BOT_METHODS)[number];
-
-export type {
-  BotCreateParams,
-  BotCreateResult,
-  BotControlParams,
-  BotControlResult,
-  BotTickParams,
-  BotTickResult,
-  BotConfigValidateParams,
-  BotConfigValidateResult,
-  BotItemsParams,
-  BotItemsResult,
-  BotItemGetParams,
-  BotItemGetResult,
-  BotItemActionParams,
-  BotItemActionResult,
-  BotLogParams,
-  BotLogResult,
-  BotHealthParams,
-  BotListResult,
-};
-/** `bot.health` resolves to the local tolerant projection above. */
-export type BotHealthResult = BotHealth;
-
-/** Params and result of each forwarded bot method, used to type the facade. */
-export type BotMethodMap = BotMethods;
-
-/* ------------------------------------------------------------------ */
 /* Workspace todos                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -1756,15 +1585,6 @@ export interface WrenyardShellApi {
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;
   /**
-   * Forward one allowlisted `bot.*` call to the daemon. The main-process
-   * registrar rejects any method outside {@link BOT_METHODS} before it reaches
-   * the daemon, so this facade is the renderer's only path to Bot mode.
-   */
-  bot<M extends BotMethod>(
-    method: M,
-    params?: BotMethodMap[M]['params'],
-  ): Promise<BotMethodMap[M]['result']>;
-  /**
    * Forward one allowlisted `todo.*` read call to the daemon. The main-process
    * registrar rejects any method outside {@link TODO_METHODS}, so this facade
    * exposes only the bounded read-only `todo.list` method.
@@ -1850,7 +1670,7 @@ export interface WrenyardShellApi {
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
-  return value === 'session' || value === 'trace' || value === 'stats' || value === 'settings' || value === 'tasks' || value === 'agents' || value === 'routines' || value === 'bot' || value === 'todo';
+  return value === 'session' || value === 'trace' || value === 'stats' || value === 'settings' || value === 'tasks' || value === 'agents' || value === 'routines' || value === 'todo';
 }
 
 /**

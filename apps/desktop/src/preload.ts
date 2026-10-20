@@ -25,8 +25,6 @@ import {
   type TaskRoutingTestParams,
   type TaskRoutingTestResult,
   type TaskRoutingTestTasksResult,
-  type BotMethod,
-  type BotMethodMap,
   type TodoMethod,
   type TodoMethodMap,
   type BotTodoMethod,
@@ -248,16 +246,6 @@ const api: WrenyardShellApi = {
   },
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskSettingsSave, request) as Promise<TaskSettingsSnapshot>;
-  },
-  bot<M extends BotMethod>(
-    method: M,
-    params?: BotMethodMap[M]['params'],
-  ): Promise<BotMethodMap[M]['result']> {
-    return ipcRenderer.invoke(
-      SHELL_CHANNELS.botRequest,
-      method,
-      params,
-    ) as Promise<BotMethodMap[M]['result']>;
   },
   agent<M extends AgentMethod>(
     method: M,

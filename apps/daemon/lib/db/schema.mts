@@ -660,100 +660,6 @@ const FWA_INDEX_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_fwa_document_session ON fwa_document(session_id)',
 ] as const
 
-// ── Bot mode (autonomous dispatcher) ──
-// Durable state for the daemon-owned bot host: bots, their inbox items, the
-// idempotent step journal, the bounded per-bot log and the project delivery
-// lane. JSON payloads are stored as TEXT, matching every other JSON column in
-// this schema. All statements are CREATE ... IF NOT EXISTS so an existing
-// database picks the new tables up idempotently at bootstrap.
-
-const BOT_TABLE_SQL = `CREATE TABLE IF NOT EXISTS bot (
-  id              TEXT PRIMARY KEY,
-  workspace_root  TEXT NOT NULL,
-  name            TEXT NOT NULL,
-  config_path     TEXT,
-  config_hash     TEXT,
-  state           TEXT NOT NULL CHECK(state IN ('running','paused','stopped')),
-  mode            TEXT NOT NULL CHECK(mode IN ('live','dryRun')),
-  last_tick_at    TEXT,
-  next_poll_at    TEXT,
-  created_at      TEXT NOT NULL,
-  updated_at      TEXT NOT NULL
-)`
-
-const BOT_ITEM_TABLE_SQL = `CREATE TABLE IF NOT EXISTS bot_item (
-  id              TEXT PRIMARY KEY,
-  bot_id          TEXT NOT NULL,
-  source_id       TEXT NOT NULL,
-  generation      INTEGER NOT NULL,
-  fingerprint     TEXT,
-  title           TEXT,
-  body            TEXT,
-  project         TEXT,
-  class           TEXT,
-  state           TEXT NOT NULL,
-  parked_from     TEXT,
-  question        TEXT,
-  answer          TEXT,
-  session_id      TEXT,
-  session_model   TEXT,
-  worktree_id     TEXT,
-  branch          TEXT,
-  head_sha        TEXT,
-  merged_sha      TEXT,
-  acceptance      TEXT,
-  counters        TEXT,
-  error           TEXT,
-  dry_run         INTEGER NOT NULL DEFAULT 0,
-  created_at      TEXT NOT NULL,
-  updated_at      TEXT NOT NULL,
-  UNIQUE(bot_id, source_id, generation)
-)`
-
-const BOT_STEP_TABLE_SQL = `CREATE TABLE IF NOT EXISTS bot_step (
-  id              TEXT PRIMARY KEY,
-  item_id         TEXT NOT NULL,
-  idem_key        TEXT NOT NULL UNIQUE,
-  kind            TEXT NOT NULL,
-  status          TEXT NOT NULL CHECK(status IN ('pending','done','failed','unknown')),
-  input           TEXT,
-  output          TEXT,
-  error           TEXT,
-  started_at      TEXT,
-  finished_at     TEXT
-)`
-
-const BOT_LOG_TABLE_SQL = `CREATE TABLE IF NOT EXISTS bot_log (
-  seq             INTEGER PRIMARY KEY AUTOINCREMENT,
-  bot_id          TEXT NOT NULL,
-  item_id         TEXT,
-  at              TEXT NOT NULL,
-  level           TEXT NOT NULL,
-  code            TEXT,
-  message         TEXT NOT NULL
-)`
-
-// One delivering item per (workspace_root, project), shared across every bot of
-// the workspace: different projects deliver in parallel, one item at a time per
-// project.
-const BOT_LANE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS bot_lane (
-  workspace_root  TEXT NOT NULL,
-  project         TEXT NOT NULL,
-  bot_id          TEXT NOT NULL,
-  item_id         TEXT NOT NULL,
-  acquired_at     TEXT NOT NULL,
-  PRIMARY KEY(workspace_root, project)
-)`
-
-const BOT_INDEX_STATEMENTS = [
-  'CREATE INDEX IF NOT EXISTS idx_bot_workspace ON bot(workspace_root)',
-  'CREATE INDEX IF NOT EXISTS idx_bot_item_bot_state ON bot_item(bot_id, state)',
-  'CREATE INDEX IF NOT EXISTS idx_bot_item_session ON bot_item(session_id)',
-  'CREATE INDEX IF NOT EXISTS idx_bot_step_item_status ON bot_step(item_id, status)',
-  'CREATE INDEX IF NOT EXISTS idx_bot_log_bot_seq ON bot_log(bot_id, seq)',
-  'CREATE INDEX IF NOT EXISTS idx_bot_log_bot_at ON bot_log(bot_id, at)',
-] as const
-
 /** Bounded audit log of executed managed-artifact cleanups (newest kept, capped). */
 const STORAGE_CLEANUP_RUN_TABLE_SQL = `CREATE TABLE IF NOT EXISTS storage_cleanup_run (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1355,12 +1261,6 @@ const SCHEMA_STATEMENTS = [
   FWA_SESSION_TABLE_SQL,
   FWA_DOCUMENT_TABLE_SQL,
   ...FWA_INDEX_STATEMENTS,
-  BOT_TABLE_SQL,
-  BOT_ITEM_TABLE_SQL,
-  BOT_STEP_TABLE_SQL,
-  BOT_LOG_TABLE_SQL,
-  BOT_LANE_TABLE_SQL,
-  ...BOT_INDEX_STATEMENTS,
   STORAGE_CLEANUP_RUN_TABLE_SQL,
   ...STORAGE_CLEANUP_RUN_INDEX_STATEMENTS,
 ] as const

@@ -6,11 +6,6 @@ woken by a routine, by a message from you or another bot, or by a work session
 it started finishing a turn. Bots appear on the **机器人** (Bots) page of the
 desktop app.
 
-> The **旧版机器人** (legacy bot) page is the earlier deterministic inbox
-> dispatcher. It still works and is documented in the
-> [legacy bot mode guide](bot-mode.md); new automation should use the bots
-> described here.
-
 ## Define a bot
 
 A bot is one directory named by its id. Who the bot is can sync between your
