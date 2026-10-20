@@ -17,6 +17,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
@@ -82,6 +83,12 @@ const GROUP_PAGE_MAX = 500
 const GROUP_PUBLISHED_MAX = 2_000
 /** How many delivered session wake keys one bot remembers. */
 const WAKE_KEYS_MAX = 64
+/**
+ * Characters of memory bodies the fixed prompt embeds: about 8k tokens at the
+ * four-characters-per-token estimate. Above it the prompt carries only the
+ * index and the memory tool reads bodies on demand.
+ */
+const MEMORY_BODY_CHARS = 32_000
 /**
  * The built-in, private-data-free role of a freshly created bot. It states no
  * filesystem path: identity and memory are reached only through the tools.
@@ -325,13 +332,15 @@ export interface GroupSendResult {
 /**
  * The fixed instruction prefix every bot runs on: its identity role, its
  * routines on this device, and the enabled peers it may address in the group.
- * Its memory reaches it like a work session's: the memory search picks the
- * entries a turn needs from the bot's own memory index.
+ * `memory` is the bot's own store, read live when the prompt is assembled, so
+ * the index and the bodies are always current; they are code-assembled facts,
+ * never part of any model-written summary.
  */
-function botSystemPrompt(entry: BotAgentEntry, all: Iterable<BotAgentEntry>): string {
+function botSystemPrompt(entry: BotAgentEntry, all: Iterable<BotAgentEntry>, memory: BotMemoryView): string {
   const identity = entry.identity
   const name = identity?.name ?? entry.id
   const workspaceEnabled = entry.config?.tools.includes('workspace') === true
+  const memoryEnabled = entry.config?.tools.includes('memory') === true
   const fixed = [
     `You are the Wrenyard bot "${name}" (${entry.id}).`,
     'You are driven by messages: routine triggers, user input, other bots\' messages and work-session updates.',
@@ -340,6 +349,10 @@ function botSystemPrompt(entry: BotAgentEntry, all: Iterable<BotAgentEntry>): st
     'Answer directly in text when no work is needed: acknowledgements, status from this conversation, and questions you can answer without running anything.',
     'You never run code, searches, documents or tasks yourself; delegate such work to a work session in natural language and create one only for it.',
     'You have no file or shell access beyond your own memory and identity and the explicit workspace tool.',
+    ...(memoryEnabled
+      ? ['Your memories record how you are to work: when the user corrects you, record that correction with the memory tool and follow it from then on.']
+      : []),
+    'When you are unsure, or an instruction, a memory and the current state disagree, ask the user in your reply instead of guessing, and act on the answer.',
     ...(workspaceEnabled
       ? ['With the workspace tool you may commit and push workspace changes you made yourself (your memory, your identity, todos you created or updated); name the exact files and never commit files you did not change.']
       : []),
@@ -372,7 +385,62 @@ function botSystemPrompt(entry: BotAgentEntry, all: Iterable<BotAgentEntry>): st
     ].join('\n'))
   }
   parts.push(roster)
+  const index = memory.index.trim()
+  if (index === '') parts.push('Your memory store holds no memories yet.')
+  else parts.push(`Your memory index:\n${index}`)
+  if (memory.bodies !== '') parts.push(`Memory bodies:\n${memory.bodies}`)
+  else if (memory.omitted) {
+    parts.push('The memory bodies are larger than the fixed-context budget here; read any of them with the memory tool, operation read and its name.')
+  }
   return parts.join('\n\n')
+}
+
+/** One bot's memory as the fixed prompt embeds it: the index and bounded bodies. */
+interface BotMemoryView {
+  /** `memory/INDEX.md` of this bot, read when the prompt is assembled. */
+  index: string
+  /** Concatenated memory bodies, or empty when they exceed the budget. */
+  bodies: string
+  /** True when bodies exist but are left out of the prompt for size. */
+  omitted: boolean
+}
+
+/** Strip a leading YAML frontmatter block, keeping the memory body alone. */
+function memoryBody(text: string): string {
+  const match = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)([\s\S]*)$/u.exec(text)
+  return (match?.[1] ?? text).trim()
+}
+
+/**
+ * Read one bot's memory live: its index, and its bodies while they fit the
+ * fixed prompt's budget. Above the budget only the index is embedded and the
+ * bodies stay available through the memory tool's read operation.
+ */
+function botMemoryView(port: WorkspaceMemoryPort, directory: string): BotMemoryView {
+  try {
+    const index = port.index()
+    const bodies: string[] = []
+    let size = 0
+    for (const entry of port.list()) {
+      let text: string
+      try {
+        text = readFileSync(join(directory, entry.filename), 'utf-8')
+      } catch {
+        // A file removed between the scan and the read is simply skipped.
+        continue
+      }
+      const body = memoryBody(text)
+      if (body === '') continue
+      const block = `### ${entry.name}\n${body}`
+      size += block.length
+      bodies.push(block)
+    }
+    if (size > MEMORY_BODY_CHARS) return { index, bodies: '', omitted: bodies.length > 0 }
+    return { index, bodies: bodies.join('\n\n'), omitted: false }
+  } catch {
+    // An unreadable store never blocks a wake; the memory tool can still try.
+    return { index: '', bodies: '', omitted: false }
+  }
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -714,18 +782,27 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     return context
   }
 
+  /**
+   * The bot's own memory store at `<bot directory>/memory`. It reuses the
+   * workspace memory mechanism rooted per bot, so hand-edited files are read
+   * live on the next prompt build. The store is memoized per directory.
+   */
+  function memoryStoreFor(entry: BotAgentEntry): WorkspaceMemoryPort {
+    let store = memoryStores.get(entry.directory)
+    if (store === undefined) {
+      store = createWorkspaceMemory(entry.directory, 'memory')
+      memoryStores.set(entry.directory, store)
+    }
+    return store
+  }
+
   /** The memory store of the bot owning one context session, if any. */
   function memoryForSession(sessionId: string): WorkspaceMemoryPort | undefined {
     for (const [botId, bot] of Object.entries(state.bots)) {
       if (bot.sessionId !== sessionId) continue
       const entry = entries.get(botId)
       if (entry === undefined) return undefined
-      let store = memoryStores.get(entry.directory)
-      if (store === undefined) {
-        store = createWorkspaceMemory(entry.directory, 'memory')
-        memoryStores.set(entry.directory, store)
-      }
-      return store
+      return memoryStoreFor(entry)
     }
     return undefined
   }
@@ -778,6 +855,9 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
         return `- @${peer.id} (${icon}${name})`
       })].join('\n'))
     }
+    // The index is a kernel fact so it survives compaction and restart.
+    const index = memoryStoreFor(entry).index().trim()
+    if (index !== '') sections.push(`## memories\n${index}`)
     return sections.length === 0 ? undefined : sections.join('\n\n')
   }
 
@@ -785,7 +865,11 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     const entry = entries.get(botId)
     if (entry?.config === undefined || entry.identity === undefined) return undefined
     return {
-      system: botSystemPrompt(entry, entries.values()),
+      system: botSystemPrompt(
+        entry,
+        entries.values(),
+        botMemoryView(memoryStoreFor(entry), join(entry.directory, 'memory')),
+      ),
       tools: agentToolSpecs(entry.config.tools),
       maxToolCalls: MAX_TOOL_CALLS,
       kernelFacts: () => kernelFactsFor(entry),
