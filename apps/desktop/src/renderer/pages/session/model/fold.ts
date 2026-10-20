@@ -663,7 +663,7 @@ function buildCalls(events: LedgerEvent[], live: readonly LiveCall[], turnEnded:
       return {
         id,
         role,
-        model: start?.request.model ?? '',
+        model: done.requestModel || start?.request.model || '',
         status: spanStatus(done.status),
         turn: done.turn ?? start?.turn ?? 0,
         ...(step === undefined ? {} : { cycle: step }),
