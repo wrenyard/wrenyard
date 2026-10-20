@@ -87,7 +87,7 @@ export function TurnActivity({ turn, onInterrupt, waiting }: TurnActivityProps) 
       {runningAuxCalls(turn).map((call) => (
         <span
           key={call.id}
-          className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 px-2 py-0.5 text-xs text-foreground animate-in fade-in-0 zoom-in-95 duration-200"
+          className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 px-2 py-0.5 text-xs text-foreground animate-in fade-in-0 zoom-in-95 duration-base"
         >
           <span className="motion-pulse-slow size-1.5 rounded-full bg-primary" />
           {CALL_ROLE_LABEL[call.role] ?? call.role}

@@ -102,7 +102,7 @@ export function TitleBar() {
           ref={(element) => registerTitleBarSlot('session', 'title', element)}
         />
         <div className={cn('group/mini-actions flex shrink-0 items-center gap-1', NO_DRAG)}>
-          <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/mini-actions:opacity-100 has-[:focus-visible]:opacity-100 motion-reduce:transition-none [[data-motion=reduce]_&]:transition-none">
+          <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity duration-fast group-hover/mini-actions:opacity-100 has-[:focus-visible]:opacity-100 motion-reduce:transition-none [[data-motion=reduce]_&]:transition-none">
             <Tooltip>
               <TooltipTrigger
                 render={(

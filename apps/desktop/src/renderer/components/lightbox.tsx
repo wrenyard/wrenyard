@@ -77,7 +77,7 @@ function LightboxView({ current }: { current: LightboxState }) {
       aria-modal="true"
       aria-label={item.name}
       data-open=""
-      className="group/lightbox fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150"
+      className="group/lightbox fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-fast"
     >
       <div className="flex shrink-0 items-center gap-3 px-4 py-2">
         <span className="min-w-0 truncate text-sm font-medium">{item.name}</span>

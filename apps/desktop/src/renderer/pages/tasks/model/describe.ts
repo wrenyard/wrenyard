@@ -3,7 +3,7 @@ import type { TaskDefinitionInheritanceLayer } from '@/shell-contract';
 /* Central product copy for the Task Settings page. All Chinese UI text lives
  * here so the components and pure model stay copy-free. */
 
-export const PAGE_TITLE = '任务';
+export const PAGE_TITLE = '智能体任务';
 export const REFRESH_LABEL = '刷新';
 export const REFRESH_BUSY_LABEL = '读取中…';
 export const RETRY_LABEL = '重试';

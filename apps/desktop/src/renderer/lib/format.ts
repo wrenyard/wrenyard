@@ -135,7 +135,7 @@ export function dateGroupOf(value: string, now: number): DateGroup {
 export function dateGroupLabel(group: DateGroup): string {
   if (group === '今天' || group === '昨天' || group === '更早') return group;
   const date = new Date(Number(group.slice(4)));
-  return `${date.getMonth() + 1}月${date.getDate()}日`;
+  return WEEKDAY[date.getDay()];
 }
 
 /** Sidebar order: 今天 < 昨天 < per-day keys newest first < 更早. */

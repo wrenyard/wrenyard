@@ -211,13 +211,13 @@ export function MorphText({ text, className }: MorphTextProps) {
         {outgoing !== undefined && (
           <span
             aria-hidden
-            className="pointer-events-none absolute inset-0 animate-out fade-out-0 duration-150"
+            className="pointer-events-none absolute inset-0 animate-out fade-out-0 duration-fast"
             style={{ animationFillMode: 'forwards' }}
           >
             {outgoing}
           </span>
         )}
-        <span key={text} className="animate-in fade-in duration-150">{text}</span>
+        <span key={text} className="animate-in fade-in duration-fast">{text}</span>
       </span>
     );
   }
@@ -230,7 +230,7 @@ export function MorphText({ text, className }: MorphTextProps) {
           data-morph-id={cell.id}
           className={cn(
             'inline-block',
-            entering.has(cell.id) && 'animate-in fade-in slide-in-from-bottom-1 duration-150',
+            entering.has(cell.id) && 'animate-in fade-in slide-in-from-bottom-1 duration-fast',
           )}
         >
           {shown(cell.char)}

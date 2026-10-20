@@ -92,7 +92,7 @@ export function UsageRing({ ratio, status = 'ready', className }: UsageRingProps
           strokeDasharray={CIRCUMFERENCE}
           strokeDashoffset={CIRCUMFERENCE * (1 - share)}
           transform="rotate(-90 8 8)"
-          className={cn(ARC_CLASS[level], 'transition-[stroke-dashoffset] duration-200 motion-reduce:transition-none')}
+          className={cn(ARC_CLASS[level], 'transition-[stroke-dashoffset] duration-base motion-reduce:transition-none')}
         />
       </svg>
     </span>

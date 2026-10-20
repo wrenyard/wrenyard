@@ -96,7 +96,7 @@ export function ActivityRow({
       <CollapsibleContent
         role="region"
         aria-labelledby={headerId}
-        className="h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-150 data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0"
+        className="h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-fast data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0"
       >
         <div className={cn('flex flex-col gap-2 text-sm', compact ? 'px-2 pb-2 pt-1' : 'px-3 pb-3 pt-1')}>
           {children}

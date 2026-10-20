@@ -85,7 +85,7 @@ export function TodoSection({
         <span className={cn(uppercase && 'uppercase')}>{label}</span>
         <span className="ml-auto tabular-nums">{count}</span>
       </CollapsibleTrigger>
-      <CollapsibleContent className="h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-150 data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0">
+      <CollapsibleContent className="h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-fast data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0">
         {children}
       </CollapsibleContent>
     </Collapsible>
