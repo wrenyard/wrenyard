@@ -13,7 +13,7 @@ import { RoutinesSection } from './RoutinesSection.js';
 /**
  * One bot's routines, surfaced only when it matches the current search. The bot
  * matches if its name matches or any of its routine prompts matches; the section
- * then keeps its own prompt filter on the table. Reports its match back so the
+ * then keeps its own prompt filter on the table unless the bot name matched. Reports its match back so the
  * page can show the empty-search state once every bot has reported.
  */
 function RoutinesBotEntry(props: {
@@ -27,7 +27,7 @@ function RoutinesBotEntry(props: {
   const matched = useMemo(() => {
     if (key === '') return true;
     if (props.bot.name.trim().toLowerCase().includes(key)) return true;
-    return botRoutines.some((item) => item.prompt.toLowerCase().includes(key));
+    return botRoutines.some((item) => item.prompt.toLowerCase().includes(key) || (item.name ?? '').trim().toLowerCase().includes(key));
   }, [key, props.bot.name, botRoutines]);
 
   useEffect(() => {
@@ -36,6 +36,7 @@ function RoutinesBotEntry(props: {
   }, [props.bot.id, props.onMatchChange, matched]);
 
   if (!matched) return null;
+  const botNameMatched = key !== '' && props.bot.name.trim().toLowerCase().includes(key);
   if (!props.bot.enabled) {
     return (
       <div className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
@@ -49,7 +50,7 @@ function RoutinesBotEntry(props: {
       </div>
     );
   }
-  return <RoutinesSection botId={props.bot.id} botName={props.bot.name} filter={props.filter} />;
+  return <RoutinesSection botId={props.bot.id} botName={props.bot.name} filter={botNameMatched ? '' : props.filter} />;
 }
 
 /**
@@ -94,7 +95,7 @@ export function RoutinesPage() {
         <PageHeader>
           <PageTitle>自动化</PageTitle>
         </PageHeader>
-        <PageContent className="gap-4 p-4">
+        <PageContent>
           <Skeleton className="h-9 w-full max-w-sm" />
           <Skeleton className="h-40 w-full" />
         </PageContent>
@@ -110,7 +111,7 @@ export function RoutinesPage() {
       <PageHeader>
         <PageTitle>自动化</PageTitle>
       </PageHeader>
-      <PageContent className="gap-4 p-4">
+      <PageContent>
         <InputGroup className="max-w-sm">
           <InputGroupAddon>
             <Search className="size-4" />
@@ -122,6 +123,7 @@ export function RoutinesPage() {
             onChange={(event) => setSearch(event.target.value)}
           />
         </InputGroup>
+        <p className="text-xs text-muted-foreground">仅在本机运行</p>
         {noBots ? (
           <Empty>
             <EmptyHeader>

@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/renderer/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { useConfirm } from '@/renderer/hooks/use-confirm';
+import { errorMessage } from '../settings/model/settings.js';
 import type { Routine } from '@/shell-contract';
 import {
   ROUTINE_STATE_VIEW,
@@ -40,7 +41,7 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
 
   const filterKey = (props.filter ?? '').trim().toLowerCase();
   const items: Routine[] = (routines.data?.routines ?? []).filter((item) =>
-    item.botId === props.botId && (filterKey === '' ? true : item.prompt.toLowerCase().includes(filterKey)),
+    item.botId === props.botId && (filterKey === '' ? true : item.prompt.toLowerCase().includes(filterKey) || (item.name ?? '').trim().toLowerCase().includes(filterKey)),
   );
 
   const requestDelete = (item: Routine): void => {
@@ -79,10 +80,7 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
     <Card>
       <CardHeader>
         <CardTitle>
-          例行任务（仅在本机运行）
-          {props.botName !== undefined && props.botName !== '' && (
-            <span className="ml-2 text-sm font-normal text-muted-foreground">{props.botName}</span>
-          )}
+          {props.botName || '例行任务'}
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -111,14 +109,23 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
                 return (
                   <TableRow key={item.id}>
                     <TableCell>
-                      <Tooltip>
-                        <TooltipTrigger render={<span className="block max-w-[16rem] truncate font-medium" />}>
-                          {item.prompt}
-                        </TooltipTrigger>
-                        <TooltipContent>{item.prompt}</TooltipContent>
-                      </Tooltip>
-                      {item.name !== undefined && (
-                        <span className="mt-1 block text-xs text-muted-foreground">{item.name}</span>
+                      {item.name !== undefined && item.name !== '' ? (
+                        <>
+                          <span className="block font-medium">{item.name}</span>
+                          <Tooltip>
+                            <TooltipTrigger render={<span className="mt-1 block max-w-[16rem] truncate text-xs text-muted-foreground" />}>
+                              {item.prompt}
+                            </TooltipTrigger>
+                            <TooltipContent>{item.prompt}</TooltipContent>
+                          </Tooltip>
+                        </>
+                      ) : (
+                        <Tooltip>
+                          <TooltipTrigger render={<span className="block max-w-[16rem] truncate font-medium" />}>
+                            {item.prompt}
+                          </TooltipTrigger>
+                          <TooltipContent>{item.prompt}</TooltipContent>
+                        </Tooltip>
                       )}
                     </TableCell>
                     <TableCell className="text-muted-foreground tabular-nums">
@@ -131,7 +138,14 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
                       {item.nextRunAt === undefined ? NONE : <Timestamp value={item.nextRunAt} />}
                     </TableCell>
                     <TableCell className="max-w-[10rem] truncate text-xs">
-                      {item.lastError === undefined ? NONE : <span className="text-destructive">{item.lastError}</span>}
+                      {item.lastError === undefined ? NONE : (
+                        <Tooltip>
+                          <TooltipTrigger render={<span className="block max-w-[10rem] truncate text-destructive" />}>
+                            {item.lastError}
+                          </TooltipTrigger>
+                          <TooltipContent>{item.lastError}</TooltipContent>
+                        </Tooltip>
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="flex shrink-0 items-center justify-end gap-1">
@@ -182,17 +196,17 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
                   onChange={(event) => setIntervalMinutes(event.target.value)}
                 />
               </Field>
-              <Button size="sm" className="ml-auto" disabled={create.isPending} onClick={submit}>
-                新建
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setCreating(false)}>
+              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setCreating(false)}>
                 取消
               </Button>
+              <Button size="sm" disabled={create.isPending} onClick={submit}>
+                新建
+              </Button>
             </div>
-            {create.isError && <span className="text-xs text-destructive">{String(create.error)}</span>}
+            {create.isError && <span className="text-xs text-destructive">{errorMessage(create.error)}</span>}
           </div>
         ) : (
-          <Button variant="outline" size="sm" onClick={() => setCreating(true)}>
+          <Button variant="outline" size="sm" className="self-start" onClick={() => setCreating(true)}>
             新建例行任务
           </Button>
         )}
