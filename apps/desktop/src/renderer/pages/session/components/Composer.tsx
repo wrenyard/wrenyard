@@ -463,6 +463,9 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   const submit = (): void => {
     void (async () => {
       if (submitLatch.current) return;
+      // Latch before awaiting or sending, so a second submit in the same tick
+      // or while the image warning is open never starts a second turn.
+      submitLatch.current = true;
       const body = text.trim();
       const submitted = attachmentsRef.current;
       if (submitted.some((item) => item.preview !== undefined || item.mime?.startsWith('image/'))
@@ -472,10 +475,11 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
           description: '发送后模型将看不到图片内容。仍要发送吗？',
           confirmLabel: '仍然发送',
         });
-        if (!confirmed) return;
+        if (!confirmed) {
+          submitLatch.current = false;
+          return;
+        }
       }
-      // Latch before state mutation or sending work.
-      submitLatch.current = true;
     // An over-budget context is not refused here: only sending a turn triggers
     // the engine's compaction, so blocking would deadlock the session. What the
     // engine still refuses after compacting surfaces through the turn error.
