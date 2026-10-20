@@ -411,8 +411,9 @@ function markWakeKeys(bot: BotState, keys: readonly string[]): void {
 /**
  * The context-input threshold above which a bot's own conversation rotates to a
  * fresh session. It is the smaller of a fixed 100k ceiling and half the
- * smallest finite positive context window among the routes a wake may run on
- * (the primary and the single fallback runWake tries), so a route is always
+ * smallest finite positive context window across all routes the bot may use
+ * (every configured non-denied route), so a later fallback with a smaller
+ * window never exceeds its budget uncompacted and a route is always
  * left enough room for its own output. A route with no resolved window falls
  * back to the 100k ceiling.
  */
@@ -1600,9 +1601,9 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       // routes can offer, seeding the fresh session with what is still in
       // flight. The old ledger and every watch and routine stays intact.
       let activeSessionId = sessionId
-      // The threshold covers only the routes a turn can run: the primary
-      // and the single fallback runWake tries below.
-      if (estimatedInput !== undefined && estimatedInput > rotationThreshold(routes.slice(0, 2)) && !stopped) {
+      // The threshold covers every route the bot may use, including later
+      // fallbacks, and is bounded by the smallest context window among them.
+      if (estimatedInput !== undefined && estimatedInput > rotationThreshold(routes) && !stopped) {
         const fresh = await contextSession().createSession()
         // Bind and persist the fresh session before seeding so the seed
         // turn resolves the bot's tool port like every other bot turn.
