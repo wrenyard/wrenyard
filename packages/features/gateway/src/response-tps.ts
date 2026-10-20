@@ -35,6 +35,8 @@ export interface ResponseSamplerOptions {
   model?: string;
   /** When the gateway request started, on the same epoch clock as `now`. */
   requestStartedAtMs?: number;
+  /** Invoked once on the first nonempty generation delta observed on any channel. */
+  onFirstOutput?: () => void;
 }
 
 /**
@@ -46,18 +48,30 @@ export class ResponseSampler implements TpsSink {
   private readonly now: () => number;
   private readonly model: string;
   private readonly requestStartedAtMs: number | undefined;
+  private readonly onFirstOutput: (() => void) | undefined;
   private readonly collector = new TpsGenerationCollector();
   private responseId: string | undefined;
+  private sawOutput = false;
 
   constructor(options: ResponseSamplerOptions = {}) {
     this.now = options.now ?? (() => Date.now());
     this.model = options.model ?? '';
     this.requestStartedAtMs = options.requestStartedAtMs;
+    this.onFirstOutput = options.onFirstOutput;
+  }
+
+  /** Whether a nonempty text, reasoning, or tool generation delta was observed. */
+  hasSeenOutput(): boolean {
+    return this.sawOutput;
   }
 
   /** One nonempty generation delta on a stable, distinct channel. */
   delta(channel: string, text: string): void {
     if (text === '') return;
+    if (!this.sawOutput) {
+      this.sawOutput = true;
+      this.onFirstOutput?.();
+    }
     this.collector.observe(channel, text, this.now());
   }
 

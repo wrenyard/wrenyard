@@ -41,10 +41,10 @@ export interface ModelGateway {
    */
   beginRouteAttempt(publicModel: string, attemptId: string): void;
   /**
-   * Report a client-observed fault (a timeout or fetch failure the Gateway only
+   * Report a client-observed transport fault (a fetch failure the Gateway only
    * saw as a disconnect) into the same route state store. A fault is recorded
-   * only while the attempt is unsettled, so a client report and the server-side
-   * timeout of the same attempt are never double counted.
+   * only while the attempt is unsettled, so a client report and a server-side
+   * fault of the same attempt are never double counted.
    */
   reportRouteFault(publicModel: string, attemptId: string, kind: ClientFaultKind): void;
   /** Finish a client attempt; its settled tombstone expires after a bounded TTL. */
@@ -144,7 +144,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
 
   const reportRouteFault = (publicModel: string, attemptId: string, kind: ClientFaultKind): void => {
     const split = gatewayRouteKey(options.catalog, publicModel);
-    if (split !== undefined) routeStates.reportAttemptFault(split.provider, split.model, attemptId, kind, kind === 'timeout' ? 504 : 502);
+    if (split !== undefined) routeStates.reportAttemptFault(split.provider, split.model, attemptId, kind, 502);
   };
 
   const completeRouteAttempt = (publicModel: string, attemptId: string): void => {

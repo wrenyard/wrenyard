@@ -26,6 +26,6 @@ export function resolveConstrainedDispatch(catalog: Catalog, candidates: readonl
 }
 export * from './selector.ts';
 export * from './selector-inputs.ts';
-export { ROLE_REQUIREMENTS, TASK_REQUIREMENT, BOT_REQUIREMENT, AUXILIARY_TIMEOUT_MS, supportsSession } from './requirements.ts';
+export { ROLE_REQUIREMENTS, TASK_REQUIREMENT, BOT_REQUIREMENT, supportsSession } from './requirements.ts';
 export { rankAutomaticTaskCandidates } from './task-selection.ts';
 export type { AutomaticTaskRankingParams, AutomaticTaskRankingResult, AutomaticTaskRoutingWeights } from './task-selection.ts';

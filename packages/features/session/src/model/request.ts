@@ -3,7 +3,7 @@
  *
  * One call is one stateless request: pick the role's model, resolve its model
  * metadata, estimate the input with `o200k_base`, enforce the context budget,
- * run it through the {@link ModelTransport} under the role's timeout, and write
+ * run it through the {@link ModelTransport}, and write
  * exactly one `span.started` and one `span.finished` ledger event for the
  * invocation. The runner keeps no session state, never parses JSON output and
  * never repairs schemas — those belong to `actions.ts` / `engine.ts`.
@@ -53,54 +53,13 @@ export type { Message, ModelContentPart, ToolCall, ToolSpec, Usage } from '../tr
 export const CALL_ROLES = ['reason', 'memory-search', 'search', 'dispatch', 'reply', 'title', 'document', 'todo', 'vcs', 'project', 'status', 'suggestion'] as const;
 export type CallRole = (typeof CALL_ROLES)[number];
 
-/** The expensive role streams with no total deadline; its idle stream is bounded. */
-export const REASON_IDLE_TIMEOUT_MS = 180_000;
-/** Every auxiliary request is bounded end to end. */
-export const AUXILIARY_TIMEOUT_MS = 60_000;
 /**
- * The whole bounded auxiliary failover budget: route selection plus every
- * attempt. Raised above the per-route hard cap so a single capped route still
- * leaves a full window for the next ranked route within the same call.
+ * First-response timeout auxiliary roles pass to the Gateway (seconds). Main
+ * reasoning omits the header and uses the Gateway default (120 s).
  */
-export const AUXILIARY_TOTAL_BUDGET_MS = 90_000;
+export const AUXILIARY_FIRST_RESPONSE_TIMEOUT_SEC = 30;
 /** At most this many distinct candidate routes, each tried once. */
 export const AUXILIARY_MAX_ROUTES = 3;
-/**
- * Per-attempt no-progress deadline for auxiliary calls. It is reset on any
- * streamed output, so a route that keeps producing tokens is never cut off by
- * it; it aborts the attempt only after this long with no output. It is distinct
- * from {@link AUXILIARY_TOTAL_BUDGET_MS}, the finite total budget that cuts the
- * whole call regardless of progress.
- */
-export const AUXILIARY_IDLE_TIMEOUT_MS = 30_000;
-/**
- * Per-attempt absolute deadline for auxiliary calls, armed once per attempt and
- * never re-armed by streamed output. It caps a route that is slow but still
- * producing tokens — the idle deadline is suppressed once output starts — so a
- * sluggish route cannot consume the whole failover budget before failover.
- */
-export const AUXILIARY_ROUTE_TIMEOUT_MS = 45_000;
-/**
- * The two local, caller-side terminal classifications this runner decides
- * itself — never a transport adapter: the caller's finite auxiliary total
- * budget ran out (`local_budget`) or the last attempt was cut by the local
- * per-route no-progress deadline (`local_deadline`). They share the `kind` slot
- * with the transport's {@link ModelErrorKind} so the span and attempt error
- * surfaces keep one shape, but they are local facts and must never be read as
- * an upstream `network`, `server` or `aborted`; the assertions below are the
- * single point where the local vocabulary meets the transport's.
- */
-export const LOCAL_CALL_ERROR = {
-  /** The caller's own finite total budget cut the whole call. */
-  budget: 'local_budget' as ModelErrorKind,
-  /** The per-route idle/no-progress deadline cut the last attempt. */
-  deadline: 'local_deadline' as ModelErrorKind,
-  /**
-   * The per-route hard cap cut the last attempt: a route that kept going but
-   * was too slow to finish, distinct from the caller's own total budget.
-   */
-  route_timeout: 'local_route_timeout' as ModelErrorKind,
-};
 
 /**
  * Route health the runner reads: the Gateway's typed route status. A present
@@ -110,8 +69,6 @@ export type RouteHealth = GatewayRouteStatus;
 
 /** Output-token allowance for the one next-input suggestion call (384 tokens). */
 export const SUGGESTION_MAX_TOKENS = 384;
-/** Total deadline for the suggestion role, including auxiliary route selection (15 s). */
-export const SUGGESTION_TIMEOUT_MS = 15_000;
 /** Fixed cap for the compaction input threshold (spec: about 120k tokens). */
 export const COMPACTION_THRESHOLD_CAP = 120_000;
 
@@ -238,16 +195,16 @@ export interface CallRunnerOptions {
   routeStatus?: (model: string) => RouteHealth | undefined;
   /**
    * Announce the start of one auxiliary attempt, so a later client-observed
-   * timeout or transport failure is attributed to the same attempt the Gateway
-   * already saw. Optional: absent, no attempt-level feedback is sent.
+   * transport failure is attributed to the same attempt the Gateway already saw.
+   * Optional: absent, no attempt-level feedback is sent.
    */
   beginRouteAttempt?: (publicModel: string, attemptId: string) => void;
   /**
-   * Report a client-observed route fault (timeout or real transport failure) for
-   * one attempt into the same route-health authority. Never called for a user
-   * cancellation or an HTTP error the Gateway already recorded.
+   * Report a client-observed transport failure for one attempt into the same
+   * route-health authority. Never called for a user cancellation or an HTTP
+   * error the Gateway already recorded.
    */
-  reportRouteFault?: (publicModel: string, attemptId: string, kind: 'timeout' | 'transport') => void;
+  reportRouteFault?: (publicModel: string, attemptId: string, kind: 'transport') => void;
   /** Release one attempt's bookkeeping once it has settled. */
   completeRouteAttempt?: (publicModel: string, attemptId: string) => void;
   /** Session id, sent to the Gateway for request attribution. */
@@ -552,22 +509,13 @@ function settleWithAbort<T>(value: T | Promise<T>, signal: AbortSignal): Promise
 }
 
 /** Human-readable failure message for one abort cause. */
-function abortMessage(kind: 'signal' | 'timeout' | 'idle' | undefined, totalTimeoutMs: number | undefined): string {
-  if (kind === 'timeout') return `Call timed out after ${totalTimeoutMs} ms`;
-  if (kind === 'idle') return `Reasoning stalled: no output for ${REASON_IDLE_TIMEOUT_MS} ms`;
+function abortMessage(kind: 'signal' | undefined): string {
   if (kind === 'signal') return 'Model call was aborted';
   return 'Model call failed';
 }
 
-/**
- * Structured failure fact of a call this runner cut itself. It carries the
- * local classification — `local_budget` for the caller's exhausted total
- * budget, `local_deadline` for a per-route idle stall that ended the call — so
- * the span error surface tells a local cut apart from any upstream
- * {@link ModelErrorKind}.
- */
-function localCutFact(kind: 'budget' | 'deadline', message: string): CallErrorFact {
-  return { kind: kind === 'budget' ? LOCAL_CALL_ERROR.budget : LOCAL_CALL_ERROR.deadline, message };
+function auxiliaryFirstResponseTimeoutSec(role: CallRole): number {
+  return AUXILIARY_FIRST_RESPONSE_TIMEOUT_SEC;
 }
 
 /**
@@ -727,13 +675,9 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         });
       };
 
-      // Timers and abort wiring come first so the total deadline also covers
-      // auxiliary route selection and driver acquisition; the same start instant
-      // anchors the per-route budget, so selection time is never free.
-      const startedAtMs = Date.now();
       const controller = new AbortController();
-      let abortKind: 'signal' | 'timeout' | 'idle' | undefined;
-      const abort = (kind: 'signal' | 'timeout' | 'idle'): void => {
+      let abortKind: 'signal' | undefined;
+      const abort = (kind: 'signal'): void => {
         abortKind ??= kind;
         controller.abort();
       };
@@ -741,52 +685,8 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       if (input.signal.aborted) abort('signal');
       else input.signal.addEventListener('abort', onExternalAbort, { once: true });
 
-      // Every auxiliary role, including document, shares one finite total budget
-      // that also covers route selection; only the reasoning role streams with
-      // no total deadline. The suggestion role is a cheap, fire-and-wait hint
-      // whose own short deadline also covers route selection, so a slow or
-      // stalled route resolves as no suggestion rather than delaying the
-      // composer.
-      const totalTimeoutMs = input.role === 'reason'
-        ? undefined
-        : input.role === 'suggestion'
-          ? SUGGESTION_TIMEOUT_MS
-          : AUXILIARY_TOTAL_BUDGET_MS;
-      const totalTimer = totalTimeoutMs === undefined
-        ? undefined
-        : setTimeout(() => abort('timeout'), totalTimeoutMs);
-      let idleTimer: ReturnType<typeof setTimeout> | undefined;
-      const resetIdle = (): void => {
-        if (input.role !== 'reason') return;
-        if (idleTimer !== undefined) clearTimeout(idleTimer);
-        idleTimer = setTimeout(() => abort('idle'), REASON_IDLE_TIMEOUT_MS);
-      };
-      /**
-       * Suspend the reason idle deadline for the whole recovery wait. A
-       * scheduled wait is activity, not upstream silence, and it can be
-       * extended while it runs, so no single delay-based timer is armed. The
-       * deadline is re-armed on real request activity or cleared on exit, so a
-       * genuinely stalled attempt after the wait is still detected and no
-       * periodic fake activity can mask a real upstream hang.
-       */
-      const suspendIdle = (): void => {
-        if (input.role !== 'reason') return;
-        if (idleTimer !== undefined) {
-          clearTimeout(idleTimer);
-          idleTimer = undefined;
-        }
-      };
-      resetIdle();
-
       let outputStarted = false;
-      /**
-       * Re-arms the in-flight auxiliary attempt's idle/no-progress deadline. It
-       * is set while an attempt runs and cleared when it settles, so the
-       * streamed-output callbacks below — and the transport's own `activity` and
-       * `retry` signals — reset the deadline exactly when a route shows progress.
-       */
-      let resetAttemptIdle: (() => void) | undefined;
-      const onOutput = (): void => { outputStarted = true; resetIdle(); resetAttemptIdle?.(); };
+      const onOutput = (): void => { outputStarted = true; };
       const onText = (delta: string): void => {
         if (delta !== '') onOutput();
         input.onText?.(delta);
@@ -829,23 +729,15 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           case 'usage': reportWait(null); partialUsage = event.usage; return;
           // The transport emits `activity` at the start of an attempt that
           // follows a wait, so this is the precise pre-attempt clear.
-          case 'activity': reportWait(null); resetIdle(); resetAttemptIdle?.(); return;
+          case 'activity': reportWait(null); return;
           case 'retry':
-            // A plain backoff retry is not a recovery wait: clear any waiting
-            // state and treat the wait as activity.
             reportWait(null);
-            resetIdle();
-            resetAttemptIdle?.();
             return;
           case 'wait':
-            // A recovery wait is scheduled, not upstream inactivity: suspend the
-            // idle deadline for the whole wait (including any extension) and
-            // re-arm it on the next real request activity.
             reportWait({
               reason: event.reason,
               ...(event.retryAt === undefined ? {} : { retryAt: event.retryAt }),
             });
-            suspendIdle();
             return;
         }
       };
@@ -907,15 +799,15 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
 
       /**
        * Bounded cross-route failover for one logical auxiliary call: at most
-       * three distinct routes, each tried once, inside one total budget and a
-       * per-route cap. It never fails over after visible output has begun, on a
-       * user cancellation, or on an invalid-request/context/protocol failure,
-       * and it never reuses a known-open first route.
+       * three distinct routes, each tried once. It never fails over after visible
+       * output has begun, on a user cancellation, or on an
+       * invalid-request/context/protocol failure, and it never reuses a
+       * known-open first route.
        */
       const runAuxiliary = async (): Promise<ModelResult> => {
         const all = routes!;
         const candidates = distinctCandidates(all);
-        const deadlineMs = startedAtMs + AUXILIARY_TOTAL_BUDGET_MS;
+        const firstResponseTimeoutSec = auxiliaryFirstResponseTimeoutSec(input.role);
         // The span records the first candidate that may actually be tried; the
         // list itself is the full ranked set, never pre-truncated. Only a route
         // that could really be called may raise a terminal effort or budget
@@ -960,39 +852,20 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           },
         });
 
-        // A cancel can land while the started span is appended; never start a
-        // transport request for a call that is already cancelled. A total-budget
-        // cut that landed in the same window is a local cut, not a route fault.
         if (controller.signal.aborted) {
-          const message = abortMessage(abortKind, totalTimeoutMs);
-          return await fail(message, {
-            status: abortKind === 'signal' ? 'aborted' : 'failed',
-            ...(abortKind === 'timeout' ? { error: localCutFact('budget', message) } : {}),
-          });
+          const message = abortMessage(abortKind);
+          return await fail(message, { status: 'aborted' });
         }
 
         let attempted = 0;
         let lastMessage = `Auxiliary role ${input.role}: no candidate route succeeded`;
         let earliestRetry: string | undefined;
         let lastFailure: CallErrorFact | undefined;
-        // Local cuts that may have ended the call: the caller's finite total
-        // budget and the per-route idle deadline. They are classified as local
-        // facts at the terminal failure below, distinct from the upstream
-        // `lastFailure` kind, and never touch route health.
-        let budgetExhausted = false;
-        let idleDeadlineCut = false;
-        let routeHardCapCut = false;
         for (const candidate of candidates) {
           if (controller.signal.aborted) break;
           // Stop once three distinct routes have really been called: a route
           // skipped because it is open or mid-probe never spends an attempt.
           if (attempted >= AUXILIARY_MAX_ROUTES) break;
-          const remaining = deadlineMs - Date.now();
-          if (remaining <= 0) {
-            lastMessage = `Auxiliary budget of ${AUXILIARY_TOTAL_BUDGET_MS} ms exhausted`;
-            budgetExhausted = true;
-            break;
-          }
           const health = options.routeStatus?.(candidate.model);
           // A blocked route cannot be called: the Gateway would only reject it.
           // Record its retry time and try the next candidate.
@@ -1017,29 +890,10 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           actualReasoningEffort = effort;
           attempted += 1;
 
-          // A fresh id per attempt lets the Gateway tie a client-observed timeout
-          // or fetch failure to the exact attempt it already saw.
+          // A fresh id per attempt lets the Gateway tie a client-observed fetch
+          // failure to the exact attempt it already saw.
           const attemptId = randomUUID();
           options.beginRouteAttempt?.(candidate.model, attemptId);
-          const attemptController = new AbortController();
-          const onMainAbort = (): void => attemptController.abort();
-          controller.signal.addEventListener('abort', onMainAbort, { once: true });
-          let perRouteTimedOut = false;
-          // A hard per-route cap cuts a route that is slow but still producing
-          // output: the idle deadline is suppressed once output starts, so a
-          // route that streams tokens too slowly would otherwise burn the whole
-          // call. Unlike the idle deadline this timer is absolute and is never
-          // re-armed by progress.
-          let routeTimedOut = false;
-          let attemptTimer: ReturnType<typeof setTimeout> | undefined;
-          let routeTimer: ReturnType<typeof setTimeout> | undefined;
-          const armAttemptIdle = (): void => {
-            if (attemptTimer !== undefined) clearTimeout(attemptTimer);
-            attemptTimer = setTimeout(() => { perRouteTimedOut = true; attemptController.abort(); }, AUXILIARY_IDLE_TIMEOUT_MS);
-          };
-          resetAttemptIdle = armAttemptIdle;
-          armAttemptIdle();
-          routeTimer = setTimeout(() => { routeTimedOut = true; attemptController.abort(); }, AUXILIARY_ROUTE_TIMEOUT_MS);
           try {
             const request: ModelRequest = {
               model: candidate.model,
@@ -1050,121 +904,42 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
               ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),
               ...(input.tools === undefined ? {} : { tools: input.tools }),
               ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
-              signal: attemptController.signal,
+              firstResponseTimeoutSec,
+              signal: controller.signal,
               onEvent,
               // An auxiliary call must not use the same-route retry loop, so a
               // failover cannot multiply attempts on one route.
               noRetry: true,
               attemptId,
             };
-            const completed = await settleWithAbort(options.transport.complete(request), attemptController.signal);
+            const completed = await settleWithAbort(options.transport.complete(request), controller.signal);
             collectAttempts(completed.metrics, retryInstantOf(candidate.model));
             return completed;
           } catch (error) {
             if (error instanceof ModelCallError) throw error;
             const fact = errorFactOf(error);
-            // A user cancellation is neutral and final: it never fails over and
-            // is never reported as a route fault.
             const cancelled = abortKind === 'signal';
-            // The caller's finite total budget cutting the whole call is not a
-            // route fault: no route stalled, the call itself ran out of time.
-            const callerBudgetExhausted = abortKind === 'timeout';
             const attemptUntil = retryInstantOf(candidate.model);
-            // Read the route's retry instant before reporting the fault, so the
-            // attempt record carries the `until` the report just wrote.
-            if (!cancelled && !callerBudgetExhausted) earliestRetry = earliest(earliestRetry, attemptUntil);
-            // Exactly one record per attempt: the transport's own record when it
-            // produced one, otherwise a synthetic record of this route's stall.
-            const supplied = collectAttempts(metricsOf(error), attemptUntil);
-            // Report the real fault before stopping failover, so a genuine
-            // transport failure after visible output still reaches the
-            // route-health authority. Only a genuine network failure blames the
-            // route: a local deadline (an idle or hard route cap, a role's own
-            // deadline or the caller's total budget) is our own decision, not the
-            // route's fault, so it never marks the route unhealthy.
-            if (!cancelled && !callerBudgetExhausted && !perRouteTimedOut && !routeTimedOut && fact.kind === 'network') {
+            if (!cancelled) earliestRetry = earliest(earliestRetry, attemptUntil);
+            collectAttempts(metricsOf(error), attemptUntil);
+            if (!cancelled && fact.kind === 'network') {
               options.reportRouteFault?.(candidate.model, attemptId, 'transport');
             }
             lastFailure = fact;
-            // The per-route hard cap: a route too slow even while streaming is
-            // cut and reported, and the call fails over to the next ranked route
-            // — overriding the no-failover-after-output guard below — so one
-            // slow route does not waste the whole budget. The slow route is
-            // reported so the gateway can demote it.
-            if (routeTimedOut) {
-              options.reportRouteFault?.(candidate.model, attemptId, 'timeout');
-              if (supplied === 0) {
-                routeAttempts.push({
-                  error: 'network',
-                  ms: AUXILIARY_ROUTE_TIMEOUT_MS,
-                  model: candidate.model,
-                  ...(attemptUntil === undefined ? {} : { routeUntil: attemptUntil }),
-                });
-              }
-              lastMessage = `Route ${candidate.model} exceeded ${AUXILIARY_ROUTE_TIMEOUT_MS} ms per-route budget`;
-              routeHardCapCut = true;
-              continue;
-            }
-            // A cancellation or any visible output already produced is final:
-            // no further route may be tried — unless the per-route hard cap
-            // above already claimed this attempt.
             if (cancelled || outputStarted) throw error;
-            if (perRouteTimedOut) {
-              // An idle route stall is a fallback fact, never a terminal aborted
-              // state: the route fault is reported and the next candidate tried.
-              // If it also ends the call, the terminal fact is the local idle
-              // deadline — not the `aborted` its request abort happens to carry.
-              options.reportRouteFault?.(candidate.model, attemptId, 'timeout');
-              if (supplied === 0) {
-                routeAttempts.push({
-                  error: 'network',
-                  ms: AUXILIARY_IDLE_TIMEOUT_MS,
-                  model: candidate.model,
-                  ...(attemptUntil === undefined ? {} : { routeUntil: attemptUntil }),
-                });
-              }
-              lastMessage = `Route ${candidate.model} stalled after ${AUXILIARY_IDLE_TIMEOUT_MS} ms without output`;
-              idleDeadlineCut = true;
-              continue;
-            }
-            if (callerBudgetExhausted) {
-              lastMessage = abortMessage('timeout', totalTimeoutMs);
-              budgetExhausted = true;
-              break;
-            }
-            // A caller-caused or protocol failure is not the route's fault: it is
-            // reported once and never fails over.
             if (fact.kind === 'invalid_request' || fact.kind === 'context_overflow' || fact.kind === 'protocol' || fact.kind === 'aborted') throw error;
-            // A later upstream fault supersedes an earlier idle stall: the
-            // terminal classification is the upstream kind, not the local cut.
-            idleDeadlineCut = false;
             lastMessage = withOverflowPrefix(error);
             continue;
           } finally {
             options.completeRouteAttempt?.(candidate.model, attemptId);
-            if (attemptTimer !== undefined) clearTimeout(attemptTimer);
-            if (routeTimer !== undefined) clearTimeout(routeTimer);
-            resetAttemptIdle = undefined;
-            controller.signal.removeEventListener('abort', onMainAbort);
           }
         }
         if (attempted === 0 && earliestRetry !== undefined) {
-          const message = `Auxiliary role ${input.role}: every candidate route is cooling down or probing; earliest retry ${earliestRetry} (${candidates.length} candidate route(s), budget ${AUXILIARY_TOTAL_BUDGET_MS} ms)`;
+          const message = `Auxiliary role ${input.role}: every candidate route is cooling down or probing; earliest retry ${earliestRetry} (${candidates.length} candidate route(s))`;
           return await fail(message, auxiliaryFailure(message, earliestRetry, 'protocol'));
         }
-        const message = `${lastMessage} (${attempted} of ${candidates.length} candidate route(s), budget ${AUXILIARY_TOTAL_BUDGET_MS} ms)`;
-        // The terminal classification: a local cut this runner made itself — the
-        // caller's exhausted budget or the per-route idle deadline — is told
-        // apart from every upstream kind, so the span never reports a local cut
-        // as `network`, `server` or `aborted`.
-        const classification = abortKind === 'timeout' || budgetExhausted
-          ? LOCAL_CALL_ERROR.budget
-          : idleDeadlineCut
-            ? LOCAL_CALL_ERROR.deadline
-            : routeHardCapCut
-              ? LOCAL_CALL_ERROR.route_timeout
-              : lastFailure?.kind ?? 'protocol';
-        return await fail(message, auxiliaryFailure(message, earliestRetry, classification));
+        const message = `${lastMessage} (${attempted} of ${candidates.length} candidate route(s))`;
+        return await fail(message, auxiliaryFailure(message, earliestRetry, lastFailure?.kind ?? 'protocol'));
       };
 
       /**
@@ -1327,11 +1102,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           if (!routes.length) throw new Error(`Auxiliary role ${input.role}: no candidate qualified (empty route selection)`);
         }
         if (controller.signal.aborted) {
-          const message = abortMessage(abortKind, totalTimeoutMs);
-          return await fail(message, {
-            status: abortKind === 'signal' ? 'aborted' : 'failed',
-            ...(abortKind === 'timeout' ? { error: localCutFact('budget', message) } : {}),
-          });
+          return await fail(abortMessage(abortKind), { status: 'aborted' });
         }
 
         if (input.role === 'reason') {
@@ -1344,7 +1115,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         const status: 'failed' | 'aborted' = abortKind === 'signal' ? 'aborted' : 'failed';
         const message = abortKind === undefined
           ? withOverflowPrefix(error)
-          : abortMessage(abortKind, totalTimeoutMs);
+          : abortMessage(abortKind);
         const failure = abortKind === undefined ? errorFactOf(error) : { kind: 'aborted' as ModelErrorKind, message };
         const baseMetrics = metricsOf(error);
         const metrics: ModelMetrics | undefined = routeAttempts.length === 0
@@ -1358,8 +1129,6 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       } finally {
         // Completion or cancel ends any recovery wait.
         reportWait(null);
-        if (totalTimer !== undefined) clearTimeout(totalTimer);
-        if (idleTimer !== undefined) clearTimeout(idleTimer);
         input.signal.removeEventListener('abort', onExternalAbort);
       }
 

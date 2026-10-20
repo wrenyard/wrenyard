@@ -188,16 +188,14 @@ export interface ModelRequest {
    */
   noRetry?: boolean;
   /**
-   * Absolute instant (epoch ms) at which this call's own budget expires. It is
-   * sent to the Gateway as internal deadline metadata (never upstream) so a
-   * client-observed timeout is accounted to the route even though the Gateway
-   * sees only a disconnect.
+   * First-response timeout in whole seconds (1–600) for streaming Gateway
+   * requests. Omitted values use the Gateway default (120 s).
    */
-  deadlineAtMs?: number;
+  firstResponseTimeoutSec?: number;
   /**
    * Gateway-only correlation id of this attempt, sent as an internal header. It
-   * lets the Gateway tie a client-reported timeout or fetch failure to the exact
-   * attempt it already knows about, so one attempt is never double-counted.
+   * lets the Gateway tie a client-reported fetch failure to the exact attempt it
+   * already knows about, so one attempt is never double-counted.
    */
   attemptId?: string;
   /**

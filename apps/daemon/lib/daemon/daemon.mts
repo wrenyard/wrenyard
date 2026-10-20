@@ -1223,7 +1223,7 @@ async function createForemanDaemonResources(
       router: rpcRouter,
       routeStatus: model => gateway.routeStatus(model),
       beginRouteAttempt: (publicModel, attemptId) => gateway.beginRouteAttempt(publicModel, attemptId),
-      reportRouteFault: (publicModel, attemptId, kind) => gateway.reportRouteFault(publicModel, attemptId, kind),
+      reportRouteFault: (publicModel, attemptId, kind: 'transport') => gateway.reportRouteFault(publicModel, attemptId, kind),
       completeRouteAttempt: (publicModel, attemptId) => gateway.completeRouteAttempt(publicModel, attemptId),
       selectAuxiliary: createAuxiliarySelector(auxiliaryRoutingOptions),
       // A bot-originated turn may move down the same ranked ladder the bot

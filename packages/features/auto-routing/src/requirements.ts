@@ -89,8 +89,8 @@ export const BOT_REQUIREMENT: RoleReasoningRequirement = {
   ],
 };
 
-/** Must equal the session loop budget. */
-export const AUXILIARY_TIMEOUT_MS = 60_000;
+/** DeepSeek automatic-routing pricing lookahead window. */
+export const DEEPSEEK_PRICING_LOOKAHEAD_MS = 60_000;
 
 /**
  * The session's Gateway protocol entry points in its fixed precedence order

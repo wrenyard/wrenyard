@@ -80,7 +80,6 @@ export { validateJsonSchema } from './auxiliary/dispatch.ts';
 export type { AuxiliaryRoute, CallErrorFact, CallRole, ModelCallInput, ModelCallOutput, SpanEventDraft } from './model/request.ts';
 export {
   CALL_ROLES,
-  AUXILIARY_TIMEOUT_MS,
   IMAGE_INPUT_TOKEN_ESTIMATE,
   checkContextBudget,
   estimateContentTokens,

@@ -22,6 +22,11 @@ export const GATEWAY_HEADERS = {
   /** Request: session id, recorded on the Gateway event for attribution. */
   sessionId: 'x-wrenyard-session-id',
   /**
+   * Request: first-response timeout in whole seconds (1–600) for streaming
+   * requests. Consumed by the Gateway and never forwarded upstream.
+   */
+  firstResponseTimeout: 'x-wrenyard-first-response-timeout',
+  /**
    * Response: the Gateway-local, structured admission-refusal metadata set only
    * when the Gateway's own circuit refuses to admit a request. It is not an
    * upstream value and is never echoed from an upstream response.

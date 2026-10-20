@@ -1,10 +1,8 @@
-import { test, mock } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ProviderDefinition } from '@wrenyard/providers/base';
 import {
-  AUXILIARY_IDLE_TIMEOUT_MS,
   AUXILIARY_MAX_ROUTES,
-  AUXILIARY_ROUTE_TIMEOUT_MS,
   createCallRunner,
   ModelCallError,
   type CallRole,
@@ -37,7 +35,7 @@ function makeRunner(options: {
   transport: ModelTransport;
   routes: readonly string[];
   routeStatus?: (model: string) => RouteHealth | undefined;
-  reportRouteFault?: (model: string, attemptId: string, kind: 'timeout' | 'transport') => void;
+  reportRouteFault?: (model: string, attemptId: string, kind: 'transport') => void;
   beginRouteAttempt?: (model: string, attemptId: string) => void;
   completeRouteAttempt?: (model: string, attemptId: string) => void;
 }) {
@@ -145,14 +143,14 @@ test('no failover on an invalid-request failure', async () => {
   assert.deepEqual(calls, ['test/alpha']);
 });
 
-test('exhaustion reports the attempt count and the bounded budget', async () => {
+test('exhaustion reports the attempt count after every candidate fails', async () => {
   const transport: ModelTransport = {
     async complete() { throw new ModelError('down', { kind: 'network' }); },
   };
   const { runner } = makeRunner({ transport, routes: ['test/alpha', 'test/beta', 'test/gamma'] });
   await assert.rejects(runner.run(callInput('reply', new AbortController().signal)), (error: unknown) => {
     assert.ok(error instanceof Error);
-    assert.match(error.message, /3 of 3 candidate route\(s\), budget 90000 ms/);
+    assert.match(error.message, /3 of 3 candidate route\(s\)/);
     return true;
   });
 });
@@ -265,43 +263,6 @@ test('a real transport failure is reported to the route health before failing ov
   assert.deepEqual(faults, [{ model: 'test/alpha', kind: 'transport' }]);
 });
 
-test('the per-route hard cap cuts a slow route and reports it as a fault', async () => {
-  const faults: string[] = [];
-  // A route that keeps streaming progress never trips the idle deadline, so
-  // only the per-route hard cap can end this single-route call — and the slow
-  // route is reported, not excused.
-  const transport: ModelTransport = {
-    complete: (request) => {
-      const progress = setInterval(() => request.onEvent?.({ type: 'activity' }), 7000);
-      request.signal.addEventListener('abort', () => clearInterval(progress), { once: true });
-      return new Promise<ModelResult>(() => {});
-    },
-  };
-  const { runner } = makeRunner({
-    transport,
-    routes: ['test/alpha'],
-    reportRouteFault: (_model, _attemptId, kind) => { faults.push(kind); },
-  });
-  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
-  let error: unknown;
-  try {
-    const pending = runner.run(callInput('reply', new AbortController().signal))
-      .then(() => undefined, (failure: unknown) => failure);
-    await flush();
-    mock.timers.tick(AUXILIARY_ROUTE_TIMEOUT_MS);
-    await flush();
-    error = await pending;
-  } finally {
-    mock.timers.reset();
-  }
-  assert.ok(error instanceof ModelCallError);
-  // The slow route is cut by the per-route hard cap and reported as a fault.
-  assert.match(error.message, /exceeded 45000 ms per-route budget/);
-  assert.deepEqual(faults, ['timeout']);
-  // One synthesized attempt record is attributed to the slow route.
-  assert.equal((error.detail.metrics?.attempts ?? []).length, 1);
-});
-
 test('an explicit user cancellation stays neutral and reports no route fault', async () => {
   const faults: string[] = [];
   let inFlight: (() => void) | undefined;
@@ -324,26 +285,4 @@ test('an explicit user cancellation stays neutral and reports no route fault', a
   controller.abort();
   await assert.rejects(pending);
   assert.deepEqual(faults, []);
-});
-
-test('a timed-out attempt is recorded exactly once', async () => {
-  const transport: ModelTransport = { complete: () => new Promise<ModelResult>(() => {}) };
-  const { runner } = makeRunner({ transport, routes: ['test/alpha'] });
-  mock.timers.enable({ apis: ['setTimeout'] });
-  let error: unknown;
-  try {
-    const pending = runner.run(callInput('reply', new AbortController().signal));
-    await flush();
-    mock.timers.tick(AUXILIARY_IDLE_TIMEOUT_MS);
-    error = await pending.then(() => undefined, (failure: unknown) => failure);
-  } finally {
-    mock.timers.reset();
-  }
-  assert.ok(error instanceof ModelCallError);
-  const attempts = error.detail.metrics?.attempts ?? [];
-  // Only the synthesized timeout record: the aborted transport metric is not
-  // counted a second time.
-  assert.equal(attempts.length, 1);
-  assert.equal(attempts[0]?.model, 'test/alpha');
-  assert.equal(attempts[0]?.error, 'network');
 });

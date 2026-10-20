@@ -6,6 +6,7 @@ import type { GatewayProtocolModule, ResponseObserver, TpsTranslator } from './p
 import { object } from './protocols/types.ts';
 
 export interface RelayOptions {
+  response: ServerResponse;
   module: GatewayProtocolModule;
   provider: ProviderDefinition;
   providers: ProviderRuntime;
@@ -20,6 +21,14 @@ export interface RelayOptions {
   sampler: ResponseSampler;
   /** The selected protocol module's generation-delta translator. */
   translator: TpsTranslator;
+  /** Commits the downstream HTTP response (status and headers) before the first body byte. */
+  commit: () => void;
+  /** When aborted, upstream relay stops and no further downstream bytes are committed or written. */
+  signal?: AbortSignal;
+}
+
+function downstreamWritable(options: RelayOptions): boolean {
+  return options.signal === undefined || !options.signal.aborted;
 }
 
 /** Rewrite every response `model` field to the requested registered model id. */
@@ -82,6 +91,47 @@ function rebuildFrame(frame: string, payload: string): string {
  * bytes; only a successful JSON frame has its `model` field rewritten to the
  * requested public model id.
  */
+function writeBody(options: RelayOptions, chunk: string | Buffer): void {
+  if (!downstreamWritable(options)) return;
+  options.commit();
+  if (!downstreamWritable(options)) return;
+  options.response.write(chunk);
+}
+
+/** Buffers SSE body bytes until the downstream response is committed. */
+interface SseDownstreamState {
+  pending: (string | Buffer)[];
+}
+
+function flushSseDownstream(options: RelayOptions, state: SseDownstreamState, chunk: string | Buffer): void {
+  if (!downstreamWritable(options)) return;
+  options.commit();
+  if (!downstreamWritable(options)) return;
+  for (const buffered of state.pending) options.response.write(buffered);
+  state.pending.length = 0;
+  options.response.write(chunk);
+}
+
+/** True when this frame should commit headers and flush any buffered SSE bytes. */
+function shouldCommitSseFrame(frame: string, options: RelayOptions): boolean {
+  if (options.sampler.hasSeenOutput()) return true;
+  if (options.observer.succeeded() || options.observer.failedStream()) return true;
+  const payload = frameData(frame);
+  if (payload === undefined) return false;
+  try {
+    return options.module.isOfficialStreamError(JSON.parse(payload));
+  } catch {
+    return false;
+  }
+}
+
+function writeSseFrame(frame: string, options: RelayOptions, state: SseDownstreamState): void {
+  const chunk = relayFrame(frame, options);
+  if (!downstreamWritable(options)) return;
+  if (shouldCommitSseFrame(frame, options)) flushSseDownstream(options, state, chunk);
+  else state.pending.push(chunk);
+}
+
 function relayFrame(frame: string, options: RelayOptions): string {
   const payload = frameData(frame);
   if (payload === undefined) return frame;
@@ -117,30 +167,35 @@ export async function relayResponse(
   const contentType = upstream.headers.get('content-type')?.toLowerCase() ?? '';
   if (contentType.includes('application/json')) {
     const text = await upstream.text();
+    if (!downstreamWritable(options)) return observedError(options);
     try {
       const parsed: unknown = JSON.parse(text);
       options.observer.json(parsed);
       if (options.module.isOfficialStreamError(parsed)) {
-        response.write(text);
+        writeBody(options, text);
       } else {
         if (object(parsed) !== undefined) options.module.normalizeResponseUsage(parsed as Record<string, unknown>);
         options.module.normalizeResponseModel(parsed, modelRewriter(options));
-        response.write(JSON.stringify(parsed));
+        writeBody(options, JSON.stringify(parsed));
       }
     } catch {
-      response.write(text);
+      writeBody(options, text);
     }
     return observedError(options);
   }
   if (!contentType.includes('text/event-stream')) {
     const reader = upstream.body.getReader();
+    const onAbort = (): void => { reader.cancel().catch(() => undefined); };
+    options.signal?.addEventListener('abort', onAbort, { once: true });
     try {
       for (;;) {
+        if (options.signal?.aborted) break;
         const { done, value } = await reader.read();
         if (done) break;
-        response.write(Buffer.from(value));
+        writeBody(options, Buffer.from(value));
       }
     } finally {
+      options.signal?.removeEventListener('abort', onAbort);
       reader.releaseLock();
     }
     return {};
@@ -150,6 +205,17 @@ export async function relayResponse(
   const decoder = new TextDecoder();
   let pending = '';
   let frame = '';
+  let upstreamEof = false;
+  const downstream: SseDownstreamState = { pending: [] };
+  const onAbort = (): void => { reader.cancel().catch(() => undefined); };
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  const flushBufferedPending = (): void => {
+    if (!downstreamWritable(options) || downstream.pending.length === 0) return;
+    options.commit();
+    if (!downstreamWritable(options)) return;
+    for (const buffered of downstream.pending) options.response.write(buffered);
+    downstream.pending.length = 0;
+  };
   // A blank line terminates an SSE frame, so a multi-line `data` field is
   // assembled into one event before it is ever parsed.
   const flushFrames = (): void => {
@@ -160,15 +226,16 @@ export async function relayResponse(
       pending = pending.slice(newline + 1);
       frame += line;
       if ((line.endsWith('\r\n') ? line.slice(0, -2) : line.slice(0, -1)) === '') {
-        response.write(relayFrame(frame, options));
+        writeSseFrame(frame, options, downstream);
         frame = '';
       }
     }
   };
   try {
     for (;;) {
+      if (options.signal?.aborted) break;
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) { upstreamEof = true; break; }
       const text = decoder.decode(value, { stream: true });
       options.observer.feed(text);
       pending += text;
@@ -181,17 +248,23 @@ export async function relayResponse(
         break;
       }
     }
-    const tail = decoder.decode();
-    options.observer.feed(tail);
-    options.observer.end();
-    pending += tail;
-    flushFrames();
-    if (pending !== '') { frame += pending; pending = ''; }
-    if (frame !== '') response.write(relayFrame(frame, options));
+    if (!options.signal?.aborted) {
+      const tail = decoder.decode();
+      options.observer.feed(tail);
+      options.observer.end();
+      pending += tail;
+      flushFrames();
+      if (pending !== '') { frame += pending; pending = ''; }
+      if (frame !== '') writeSseFrame(frame, options, downstream);
+      if (options.observer.succeeded() || options.observer.failedStream() || upstreamEof) {
+        flushBufferedPending();
+      }
+    }
     // A response that never reached a protocol completion — truncated, failed
     // or cancelled — can never yield a TPS sample.
     if (!options.observer.succeeded()) options.sampler.fail();
   } finally {
+    options.signal?.removeEventListener('abort', onAbort);
     reader.releaseLock();
   }
   return observedError(options);

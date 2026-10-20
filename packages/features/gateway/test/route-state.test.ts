@@ -4,7 +4,7 @@ import type { Catalog } from '@wrenyard/providers/catalog';
 import type { ProviderRuntime } from '@wrenyard/providers';
 import type { ProviderDefinition } from '@wrenyard/providers/base';
 import { RouteStateStore, type RouteStateChangedEvent } from '../src/route-state.ts';
-import { classifyRouteFailure, classifyStreamFailure, clientTimeoutFailure, transportFailure } from '../src/route-failure.ts';
+import { classifyRouteFailure, classifyStreamFailure, transportFailure } from '../src/route-failure.ts';
 import { createModelGateway } from '../src/index.ts';
 
 /** A fake clock; every test advances it explicitly so nothing waits on wall time. */
@@ -27,9 +27,9 @@ const provider = {} as unknown as ProviderDefinition;
 test('a route fault is isolated to its exact provider/model', () => {
   const clock = fakeClock();
   const store = makeStore(clock.now);
-  store.mark('p', 'm1', clientTimeoutFailure(), 504, '');
+  store.mark('p', 'm1', transportFailure(), 502, '');
   assert.equal(store.status('p', 'm1')?.phase, 'open');
-  assert.equal(store.status('p', 'm1')?.faultKind, 'timeout');
+  assert.equal(store.status('p', 'm1')?.faultKind, 'transport');
   // A sibling model of the same provider is untouched by a route-scoped fault.
   assert.equal(store.status('p', 'm2'), undefined);
   assert.equal(store.status('other', 'm1'), undefined);
@@ -38,7 +38,7 @@ test('a route fault is isolated to its exact provider/model', () => {
 test('a validated success restores health; a stale success cannot overwrite a newer fault', () => {
   const clock = fakeClock();
   const store = makeStore(clock.now);
-  store.mark('p', 'm', clientTimeoutFailure(), 504, '');
+  store.mark('p', 'm', transportFailure(), 502, '');
   const guard = store.capture('p', 'm');
   // A newer fault generation replaces the one this call observed.
   store.mark('p', 'm', transportFailure(), 502, '');
@@ -53,7 +53,7 @@ test('a validated success restores health; a stale success cannot overwrite a ne
 test('a success on one model never clears another model’s route fault', () => {
   const clock = fakeClock();
   const store = makeStore(clock.now);
-  store.mark('p', 'm1', clientTimeoutFailure(), 504, '');
+  store.mark('p', 'm1', transportFailure(), 502, '');
   store.mark('p', 'm2', transportFailure(), 502, '');
   store.success('p', 'm1', store.capture('p', 'm1'));
   assert.equal(store.status('p', 'm1'), undefined);
@@ -73,7 +73,6 @@ test('every HTTP outcome is classified: transport faults are route-scoped, auth 
   assert.equal(classifyRouteFailure(provider, 'm', 429, headers, undefined, 0)?.scope, 'pool');
   assert.equal(classifyRouteFailure(provider, 'm', 404, headers, undefined, 0)?.scope, 'route');
   assert.equal(transportFailure().faultKind, 'transport');
-  assert.equal(clientTimeoutFailure().faultKind, 'timeout');
 });
 
 test('request-invalid and context-overflow errors are reported but never poison a route', () => {
@@ -119,14 +118,14 @@ test('the gateway reports client faults by attempt and never double counts one a
   const gateway = createModelGateway({ catalog, providers, now: clock.now });
   try {
     gateway.beginRouteAttempt('test/alpha', 'attempt-1');
-    gateway.reportRouteFault('test/alpha', 'attempt-1', 'timeout');
+    gateway.reportRouteFault('test/alpha', 'attempt-1', 'transport');
     const status = gateway.routeStatus('test/alpha');
     assert.equal(status?.phase, 'open');
-    assert.equal(status?.faultKind, 'timeout');
+    assert.equal(status?.faultKind, 'transport');
 
     // The same attempt is never double counted: a duplicate report is ignored.
     const until = status?.until;
-    gateway.reportRouteFault('test/alpha', 'attempt-1', 'timeout');
+    gateway.reportRouteFault('test/alpha', 'attempt-1', 'transport');
     assert.equal(gateway.routeStatus('test/alpha')?.until, until);
 
     // Finishing the attempt leaves it eligible for a later, unambiguous report.
@@ -139,27 +138,27 @@ test('the gateway reports client faults by attempt and never double counts one a
 test('a settled attempt suppresses a duplicate client report in either order', () => {
   const clock = fakeClock();
   const store = makeStore(clock.now);
-  // Client report first: the gateway's later server-side timeout is stale.
+  // Client report first: the gateway's later server-side fault is stale.
   store.beginAttempt('p', 'm', 'a1');
   const guard = store.capture('p', 'm');
-  store.reportAttemptFault('p', 'm', 'a1', 'timeout', 504);
+  store.reportAttemptFault('p', 'm', 'a1', 'transport', 502);
   const first = store.status('p', 'm');
-  assert.equal(first?.faultKind, 'timeout');
+  assert.equal(first?.faultKind, 'transport');
   clock.advance(5_000);
-  store.markAttemptFault('p', 'm', 'a1', clientTimeoutFailure(), 504, '', guard);
+  store.markAttemptFault('p', 'm', 'a1', transportFailure(), 502, '', guard);
   assert.equal(store.status('p', 'm')?.until, first?.until);
-  // Server-side timeout first: the client report of the same attempt is dropped.
+  // Server-side fault first: the client report of the same attempt is dropped.
   store.beginAttempt('p', 'm', 'b2');
   store.markAttemptFault('p', 'm', 'b2', transportFailure(), 502, '', store.capture('p', 'm'));
   const settled = store.status('p', 'm');
-  assert.equal(store.reportAttemptFault('p', 'm', 'b2', 'timeout', 504), undefined);
+  assert.equal(store.reportAttemptFault('p', 'm', 'b2', 'transport', 502), undefined);
   assert.equal(store.status('p', 'm')?.until, settled?.until);
 });
 
 test('a stale failure after a recovery never rebuilds the cleared fault', () => {
   const clock = fakeClock();
   const store = makeStore(clock.now);
-  store.mark('p', 'm', clientTimeoutFailure(), 504, '');
+  store.mark('p', 'm', transportFailure(), 502, '');
   const guard = store.capture('p', 'm');
   store.success('p', 'm', store.capture('p', 'm'));
   assert.equal(store.status('p', 'm'), undefined);

@@ -150,13 +150,12 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
       };
       if (request.attribution?.role !== undefined) headers[GATEWAY_HEADERS.callRole] = request.attribution.role;
       if (request.attribution?.sessionId !== undefined) headers[GATEWAY_HEADERS.sessionId] = request.attribution.sessionId;
-      // Internal, gateway-only deadline metadata: a call advertises the instant
-      // its own budget expires so a client-observed timeout is recorded against
-      // the route rather than mistaken for a cancellation. Never sent upstream.
-      if (request.deadlineAtMs !== undefined && Number.isFinite(request.deadlineAtMs)) headers['x-wrenyard-deadline'] = String(Math.round(request.deadlineAtMs));
-      // Internal, gateway-only attempt correlation: a client-observed timeout or
-      // fetch failure is reported against this exact attempt id so the same
-      // attempt is never double-counted with a Gateway-side timeout.
+      if (request.firstResponseTimeoutSec !== undefined && Number.isFinite(request.firstResponseTimeoutSec)) {
+        headers[GATEWAY_HEADERS.firstResponseTimeout] = String(Math.round(request.firstResponseTimeoutSec));
+      }
+      // Internal, gateway-only attempt correlation: a client-observed fetch
+      // failure is reported against this exact attempt id so the same attempt is
+      // never double-counted with a Gateway-side fault.
       if (request.attemptId !== undefined) headers['x-wrenyard-gateway-attempt'] = request.attemptId;
 
       const endpoints: GatewayEndpoints = {
@@ -199,9 +198,8 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
         const wait = pendingWait;
         pendingWait = {};
         // The wait (a backoff retry or a recovery wait) is over and a real
-        // upstream request is about to start. Reporting it as `activity`
-        // re-arms the caller's idle deadline for this attempt and lets it clear
-        // its live waiting state right before the attempt, with no timer. The
+        // upstream request is about to start. Reporting it as `activity` lets a
+        // caller clear live waiting state right before the attempt. The
         // auxiliary noRetry path never sets `pendingWait`, so it is unchanged.
         if (wait.waitedMs !== undefined) request.onEvent?.({ type: 'activity' });
         tps = new TpsGenerationCollector();

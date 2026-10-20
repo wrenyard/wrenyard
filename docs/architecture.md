@@ -80,7 +80,13 @@ clients such as Zed are configured manually by copying those details, and
 Wrenyard never writes another application's configuration. Only daemon-launched
 agents (through `WRENYARD_GATEWAY_*_URL` environment variables) and Desktop's
 embedded DSH sessions consume it, and its listener serves only `/gateway/*` and
-returns 404 elsewhere. ChatGPT subscription models are
+returns 404 elsewhere. For streaming inference, the gateway enforces a single
+**first-response timeout** (caller header `x-wrenyard-first-response-timeout` in
+seconds, default 120). It measures from sending the upstream request to the first
+streamed text, reasoning or tool output; once output starts, the stream is not cut.
+A first-response timeout returns HTTP 504 and is recorded in request statistics
+without blocking the route. Non-streaming requests are not limited. Auxiliary
+session roles pass 30 seconds; main reasoning uses the default. ChatGPT subscription models are
 forwarded over the Responses protocol with the Codex client's existing ChatGPT
 login, which the daemon reads and refreshes through that client. Browser
 operations use the daemon-managed `agent-browser` CLI and desktop operations

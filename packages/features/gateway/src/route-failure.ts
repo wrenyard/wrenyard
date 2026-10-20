@@ -157,11 +157,6 @@ export function classifyRouteFailure(provider: ProviderDefinition, modelId: stri
   return outcome !== undefined && isPoisoning(outcome) ? outcome : undefined;
 }
 
-/** The exact route a client-observed timeout must be isolated to. */
-export function clientTimeoutFailure(): ClassifiedRouteFailure {
-  return { state: 'model_unavailable', scope: 'route', faultKind: 'timeout' };
-}
-
 /** The exact route a client-observed transport/fetch failure must be isolated to. */
 export function transportFailure(): ClassifiedRouteFailure {
   return { state: 'model_unavailable', scope: 'route', faultKind: 'transport' };

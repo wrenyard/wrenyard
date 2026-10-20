@@ -123,25 +123,29 @@ function sseResponse(frames: string[]): Response {
   });
 }
 
-test('a hung route times out, records a timeout fault, and the next call is blocked without upstream traffic', async () => {
+test('a hung streaming route times out without poisoning route availability', async () => {
   const clock = fakeClock();
   const counter = { calls: 0 };
   const completed: GatewayRequestCompletedEvent[] = [];
-  const gateway = makeGateway({ fetch: hangingFetch(counter), now: clock.now, onRequestCompleted: (event) => { completed.push(event); } });
+  const fetchImpl: typeof globalThis.fetch = (url, init) => {
+    if (counter.calls === 0) return hangingFetch(counter)(url, init ?? {});
+    counter.calls += 1;
+    return Promise.resolve(sseResponse(OK_SSE));
+  };
+  const gateway = makeGateway({ fetch: fetchImpl, now: clock.now, onRequestCompleted: (event) => { completed.push(event); } });
   await withServer(gateway, async (port) => {
-    const deadline = clock.now() + 40;
-    const hung = await post(port, { model: 'alpha', stream: true }, { 'x-wrenyard-deadline': String(deadline), 'x-wrenyard-gateway-attempt': 'a1' });
+    const hungPromise = post(port, { model: 'alpha', stream: true }, { 'x-wrenyard-first-response-timeout': '1', 'x-wrenyard-gateway-attempt': 'a1' });
+    clock.advance(1_000);
+    const hung = await hungPromise;
     assert.equal(hung.status, 504);
-    assert.equal(gateway.routeStatus('test/alpha')?.faultKind, 'timeout');
-    assert.equal(gateway.routeStatus('test/alpha')?.phase, 'open');
-    assert.equal(completed.find((event) => event.publicModel === 'test/alpha')?.routeState, 'model_unavailable');
+    assert.equal(gateway.routeStatus('test/alpha'), undefined);
+    const event = completed.find((entry) => entry.publicModel === 'test/alpha');
+    assert.equal(event?.faultReason, 'timeout');
+    assert.equal(event?.routeState, undefined);
 
-    const calls = counter.calls;
-    const blocked = await post(port, { model: 'alpha', stream: true });
-    assert.equal(blocked.status, 503);
-    // A blocked admission issues no upstream traffic at all.
-    assert.equal(counter.calls, calls);
-    assert.ok(blocked.headers.get('retry-after'));
+    const next = await post(port, { model: 'alpha', stream: true });
+    assert.equal(next.status, 200);
+    assert.equal(counter.calls, 2);
   });
   await gateway.close();
 });
@@ -257,9 +261,10 @@ test('the trusted deadline bounds a stalled stream, not only the response header
   const completed: GatewayRequestCompletedEvent[] = [];
   const gateway = makeGateway({ fetch: holdingStreamFetch(counter), now: clock.now, onRequestCompleted: (event) => { completed.push(event); } });
   await withServer(gateway, async (port) => {
-    const deadline = clock.now() + 40;
-    await post(port, { model: 'alpha', stream: true }, { 'x-wrenyard-deadline': String(deadline), 'x-wrenyard-gateway-attempt': 's1' }).catch(() => undefined);
-    assert.equal(gateway.routeStatus('test/alpha')?.faultKind, 'timeout');
+    const pending = post(port, { model: 'alpha', stream: true }, { 'x-wrenyard-first-response-timeout': '1', 'x-wrenyard-gateway-attempt': 's1' });
+    clock.advance(1_000);
+    await pending.catch(() => undefined);
+    assert.equal(gateway.routeStatus('test/alpha'), undefined);
     assert.equal(completed.find((event) => event.publicModel === 'test/alpha')?.status, 504);
   });
   await gateway.close();

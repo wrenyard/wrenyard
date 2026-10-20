@@ -14,7 +14,7 @@ import {
 } from '@wrenyard/providers/catalog';
 import { upstreamAuthHeaders, type ProviderCredential, type ProviderRuntime } from '@wrenyard/providers';
 import { completedWithoutOutput } from './response-usage.ts';
-import { classifyRouteOutcome, classifyStreamFailure, clientTimeoutFailure, isPoisoning, type RouteFaultKind } from './route-failure.ts';
+import { classifyRouteOutcome, classifyStreamFailure, isPoisoning, type RouteFaultKind } from './route-failure.ts';
 import type { CircuitPhase, MarkableFailure, RouteStateStore, RouteStatus } from './route-state.ts';
 import { ResponseSampler, type ResponseTpsContract } from './response-tps.ts';
 import { repairUpstreamResponse, relayResponse } from './relay.ts';
@@ -109,16 +109,10 @@ const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
  */
 const CORRELATION_HEADER = 'x-wrenyard-gateway-attempt';
 
-/**
- * Internal, gateway-only client deadline (epoch milliseconds) for one call. When
- * a request is aborted after this instant, the Gateway records a client-observed
- * timeout against the route instead of mistaking it for a plain cancellation.
- * Never forwarded upstream.
- */
-const DEADLINE_HEADER = 'x-wrenyard-deadline';
-
-/** Bound on time-to-first-byte of one upstream request, even if the promise stalls. */
-const UPSTREAM_HEADERS_DEADLINE_MS = 120_000;
+/** Default first-response timeout for streaming requests when the caller omits the header (seconds). */
+const DEFAULT_FIRST_RESPONSE_TIMEOUT_SEC = 120;
+const MIN_FIRST_RESPONSE_TIMEOUT_SEC = 1;
+const MAX_FIRST_RESPONSE_TIMEOUT_SEC = 600;
 
 /** The largest delay `setTimeout` accepts; an oversized deadline is clamped to it. */
 const MAX_TIMER_SAFE = 2_147_483_647;
@@ -161,6 +155,19 @@ export function allowedResponseHeaders(upstream: Headers): Record<string, string
 function localHeader(request: IncomingMessage, name: string): string | undefined {
   const value = request.headers[name];
   return typeof value === 'string' && /^[A-Za-z0-9._-]{1,256}$/u.test(value) ? value : undefined;
+}
+
+/** Parse the caller's first-response timeout header; malformed values yield `invalid`. */
+function firstResponseTimeoutSec(request: IncomingMessage): number | 'invalid' | 'default' {
+  const raw = request.headers[GATEWAY_HEADERS.firstResponseTimeout];
+  if (raw === undefined) return 'default';
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== 'string' || value.trim() === '') return 'invalid';
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < MIN_FIRST_RESPONSE_TIMEOUT_SEC || seconds > MAX_FIRST_RESPONSE_TIMEOUT_SEC) {
+    return 'invalid';
+  }
+  return seconds;
 }
 
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -374,12 +381,15 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       });
       await options.providers.beforeRequest?.(resolved.provider, hookContext());
 
-      // The internal correlation marker and the trusted client deadline are read
-      // before admission, so the attempt's own lifetime can be bounded by it.
       const attemptId = localHeader(request, CORRELATION_HEADER);
-      const deadlineHeader = localHeader(request, DEADLINE_HEADER);
-      const clientDeadlineMs = deadlineHeader === undefined ? undefined : Number(deadlineHeader);
-      const clientDeadline = clientDeadlineMs !== undefined && Number.isFinite(clientDeadlineMs) && clientDeadlineMs > 0 ? clientDeadlineMs : undefined;
+      const parsedFirstResponseTimeout = firstResponseTimeoutSec(request);
+      if (parsedFirstResponseTimeout === 'invalid') {
+        return reject(400, `Invalid ${GATEWAY_HEADERS.firstResponseTimeout}: must be a number from ${MIN_FIRST_RESPONSE_TIMEOUT_SEC} to ${MAX_FIRST_RESPONSE_TIMEOUT_SEC} seconds`);
+      }
+      const streamingRequest = body.stream === true;
+      const firstResponseTimeoutSeconds = parsedFirstResponseTimeout === 'default'
+        ? DEFAULT_FIRST_RESPONSE_TIMEOUT_SEC
+        : parsedFirstResponseTimeout;
 
       // Admission is enforced here, not only in the selector: before any
       // upstream call the route must be admitted. A faulted scope answers with a
@@ -442,26 +452,21 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       let executionUpstreamFact: UpstreamErrorFact | undefined;
       const controller = new AbortController();
       options.active.add(controller);
-      let upstreamTimedOut = false;
-      let fetchTimer: ReturnType<typeof setTimeout> | undefined;
+      let firstResponseTimedOut = false;
+      let firstResponseTimer: ReturnType<typeof setTimeout> | undefined;
       const abort = () => controller.abort();
-      // The whole response is bounded, streaming included: by the trusted client
-      // deadline when one is present. At that instant the upstream work is aborted as a route timeout even if
-      // headers were already sent, so a stalled or vanished downstream can never
-      // leave the upstream promise running unbounded.
-      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-      const armDeadline = (deadlines: (number | undefined)[]): void => {
-        if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-        const hardDeadline = deadlines.filter((value): value is number => value !== undefined);
-        deadlineTimer = hardDeadline.length === 0
-          ? undefined
-          : setTimeout(
-              () => { upstreamTimedOut = true; abort(); },
-              Math.min(MAX_TIMER_SAFE, Math.max(0, Math.min(...hardDeadline) - options.now())),
-            );
-        deadlineTimer?.unref?.();
+      const clearFirstResponseTimer = (): void => {
+        if (firstResponseTimer !== undefined) {
+          clearTimeout(firstResponseTimer);
+          firstResponseTimer = undefined;
+        }
       };
-      armDeadline([clientDeadline]);
+      const armFirstResponseTimer = (): void => {
+        if (!streamingRequest || firstResponseTimer !== undefined) return;
+        const delayMs = Math.min(MAX_TIMER_SAFE, firstResponseTimeoutSeconds * 1000);
+        firstResponseTimer = setTimeout(() => { firstResponseTimedOut = true; abort(); }, delayMs);
+        firstResponseTimer.unref?.();
+      };
       // A completed-request client disconnect also aborts upstream work.
       const onResponseClose = (): void => { if (!response.writableEnded) abort(); };
       request.once('aborted', abort);
@@ -470,8 +475,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         const send = async (): Promise<Response> => {
           // A request that is already aborted or disconnected is never sent.
           if (controller.signal.aborted || request.readableAborted || response.destroyed) throw abortError();
-          if (fetchTimer !== undefined) clearTimeout(fetchTimer);
-          fetchTimer = setTimeout(() => { upstreamTimedOut = true; abort(); }, UPSTREAM_HEADERS_DEADLINE_MS);
+          armFirstResponseTimer();
           try {
             // Raced against the signal: an uncooperative fetch that ignores the
             // abort can never leave this pipeline awaiting it forever.
@@ -488,7 +492,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
                 });
             return await raceAbort(execution, controller.signal);
           } finally {
-            if (fetchTimer !== undefined) { clearTimeout(fetchTimer); fetchTimer = undefined; }
+            // The first-response timer stays armed until the first streamed output or a terminal response.
           }
         };
         let upstream = await send();
@@ -519,6 +523,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           }
         }
         if (!upstream.ok) {
+          clearFirstResponseTimer();
           // Only errors are buffered so their facts can be captured and, when
           // needed, remapped. A conforming upstream body is forwarded with its
           // exact status and bytes.
@@ -581,17 +586,32 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           module, provider: resolved.provider, providers: options.providers,
           modelId: resolved.model.id, publicModel: registeredModel,
         });
-        response.writeHead(repaired.status, allowedResponseHeaders(repaired.headers));
+        const downstreamHeaders = allowedResponseHeaders(repaired.headers);
+        let committed = false;
+        const commit = (): void => {
+          if (committed) return;
+          committed = true;
+          response.writeHead(repaired.status, downstreamHeaders);
+        };
         // The selected protocol module translates its own generation events
         // into protocol-neutral signals for the shared TPS sampler; the sample
         // model is the requested canonical public model.
-        sampler = new ResponseSampler({ now: options.now, model: registeredModel, requestStartedAtMs });
+        sampler = new ResponseSampler({
+          now: options.now,
+          model: registeredModel,
+          requestStartedAtMs,
+          onFirstOutput: clearFirstResponseTimer,
+        });
         observer = module.createObserver();
         const translator = module.createTpsTranslator();
         const relayed = await raceAbort(relayResponse(repaired, response, {
+          response,
           module, provider: resolved.provider, providers: options.providers,
           modelId: resolved.model.id, upstreamModel, publicModel: registeredModel, observer, sampler, translator,
+          commit,
+          signal: controller.signal,
         }), controller.signal);
+        clearFirstResponseTimer();
         // Only a validated completed response restores health. An observed
         // in-stream error is classified first: a genuine fault is recorded, while
         // a caller-benign frame (`content_filter`, an invalid request) never
@@ -624,15 +644,10 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           ...(sampler.sample() ?? {}), ...(usage ? { usage } : {}),
         });
       } catch (error) {
-        // A timeout (the upstream deadline, or a stalled promise) is a route
-        // fault; a cancellation (client disconnect, shutdown, caller abort) is
-        // not, and must never be recorded as one.
-        const timedOut = upstreamTimedOut;
+        clearFirstResponseTimer();
+        // A first-response timeout is recorded in request statistics but never
+        // poisons route availability; a cancellation is not a fault either.
         const aborted = controller.signal.aborted;
-        // A deadline the client set and passed is a client-observed timeout, not
-        // a plain cancellation, even though the Gateway only saw a disconnect.
-        const clientTimedOut = aborted && clientDeadline !== undefined && options.now() >= clientDeadline;
-        const routeTimedOut = timedOut || clientTimedOut;
         const err = error as Error & { code?: unknown; cause?: { code?: unknown } };
         // Record 499 without a route fault only when the controller was not
         // aborted, we did not time out, the error is an AbortError, and the
@@ -640,15 +655,14 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         // AbortError without that evidence remains a transport fault (502).
         const callerCancelled =
           !aborted &&
-          !routeTimedOut &&
+          !firstResponseTimedOut &&
           err.name === 'AbortError' &&
           (request.readableAborted || response.destroyed);
         const cancelled = aborted || callerCancelled;
-        const status = cancelled ? (routeTimedOut ? 504 : 499) : 502;
+        const status = cancelled ? (firstResponseTimedOut ? 504 : 499) : 502;
         let faultFact: Partial<GatewayRequestCompletedEvent> = {};
-        if (routeTimedOut) {
-          const state = recordFault(clientTimeoutFailure(), status);
-          faultFact = state === undefined ? {} : { routeState: state.state, routeUntil: state.until, faultReason: state.faultKind, routePhase: state.phase };
+        if (firstResponseTimedOut) {
+          faultFact = { faultReason: 'timeout' };
         } else if (!cancelled) {
           const sanitizeFaultField = (value: unknown): string | undefined => {
             if (value === undefined || value === null) return undefined;
@@ -669,7 +683,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           };
         }
         if (!response.headersSent) {
-          const message = cancelled ? (routeTimedOut ? 'Provider request timed out' : 'Request cancelled') : 'Provider request failed';
+          const message = cancelled ? (firstResponseTimedOut ? 'Provider request timed out' : 'Request cancelled') : 'Provider request failed';
           json(response, status, gatewayErrorBody(module, status, message));
         } else {
           response.destroy();
@@ -686,8 +700,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           ...(sampler?.sample() ?? {}),
         });
       } finally {
-        if (fetchTimer !== undefined) clearTimeout(fetchTimer);
-        if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+        clearFirstResponseTimer();
         request.off('aborted', abort);
         response.off('close', onResponseClose);
         options.active.delete(controller);

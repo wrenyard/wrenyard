@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { GatewayRouteState, GatewayRouteStatus, UpstreamRouteFailure } from '@wrenyard/providers/base';
-import { clientTimeoutFailure, resetInstant, transportFailure, type RouteFaultKind } from './route-failure.ts';
+import { resetInstant, transportFailure, type RouteFaultKind } from './route-failure.ts';
 
 type Scope = 'provider' | 'pool' | 'route';
 
@@ -65,8 +65,8 @@ interface Block extends GatewayRouteStatus {
 /** A failure the store may record: the legacy shape plus an optional fault kind. */
 export type MarkableFailure = UpstreamRouteFailure & { faultKind?: RouteFaultKind };
 
-/** The client-observed fault kinds the attempt-correlated feedback API accepts. */
-export type ClientFaultKind = 'timeout' | 'transport';
+/** The client-observed fault kind the attempt-correlated feedback API accepts. */
+export type ClientFaultKind = 'transport';
 
 /** One in-flight attempt, correlated by the client so a duplicate report is dropped. */
 interface Attempt {
@@ -90,9 +90,9 @@ const MAX_TIMER_MS = 2_147_483_647;
 
 const fingerprint = (value: string): string => createHash('sha256').update(value).digest('hex');
 
-/** The fault a client-observed kind maps to: the exact route that observed it. */
-function clientFailure(kind: ClientFaultKind): MarkableFailure {
-  return kind === 'timeout' ? clientTimeoutFailure() : transportFailure();
+/** The fault a client-observed transport failure maps to: the exact route that observed it. */
+function clientFailure(_kind: ClientFaultKind): MarkableFailure {
+  return transportFailure();
 }
 
 /** The HTTP status a native fault is reported with, matching its classification. */
@@ -170,11 +170,11 @@ export class RouteStateStore {
   }
 
   /**
-   * Record a client-observed route fault (a timeout or fetch failure the
-   * Gateway only saw as a disconnect) into the same store, correlated to the
-   * attempt that observed it. A fault is only recorded while the attempt is
-   * unsettled, so a client report and a server-side timeout of the same attempt
-   * are never double counted.
+   * Record a client-observed transport fault (a fetch failure the Gateway only
+   * saw as a disconnect) into the same store, correlated to the attempt that
+   * observed it. A fault is only recorded while the attempt is unsettled, so a
+   * client report and a server-side fault of the same attempt are never double
+   * counted.
    */
   reportAttemptFault(provider: string, model: string, attemptId: string, kind: ClientFaultKind, status: number, until?: string): RouteStatus | undefined {
     this.pruneAttempts();
