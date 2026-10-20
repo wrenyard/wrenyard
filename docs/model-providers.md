@@ -1,6 +1,6 @@
 # Supported providers
 
-Wrenyard ships with 38 built-in model providers. Activate the ones you use in
+Wrenyard ships with 40 built-in model providers. Activate the ones you use in
 **Settings › 供应商 (Providers)**; every activated provider's models become
 available to the session model picker and to automatic task routing. The
 model catalogue changes with releases, so the app is the authoritative list of
@@ -18,6 +18,8 @@ asks for the password.
 | ChatGPT | `chatgpt` | Codex ChatGPT login | yes |
 | Cursor | `cursor` | Cursor agent login | yes |
 | CodeBuddy | `codebuddy` | CodeBuddy login | yes |
+| WorkBuddy | `workbuddy` | WorkBuddy login | — |
+| WorkBuddy AI | `workbuddy-ai` | WorkBuddy AI login | — |
 | SpaceXAI (Grok CLI) | `spacex-ai` | Grok login | — |
 | Super Grok | `super-grok` | Grok login | yes |
 | Devin | `devin` | Devin login | yes |

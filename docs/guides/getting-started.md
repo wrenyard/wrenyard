@@ -37,7 +37,9 @@ configure their credentials:
 - **Subscription providers** reuse the login of their official client: ChatGPT
   through Codex, Claude through Claude Code, and Cursor, CodeBuddy and Grok
   through their own CLIs. Sign in with that client once; Wrenyard reads and
-  refreshes the login through it.
+  refreshes the login through it. WorkBuddy and WorkBuddy AI read the WorkBuddy
+  desktop login, or sign in through a browser flow opened from the provider
+  dialog.
 
 Each active provider shows its status, its models and, where the provider
 reports it, quota windows with their reset times. The full list is in
