@@ -1,17 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { TriangleAlert } from 'lucide-react';
 import { cn } from 'cn';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
+import { MessageFooter } from '@/renderer/components/chat/MessageFooter';
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
 import { Page, PageActions, PageContent, PageHeader, PageTitle } from '@/renderer/components/page';
 import { QueryError } from '@/renderer/components/query-error';
 import { StatusBadge } from '@/renderer/components/status-badge';
 import type { StatusTone } from '@/renderer/components/status-badge';
-import { Timestamp } from '@/renderer/components/timestamp';
+import { Badge } from '@/renderer/components/ui/badge';
+import { Bubble, BubbleContent } from '@/renderer/components/ui/bubble';
 import { Button } from '@/renderer/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/renderer/components/ui/card';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import { Field, FieldLabel } from '@/renderer/components/ui/field';
 import { Input } from '@/renderer/components/ui/input';
+import { Item, ItemContent, ItemMedia, ItemTitle } from '@/renderer/components/ui/item';
+import { Message, MessageContent, MessageHeader } from '@/renderer/components/ui/message';
 import { Popover, PopoverContent, PopoverTrigger } from '@/renderer/components/ui/popover';
 import {
   MessageScroller,
@@ -20,7 +25,6 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/renderer/components/ui/message-scroller';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/renderer/components/ui/select';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { useRemoteConnection } from '@/renderer/lib/desktop';
 import { navigate } from '@/renderer/lib/navigation';
@@ -67,16 +71,6 @@ function botIcon(bot: AgentBot): string {
   const icon = bot.icon?.trim();
   if (icon !== undefined && icon !== '') return icon;
   return [...bot.name.trim()][0] ?? bot.id.slice(0, 1);
-}
-
-/** One list line: icon, name, the 主 marker, location and every warning mark. */
-function botLabel(bot: AgentBot): string {
-  const parts = [botIcon(bot), bot.name];
-  if (bot.primary) parts.push('主');
-  parts.push(locationText(bot.location));
-  if (!bot.enabled) parts.push('已停用');
-  if (bot.warning !== undefined) parts.push('⚠');
-  return parts.join(' · ');
 }
 
 /** The list as Desktop renders it: the primary bot first, then by id. */
@@ -401,28 +395,35 @@ function ModeSwitch(props: { mode: ConversationMode; onChange: (mode: Conversati
   );
 }
 
-/** Author line shared by every group entry. */
+/** One group entry, in the same shape as a session transcript message. */
 function GroupMessageView(props: { message: GroupMessage; feedback?: string }) {
   const message = props.message;
   const fromUser = message.author === 'user';
-  const author = fromUser ? '你' : message.name ?? message.botId ?? '机器人';
+  const botId = message.botId;
+  const author = message.name ?? botId ?? '机器人';
   return (
-    <article className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap items-baseline gap-2 text-xs text-muted-foreground">
-        <span className={fromUser ? 'font-medium text-foreground' : 'font-medium text-primary'}>{author}</span>
-        {!fromUser && message.botId !== undefined && (
-          <span className="rounded bg-muted px-1 tabular-nums">{message.botId}</span>
+    <Message className="group/msg" align={fromUser ? 'end' : 'start'}>
+      <MessageContent>
+        {!fromUser && (
+          <MessageHeader>
+            <span className="truncate text-primary" title={botId}>
+              {author}
+            </span>
+          </MessageHeader>
         )}
-        <Timestamp value={message.at} precision="second" />
-      </div>
-      <div className={`rounded-xl border px-3 py-2 text-sm ${fromUser ? 'bg-muted/40' : 'bg-card'}`}>
-        <AppMarkdown>{message.text}</AppMarkdown>
-      </div>
-      {/* Wake result of this send; only messages sent in this window have one. */}
-      {props.feedback !== undefined && (
-        <div className="text-xs text-muted-foreground">{props.feedback}</div>
-      )}
-    </article>
+        {fromUser && <span className="self-end px-1 text-xs text-muted-foreground">你</span>}
+        <Bubble variant={fromUser ? 'default' : 'muted'} align={fromUser ? 'end' : 'start'}>
+          <BubbleContent className="rounded-2xl px-3 py-1.5">
+            <AppMarkdown>{message.text}</AppMarkdown>
+          </BubbleContent>
+        </Bubble>
+        {/* Wake result of this send; only messages sent in this window have one. */}
+        {props.feedback !== undefined && (
+          <div className="text-xs text-muted-foreground">{props.feedback}</div>
+        )}
+        <MessageFooter align={fromUser ? 'right' : 'left'} at={message.at} text={message.text} />
+      </MessageContent>
+    </Message>
   );
 }
 
@@ -1036,19 +1037,26 @@ function PrivateView(props: {
           <span aria-hidden>{botIcon(props.bot)}</span>
           <span className="font-medium">{props.bot.name}</span>
         </button>
-        <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{props.bot.id}</span>
+        <Badge variant="secondary" className="rounded-md font-normal text-muted-foreground">
+          {props.bot.id}
+        </Badge>
         {props.bot.primary && (
-          <span className="rounded bg-primary/15 px-1 text-xs text-primary">主</span>
+          <Badge variant="secondary" className="rounded-md bg-primary/15 text-primary">
+            主
+          </Badge>
         )}
-        <span className="rounded bg-muted px-1 text-xs text-muted-foreground">
+        <Badge variant="secondary" className="rounded-md font-normal text-muted-foreground">
           {locationText(props.bot.location)}
-        </span>
+        </Badge>
         <StatusBadge tone={status.tone} label={status.label} />
         {!props.bot.enabled && (
           <span className="text-xs text-muted-foreground">已停用，仅可查看历史。</span>
         )}
         {props.bot.warning !== undefined && (
-          <span className="text-xs text-amber-600 dark:text-amber-400">{`⚠ ${props.bot.warning}`}</span>
+          <span className="flex items-center gap-1 text-xs text-warning">
+            <TriangleAlert className="size-3.5 shrink-0" />
+            {props.bot.warning}
+          </span>
         )}
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -1125,25 +1133,6 @@ export function AgentsPage() {
             />
           )}
           <ModeSwitch mode={mode} onChange={setMode} />
-          {mode === 'private' && bots.length > 0 && (
-            <Select value={privateId ?? bots[0]?.id ?? ''} onValueChange={(value) => setPrivateId(String(value))}>
-              <SelectTrigger size="sm" className="w-56" aria-label="选择机器人">
-                <SelectValue>
-                  {(value) => {
-                    const bot = bots.find((entry) => entry.id === value);
-                    return bot === undefined ? String(value) : botLabel(bot);
-                  }}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {bots.map((bot) => (
-                  <SelectItem key={bot.id} value={bot.id}>
-                    {botLabel(bot)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
         </PageActions>
       </PageHeader>
       <PageContent fill className="gap-0 p-0">
@@ -1180,12 +1169,49 @@ export function AgentsPage() {
             </EmptyHeader>
           </Empty>
         ) : (
-          <PrivateView
-            bot={selected}
-            botNames={botNames}
-            draft={privateDrafts[selected.id] ?? ''}
-            onDraftChange={(value) => setPrivateDrafts((previous) => ({ ...previous, [selected.id]: value }))}
-          />
+          <div className="flex min-h-0 flex-1">
+            <aside
+              aria-label="机器人列表"
+              className="flex w-52 shrink-0 flex-col gap-1 overflow-y-auto border-r p-2 animate-in fade-in slide-in-from-left-2 duration-base ease-out"
+            >
+              {bots.map((bot) => (
+                <Item
+                  key={bot.id}
+                  size="xs"
+                  variant={bot.id === selected.id ? 'muted' : 'default'}
+                  render={
+                    <button
+                      type="button"
+                      aria-pressed={bot.id === selected.id}
+                      onClick={() => setPrivateId(bot.id)}
+                    />
+                  }
+                  className="cursor-pointer text-left"
+                >
+                  <ItemMedia>
+                    <BotAvatar bot={bot} />
+                  </ItemMedia>
+                  <ItemContent>
+                    <ItemTitle className="min-w-0 truncate">{bot.name}</ItemTitle>
+                  </ItemContent>
+                  <BotStatusDot bot={bot} />
+                  {bot.primary && (
+                    <Badge variant="secondary" className="shrink-0 rounded-md bg-primary/15 text-primary">
+                      主
+                    </Badge>
+                  )}
+                </Item>
+              ))}
+            </aside>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <PrivateView
+                bot={selected}
+                botNames={botNames}
+                draft={privateDrafts[selected.id] ?? ''}
+                onDraftChange={(value) => setPrivateDrafts((previous) => ({ ...previous, [selected.id]: value }))}
+              />
+            </div>
+          </div>
         )}
       </PageContent>
     </Page>
