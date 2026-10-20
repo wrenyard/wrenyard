@@ -38,6 +38,10 @@ const agentClients = createAgentClients();
 const MAX_CONCURRENT_EXECUTIONS = 10
 const SHUTDOWN_GRACE_MS = 10_000
 const STDERR_TAIL_MAX_LEN = 4_000
+/** The retained process tail of a run, returned when it ends abnormally. */
+const PROCESS_TAIL_MAX_CHARS = 32_000
+/** The retained tail of one tool result inside the process. */
+const PROCESS_RESULT_MAX_CHARS = 600
 /**
  * Upper bound on retained assistant message text for one execution, in UTF-16
  * code units. Same code-unit accounting as `tailString`, so a run's retained
@@ -189,6 +193,11 @@ interface RegistryEntry {
   hasRepoLock: boolean
   wasQueued: boolean
   outputParts: string[]
+  /**
+   * Bounded tail of the run's process: messages, tool calls and tool results
+   * in order. It becomes the output of a run that ends abnormally.
+   */
+  processTail: string
   /** Code units held before truncation, or in the retained head afterwards. */
   outputHeadChars: number
   /** Code units held after the truncation marker. */
@@ -782,6 +791,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       hasRepoLock,
       wasQueued: false,
       outputParts: [],
+      processTail: '',
       outputHeadChars: 0,
       outputTailChars: 0,
       outputTruncated: false,
@@ -1116,6 +1126,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
             }
 
             const redacted = redactEvent(mapped.type, mapped.data)
+            const step = processLine(mapped.type, redacted)
+            if (step !== undefined) entry.processTail = tailString(`${entry.processTail}${step}\n`, PROCESS_TAIL_MAX_CHARS)
             this.insertEvent({
               executionId: entry.executionId,
               taskId: entry.taskId,
@@ -1135,7 +1147,14 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     await this.drainStreamAtDeadline(entry)
     const status = this.determineTerminalStatus(entry, intent)
     const killReason = this.determineKillReason(entry, status, intent)
-    const rawAgentOutput = (entry.finalOutput ?? entry.outputParts.join('')).trim() || null
+    const messageOutput = (entry.finalOutput ?? entry.outputParts.join('')).trim() || null
+    // A run that ends abnormally returns its process — messages, tool calls
+    // and results — as its output, so the caller sees the work it did.
+    const processOutput = status === 'timeout' || status === 'failed' ? entry.processTail.trim() || null : null
+    const finalText = entry.finalOutput?.trim()
+    const rawAgentOutput = processOutput === null
+      ? messageOutput
+      : finalText && !processOutput.includes(finalText) ? `${processOutput}\n${finalText}` : processOutput
     // A failed execution keeps a bounded, redacted diagnostic tail of the
     // child's captured error signals, so the real cause (e.g. an HTTP 400
     // unsupported-model message) is retained even when a generic child error
@@ -1154,7 +1173,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     // The upstream identity the client reported, when its captured diagnostics
     // state one. It is carried beside the failure diagnostic so the downstream
     // gateway classification can decide the fault; this layer never classifies.
-    const upstreamError = status === 'failed' ? extractUpstreamError(output) : undefined
+    // Read from the client's own messages and diagnostics, never from tool
+    // results, so a status line the agent merely printed cannot fault a route.
+    const upstreamError = status === 'failed'
+      ? extractUpstreamError([messageOutput === null ? null : redactDiagnosticText(messageOutput), failureDiagnostic].filter((part): part is string => part !== null).join('\n') || null)
+      : undefined
 
     this.terminalizeRunning(entry, {
       status,
@@ -2799,6 +2822,24 @@ function appendOutputTail(entry: RegistryEntry, text: string): void {
   }
   entry.outputParts = [entry.outputParts[0]!, OUTPUT_TRUNCATION_MARKER, ...kept]
   entry.outputTailChars = keep + text.length
+}
+
+/** One process step as a line; status, usage and blank text are not steps. */
+function processLine(type: string, data: unknown): string | undefined {
+  if (!isRecord(data)) return undefined
+  if (type === 'message') {
+    const text = stringProp(data, 'text')?.trim()
+    return text ? text : undefined
+  }
+  if (type === 'tool_call') {
+    const summary = stringProp(data, 'input_summary')
+    return `[tool] ${stringProp(data, 'name') ?? 'tool'}${summary ? ` ${summary}` : ''}`
+  }
+  if (type === 'tool_result') {
+    const tail = stringProp(data, 'output_tail')?.trim()
+    return `[result ${stringProp(data, 'status') ?? 'ok'}]${tail ? ` ${tail.slice(-PROCESS_RESULT_MAX_CHARS)}` : ''}`
+  }
+  return undefined
 }
 
 function tailString(value: string, maxLen: number): string {
