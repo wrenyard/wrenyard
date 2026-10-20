@@ -63,15 +63,6 @@ const OUTPUT_COMPACT_PARTS = 512
  */
 const CANCEL_SETTLEMENT_TIMEOUT_MS = 5_000
 /**
- * Default bound on how long an attempt may run without processing a mapped
- * stream event before it is treated as a stalled route and terminalized as a
- * timeout. Mirrors the wall-clock attempt deadline but measures progress
- * instead of elapsed time, so a route that never streams is abandoned without
- * waiting for the full attempt timeout.
- */
-const DEFAULT_IDLE_TIMEOUT_MS = 180_000
-
-/**
  * Fixed value written to the INERT `executions.permission` DB legacy column.
  * The column is retained only for schema compatibility: it is never read,
  * interpreted, or migrated. There is no permission concept in execution.
@@ -90,13 +81,6 @@ export interface AgentExecutionSupervisorOptions {
    * Defaults to CANCEL_SETTLEMENT_TIMEOUT_MS.
    */
   cancelSettlementTimeoutMs?: number
-  /**
-   * Injectable idle-without-stream-progress bound. An attempt that launches and
-   * then processes no mapped stream event for this long is terminalized as a
-   * timeout, using the same terminal path as the wall-clock attempt deadline.
-   * Defaults to DEFAULT_IDLE_TIMEOUT_MS.
-   */
-  idleTimeoutMs?: number
   /**
    * Injectable process-tree kill implementation. Defaults to killProcessTree.
    * Tests inject throwing or no-op implementations to prove that a
@@ -176,10 +160,6 @@ interface RegistryEntry {
   pid?: number
   pgid?: number
   timeoutTimer?: ReturnType<typeof setTimeout>
-  idleTimer?: ReturnType<typeof setTimeout>
-  /** Tool calls seen but not yet answered by their tool_result. While this set
-   *  is non-empty the idle bound is suspended, not refreshed. */
-  outstandingToolCalls?: Set<string>
   cancelRequested: boolean
   shutdownRequested: boolean
   timedOut: boolean
@@ -220,7 +200,6 @@ interface RegistryEntry {
    *  stream-drain await converges at the deadline instead of hanging on a
    *  held stdio pipe after an early child close. */
   attemptDeadlinePromise?: Promise<void>
-  attemptDeadlineResolve?: () => void
 }
 
 type ExecutionRecordWithFeatures = ExecutionRecord & { features: string | null }
@@ -249,7 +228,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private readonly repoWriteLocks: RepoWriteLocks
   private readonly logger?: SupervisorLogger
   private readonly cancelSettlementTimeoutMs: number
-  private readonly idleTimeoutMs: number
   private readonly killProcessTreeFn: (pid: number, pgid?: number) => Promise<void>
   private readonly isProcessLiveFn: (pid: number) => boolean
   private readonly catalog: ReturnType<typeof createBuiltinCatalog>
@@ -265,12 +243,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private promoting = false
   private readonly canStartExecution?: AgentExecutionSupervisorOptions['canStartExecution']
 
-  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, idleTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService, operations, canStartExecution, onExecutionCompleted }: AgentExecutionSupervisorOptions) {
+  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService, operations, canStartExecution, onExecutionCompleted }: AgentExecutionSupervisorOptions) {
     this.db = db
     this.repoWriteLocks = repoWriteLocks
     this.logger = logger
     this.cancelSettlementTimeoutMs = cancelSettlementTimeoutMs ?? CANCEL_SETTLEMENT_TIMEOUT_MS
-    this.idleTimeoutMs = idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
     this.killProcessTreeFn = killProcessTreeImpl ?? killProcessTree
     this.isProcessLiveFn = isProcessLiveImpl ?? defaultIsProcessLive
     this.catalog = catalog ?? createBuiltinCatalog()
@@ -696,7 +673,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
     for (const entry of [...this.registry.values()]) {
       if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer)
-      this.clearIdleTimer(entry)
       this.resolveAndForget(entry, {
         executionId: entry.executionId,
         status: 'interrupted',
@@ -971,7 +947,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       let resolveDeadline!: () => void
       const deadline = new Promise<void>((resolve) => { resolveDeadline = resolve })
       entry.attemptDeadlinePromise = deadline
-      entry.attemptDeadlineResolve = resolveDeadline
       entry.timeoutTimer = setTimeout(() => {
         if (entry.terminalGeneration > 0) return
         // The attempt deadline overrides any provisional exit intent claimed by
@@ -988,41 +963,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       }, opts.timeoutMs)
     }
 
-    this.armIdleTimer(entry)
-
     this.attachChildObservers(entry)
-  }
-
-  /**
-   * Arms the per-attempt idle bound. The timer is suspended while a tool call is
-   * outstanding and re-armed when its tool_result arrives; otherwise it is
-   * refreshed only by real model output as decided by isModelOutputProgress: a
-   * tool_call, a tool_result, or a message/reasoning event whose text is not
-   * blank. Heartbeat, status and usage events do not reset it. Expiry commits
-   * the same terminal intent as the wall-clock attempt deadline; a committed
-   * terminal state is never overridden.
-   */
-  private armIdleTimer(entry: RegistryEntry): void {
-    if (this.idleTimeoutMs <= 0) return
-    this.clearIdleTimer(entry)
-    entry.idleTimer = setTimeout(() => {
-      entry.idleTimer = undefined
-      if (entry.terminalGeneration > 0) return
-      entry.terminalIntent = { kind: 'timeout' }
-      entry.timedOut = true
-      entry.attemptDeadlineResolve?.()
-      void this.requestKillOnce(entry).catch((error: unknown) => {
-        this.log('warn', `[foreman] Idle-timeout kill failed for ${entry.executionId}: ${errorMessage(error)}`)
-      })
-      void this.settleAttemptTimeout(entry)
-    }, this.idleTimeoutMs)
-  }
-
-  private clearIdleTimer(entry: RegistryEntry): void {
-    if (entry.idleTimer) {
-      clearTimeout(entry.idleTimer)
-      entry.idleTimer = undefined
-    }
   }
 
   private attachChildObservers(entry: RegistryEntry): void {
@@ -1104,23 +1045,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       if (mappedEvents.length > 0) {
         this.tx(() => {
           for (const mapped of mappedEvents) {
-            // A tool call suspends the idle bound until its tool_result arrives, so
-            // a legitimately long-running tool cannot be killed while it runs. The
-            // wall-clock attempt deadline still applies.
-            if (mapped.type === 'tool_call') {
-              entry.outstandingToolCalls ??= new Set()
-              entry.outstandingToolCalls.add(typeof mapped.data.call_id === 'string' ? mapped.data.call_id : '')
-              if (entry.outstandingToolCalls.size === 1) this.clearIdleTimer(entry)
-            } else if (mapped.type === 'tool_result') {
-              entry.outstandingToolCalls?.delete(typeof mapped.data.call_id === 'string' ? mapped.data.call_id : '')
-              if (entry.outstandingToolCalls && entry.outstandingToolCalls.size === 0) this.armIdleTimer(entry)
-            }
-            // With no tool outstanding, only real model output resets the idle
-            // bound: a tool_call, a tool_result, or non-blank message/reasoning text.
-            // Status, heartbeat, token accounting and blank text are not progress.
-            if (isModelOutputProgress(mapped)) {
-              entry.idleTimer?.refresh()
-            }
             if (mapped.type === 'message' && typeof mapped.data.text === 'string') {
               appendOutputText(entry, mapped.data.text)
             }
@@ -1952,14 +1876,12 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
   private resolveAndForget(entry: RegistryEntry, result: ExecutionResult): void {
     if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer)
-    this.clearIdleTimer(entry)
     this.registry.delete(entry.executionId)
     entry.resolveWait(result)
   }
 
   private rejectAndForget(entry: RegistryEntry, error: unknown): void {
     if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer)
-    this.clearIdleTimer(entry)
     // A terminal transaction that threw rolled back together with its
     // in-transaction repo-lock release, so release again here as a guaranteed
     // fallback on the error path (releaseByExecution is idempotent).
@@ -2184,21 +2106,6 @@ function parseDispatchPlans(raw: string | undefined): Record<string, unknown> {
     // fall through to an empty map
   }
   return {}
-}
-
-/**
- * Reports whether a mapped stream event is real model output: a tool call, a
- * tool result, or a message/reasoning event carrying non-whitespace text. Usage
- * accounting, blank text and status noise are not idle-watchdog progress; a
- * tool that is still running is handled by the outstanding-call suspension
- * rather than by refreshing the idle bound.
- */
-function isModelOutputProgress(mapped: BClassEvent): boolean {
-  if (mapped.type === 'tool_call' || mapped.type === 'tool_result') return true
-  if (mapped.type === 'message' || mapped.type === 'reasoning') {
-    return typeof mapped.data.text === 'string' && mapped.data.text.trim().length > 0
-  }
-  return false
 }
 
 export function mapStreamEventToBClass(event: StreamEventRecord): BClassEvent[] {

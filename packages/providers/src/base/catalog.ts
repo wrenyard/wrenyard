@@ -200,16 +200,6 @@ function validateModelSpeedMeasurements(
 // the future, and within the trailing 31-day window.
 const LOCAL_SPEED_FRESH_MS = 31 * 24 * 60 * 60 * 1000
 
-// Automatic-route cooldown: a route that timed out or stopped making stream
-// progress is demoted for automatic selection until its expiry passes. Entries
-// expire passively, so an expired entry is simply absent; no timers are armed.
-const ROUTE_COOLDOWN_MS = 30 * 60 * 1000
-const routeCooldowns = new Map<string, number>()
-
-export function recordRouteCooldown(provider: string, model: string): void {
-  routeCooldowns.set(`${provider}/${model}`, Date.now() + ROUTE_COOLDOWN_MS)
-}
-
 function isFreshLocalSample(sample: LocalSpeedSample, now: Date): boolean {
   if (!Number.isFinite(sample.tps) || sample.tps <= 0) return false
   if (!Number.isInteger(sample.sampleCount) || sample.sampleCount <= 0) return false
@@ -243,13 +233,6 @@ export function resolveModelSpeed(
   localSpeed?: readonly LocalSpeedSample[],
   now: Date = new Date(),
 ): SpeedEvidence {
-  const cooldownExpiry = routeCooldowns.get(`${provider.id}/${modelDef.id}`)
-  if (cooldownExpiry !== undefined && cooldownExpiry > now.getTime()) {
-    return {
-      source: 'cooldown',
-      tps: 0,
-    }
-  }
   const local = localSpeed?.find(
     (sample) => sample.provider === provider.id && sample.model === modelDef.id && isFreshLocalSample(sample, now),
   )

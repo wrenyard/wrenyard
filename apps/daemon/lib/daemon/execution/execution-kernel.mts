@@ -35,7 +35,7 @@ import {
 } from '@wrenyard/task'
 import { collectStructuredOutput, firstPrompt, type StructuredOutputAgent } from '@wrenyard/task'
 import { requireClient } from '@wrenyard/clients'
-import { parseRunSyntax, recordRouteCooldown } from '@wrenyard/providers/catalog'
+import { parseRunSyntax } from '@wrenyard/providers/catalog'
 import type { RouteGuard } from '@wrenyard/gateway'
 import {
   createTaskArtifactDirectory,
@@ -712,18 +712,9 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         break
       } catch (error) {
         const identity = exactAgentRuntime !== undefined ? routeIdentityOf(exactAgentRuntime) : undefined
-        // Route health keys on the canonical model id, while `identity.model`
-        // stays client-qualified on purpose to scope the shared circuit.
-        const canonicalModel = exactAgentRuntime !== undefined
-          ? parseRunSyntax(exactAgentRuntime).model
-          : undefined
         const faultKind = identity !== undefined
           ? options.taskRouteState?.faultState(identity.provider, identity.model)
           : undefined
-        const timedOut = taskFailureCategory(error) === 'agent_timeout'
-        if (timedOut && identity !== undefined) {
-          recordRouteCooldown(identity.provider, canonicalModel ?? identity.model)
-        }
         const retryable = options.taskSettingsResolver !== undefined
           && identity !== undefined
           && structuredSummary === undefined
