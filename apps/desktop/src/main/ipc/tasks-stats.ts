@@ -35,6 +35,11 @@ export function registerTasksStatsIpc(ipcMain: IpcMain, deps: ShellIpcDeps): () 
     }
     return options.openTaskGraph(taskGraphId);
   });
+  ipcMain.handle(SHELL_CHANNELS.taskDefinitionList, async (event, project: unknown) => {
+    assertShellSender(event.sender);
+    const boundedProject = boundedOptionalProject(project);
+    return options.getTaskDefinitionList(boundedProject);
+  });
   ipcMain.handle(SHELL_CHANNELS.taskSettingsSnapshot, async (event, project: unknown, taskId: unknown) => {
     assertShellSender(event.sender);
     const boundedProject = boundedOptionalProject(project);
@@ -68,6 +73,7 @@ export function registerTasksStatsIpc(ipcMain: IpcMain, deps: ShellIpcDeps): () 
       SHELL_CHANNELS.statsSnapshot,
       SHELL_CHANNELS.taskTranscript,
       SHELL_CHANNELS.taskGraph,
+      SHELL_CHANNELS.taskDefinitionList,
       SHELL_CHANNELS.taskSettingsSnapshot,
       SHELL_CHANNELS.taskSettingsSave,
       SHELL_CHANNELS.taskRoutingTest,

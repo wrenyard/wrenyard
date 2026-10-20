@@ -189,7 +189,10 @@ export interface TaskSettingsTaskRow {
   project?: string
   /** Authoritative project display label on project rows; falls back to the exact project id. */
   project_display_name?: string
-  builtin: TaskSettingsBuiltinMetadata
+  /** Read-only builtin definition metadata (prompt template, defaults). Present
+   *  only on scoped `task_id` detail snapshot rows; omitted from unscoped list
+   *  responses. */
+  builtin?: TaskSettingsBuiltinMetadata
   /** Persisted per-task user layer for this identity. */
   user_task: TaskSettingsLayer
   effective: TaskSettingsEffective

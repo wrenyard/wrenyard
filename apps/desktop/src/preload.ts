@@ -21,6 +21,7 @@ import {
   type WrenyardGatewaySettingsSaveInput,
   type WrenyardGatewaySettingsSaveResult,
   type TaskSettingsSaveRequest,
+  type TaskDefinitionListResult,
   type TaskSettingsSnapshot,
   type TaskRoutingTestParams,
   type TaskRoutingTestResult,
@@ -243,6 +244,9 @@ const api: WrenyardShellApi = {
   },
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskSettingsSnapshot, project, taskId) as Promise<TaskSettingsSnapshot>;
+  },
+  getTaskDefinitionList(project?: string): Promise<TaskDefinitionListResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.taskDefinitionList, project) as Promise<TaskDefinitionListResult>;
   },
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskSettingsSave, request) as Promise<TaskSettingsSnapshot>;

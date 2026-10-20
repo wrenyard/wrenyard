@@ -24,6 +24,7 @@ import {
   type WorkspaceConfigurationSnapshot,
   type UpdateSnapshot,
   type TaskSettingsSaveRequest,
+  type TaskDefinitionListResult,
   type TaskSettingsSnapshot,
   type TaskRoutingTestParams,
   type TaskRoutingTestResult,
@@ -136,6 +137,7 @@ export interface ShellWindowOptions {
   openTaskTranscript(taskRunId: string, title?: string): Promise<void>;
   openTaskGraph(taskGraphId: string): Promise<void>;
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
+  getTaskDefinitionList(project?: string): Promise<TaskDefinitionListResult>;
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;

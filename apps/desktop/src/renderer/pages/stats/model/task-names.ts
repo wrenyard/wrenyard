@@ -1,4 +1,5 @@
-import type { StatsWindowSnapshot, TaskRunSnapshot, TaskSettingsSnapshot } from '@/shell-contract';
+import type { TaskDefinitionSummary } from '@wrenyard/protocol/task';
+import type { StatsWindowSnapshot, TaskRunSnapshot } from '@/shell-contract';
 
 /** Resolved display-name tables the ledger tables read. */
 export interface TaskNameTables {
@@ -14,20 +15,27 @@ export const HISTORICAL_TASK_NAMES: Readonly<Record<string, string>> = {
   'project:retire-builtin-files': '清理旧内置任务',
 };
 
+function taskDefinitionIdentity(definition: TaskDefinitionSummary): string {
+  if (definition.project !== undefined && definition.project.length > 0) {
+    return `project:${definition.project}:${definition.name}`;
+  }
+  return `builtin:${definition.name}`;
+}
+
 /**
- * Builds the read-only display-name tables from authoritative TaskSettings rows.
- * The identity map is the exact per-definition label. The investment map
- * aggregates projects by task name and drops a key when identically named
- * definitions disagree, so no arbitrary project's label is picked.
+ * Builds the read-only display-name tables from authoritative task definitions.
+ * Identity and display-name semantics match {@link buildTaskNameTables}.
  */
-export function buildTaskNameTables(settings: TaskSettingsSnapshot | null): TaskNameTables {
+export function buildTaskNameTables(definitions: readonly TaskDefinitionSummary[] | null): TaskNameTables {
   const byIdentity = new Map<string, string>();
   const grouped = new Map<string, Set<string>>();
-  for (const row of settings?.rows ?? []) {
-    byIdentity.set(row.identity, row.display_name);
-    const key = `${row.identity.startsWith('builtin:') ? 'builtin' : 'project'}:${row.name}`;
+  for (const definition of definitions ?? []) {
+    const identity = taskDefinitionIdentity(definition);
+    const displayName = definition.displayName ?? definition.name;
+    byIdentity.set(identity, displayName);
+    const key = `${identity.startsWith('builtin:') ? 'builtin' : 'project'}:${definition.name}`;
     const names = grouped.get(key) ?? new Set<string>();
-    names.add(row.display_name);
+    names.add(displayName);
     grouped.set(key, names);
   }
   const investment = new Map<string, string>(

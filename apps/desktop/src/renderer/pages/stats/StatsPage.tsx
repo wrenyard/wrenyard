@@ -13,7 +13,6 @@ import { Button } from '@/renderer/components/ui/button';
 import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
 import { formatSnapshotStamp } from '@/renderer/lib/format';
-import { taskSettingsQuery } from '@/renderer/lib/queries';
 import type { StatsPeriod } from '@/shell-contract';
 import { ActivityHeatmap } from './components/ActivityHeatmap.js';
 import { MetricCards } from './components/MetricCards.js';
@@ -28,7 +27,7 @@ import {
 } from './model/describe.js';
 import { metricCards, profileRows, selectWindow, taskRows, taskRunRows } from './model/stats.js';
 import { buildTaskNameTables } from './model/task-names.js';
-import { useStatsQuery } from './queries.js';
+import { taskDefinitionListQuery, useStatsQuery } from './queries.js';
 
 function isPeriod(value: string | undefined): value is StatsPeriod {
   return value === '24h' || value === '7d' || value === '1mo';
@@ -40,9 +39,9 @@ export function StatsPage() {
   const [builtinOnly, setBuiltinOnly] = useState(false);
   const [runKind, setRunKind] = useState<TaskRunKindFilter>('all');
   const stats = useStatsQuery();
-  const settings = useQuery(taskSettingsQuery());
+  const definitions = useQuery(taskDefinitionListQuery);
 
-  const names = useMemo(() => buildTaskNameTables(settings.data ?? null), [settings.data]);
+  const names = useMemo(() => buildTaskNameTables(definitions.data ?? null), [definitions.data]);
   const snapshot = stats.data;
   const snapshotUnavailable = snapshot !== undefined && snapshot.status === 'unavailable';
   const window = snapshot && snapshot.status === 'available' ? selectWindow(snapshot, period) : undefined;

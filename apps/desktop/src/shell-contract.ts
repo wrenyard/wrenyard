@@ -45,6 +45,7 @@ import type {
   TaskRoutingTestResult,
   TaskRoutingTestTask,
   TaskRoutingTestTasksResult,
+  TaskDefinitionListResult,
 } from '@wrenyard/protocol/task';
 import type { DailyBucket as StatsDailySnapshot } from '@wrenyard/protocol/stats';
 import type {
@@ -330,6 +331,7 @@ export const SHELL_CHANNELS = {
   taskSettingsSave: 'wrenyard-shell:task-settings-save',
   taskRoutingTest: 'wrenyard-shell:task-routing-test',
   taskRoutingTestTasks: 'wrenyard-shell:task-routing-test-tasks',
+  taskDefinitionList: 'wrenyard-shell:task-definition-list',
   execStart: 'wrenyard-shell:exec-start',
   execGet: 'wrenyard-shell:exec-get',
   execEvents: 'wrenyard-shell:exec-events',
@@ -1175,7 +1177,8 @@ export interface TaskSettingsTaskRow {
   project?: string;
   /** Authoritative project display label on project rows; falls back to the exact project id. */
   project_display_name?: string;
-  builtin: TaskSettingsBuiltinMetadata;
+  /** Present only on scoped task detail snapshots; omitted from list rows. */
+  builtin?: TaskSettingsBuiltinMetadata;
   /** Persisted per-task user layer for this identity. */
   user_task: TaskSettingsLayer;
   effective: TaskSettingsEffective;
@@ -1187,7 +1190,7 @@ export interface TaskSettingsTaskRow {
   issues: TaskSettingsValidationIssue[];
 }
 
-export type { TaskSettingsSnapshot };
+export type { TaskSettingsSnapshot, TaskDefinitionListResult };
 
 /** Bounded save request for task.settings.save. */
 export type { TaskSettingsSaveRequest };
@@ -1583,6 +1586,7 @@ export interface WrenyardShellApi {
   onUpdateChanged(listener: () => void): () => void;
   onViewChanged(listener: (page: ShellPage) => void): () => void;
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
+  getTaskDefinitionList(project?: string): Promise<TaskDefinitionListResult>;
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;
   /**
    * Forward one allowlisted `todo.*` read call to the daemon. The main-process

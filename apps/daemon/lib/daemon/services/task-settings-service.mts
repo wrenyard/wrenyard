@@ -738,6 +738,10 @@ export class TaskSettingsService {
   private readonly routeStatus?: (model: string) => GatewayRouteStatus | undefined
   private readonly now: () => number
   private readonly warnedLegacyStoredTimeouts = new Set<string>()
+  /** Preview-only last-usable quota bundle and native readiness sample;
+   *  scoped detail and preflight never consult them. */
+  private lastQuotaPreview: AutoRoutingBoundQuotaSnapshot | undefined
+  private lastNativePreview: { value: NativeProviderReadinessSnapshot; atMs: number } | undefined
 
   constructor(options: TaskSettingsServiceOptions) {
     this.configPath = options.configPath
@@ -932,7 +936,7 @@ export class TaskSettingsService {
       requirements: this.withRoleRoutingExclusions(
         { ...routingRequirements, inputTokens: params.inputTokens },
         params.taskName,
-        record,
+        readRoutingExclusions(record),
       ),
       timeoutMs: effective.runTimeLimitMinutes * MS_PER_MINUTE,
       routingWeights: effective.routingWeights,
@@ -989,8 +993,22 @@ export class TaskSettingsService {
       })
       return summary.name === params.task_id || identity === params.task_id
     })
+    // Read the routing exclusions/config once per snapshot; row construction
+    // and automatic preview consume the same immutable parse.
+    const routingExclusions = readRoutingExclusions(record)
+    // Builtin definition metadata (prompt payload) is rendered only on the
+    // scoped task detail; unscoped list rows omit it entirely.
+    const includeBuiltinMetadata = params.task_id !== undefined
     const rows = await Promise.all(
-      filteredSummaries.map((summary) => this.buildRow(summary, params.project, tasks, userGlobal, previewMemo)),
+      filteredSummaries.map((summary) => this.buildRow(
+        summary,
+        params.project,
+        tasks,
+        userGlobal,
+        previewMemo,
+        routingExclusions,
+        includeBuiltinMetadata,
+      )),
     )
 
     const loadErrors = this.definitions.listLoadErrors !== undefined
@@ -1400,7 +1418,9 @@ export class TaskSettingsService {
     project: string | undefined,
     tasks: TasksConfigSettingsInput | undefined,
     userGlobal: ConfigTaskSettingsLayer | undefined,
-    previewMemo?: AutomaticPreviewMemo,
+    previewMemo: AutomaticPreviewMemo | undefined,
+    routingExclusions: ReturnType<typeof readRoutingExclusions> | undefined,
+    includeBuiltinMetadata: boolean,
   ): Promise<TaskSettingsTaskRow> {
     const issues: TaskSettingsValidationIssue[] = []
     const kind: 'builtin' | 'project' = summary.kind
@@ -1411,19 +1431,9 @@ export class TaskSettingsService {
       ...(kind === 'project' ? { project: summary.project ?? project } : {}),
     })
 
-    let detail: TaskSettingsDefinitionDetail | undefined
-    try {
-      // Project rows resolve their detail in the row's own project context so
-      // unscoped snapshots still get authoritative project labels/templates.
-      detail = await this.definitions.describe(
-        summary.name,
-        kind === 'project' ? summary.project ?? project : project,
-      )
-    } catch {
-      detail = undefined
-    }
-
-    const builtinLayer = taskDefaultsToSettingsLayer(this.summaryDefaults(summary, detail))
+    // Rows run on the list summary the source already produced; an extra
+    // per-row describe is reserved for the scoped detail below.
+    const builtinLayer = taskDefaultsToSettingsLayer(this.summaryDefaults(summary))
 
     const userTaskLayer = readPerTaskSettings(tasks, identity)
 
@@ -1439,15 +1449,7 @@ export class TaskSettingsService {
       effective = resolveEffectiveTaskSettings({})
     }
 
-    const source = summary.source ?? detail?.source ?? ''
-    const description = summary.description ?? detail?.description
     const projectName = kind === 'project' ? summary.project ?? project : undefined
-    const displayName = summary.displayName ?? detail?.displayName ?? summary.name
-    const projectDisplayName = kind === 'project'
-      ? summary.projectDisplayName ?? detail?.projectDisplayName ?? projectName ?? ''
-      : undefined
-    const instructionTemplate = summary.instructionTemplate ?? detail?.instructionTemplate ?? []
-    const inheritanceChain = summary.inheritanceChain ?? detail?.inheritanceChain
     const automatic = toEffectiveAutomatic(effective.dispatch, effective.sources.dispatch)
 
     // Automatic-mode row: selected resolved dispatch + safe reason, exposed
@@ -1458,16 +1460,17 @@ export class TaskSettingsService {
       // automatic runs (same availability/free/cap/client policy, same
       // immutable ranking), but never falls back. All automatic rows in one
       // snapshot request reuse the request-scoped preview memo — one immutable
-      // quota snapshot and one readiness probe per canonical runtime — so rows
-      // stay deterministic without repeating quota/credential reads. A failure
+      // quota snapshot, one readiness probe per canonical runtime, and one
+      // shared result per identical selection input — so rows stay
+      // deterministic without repeating quota/credential reads. A failure
       // surfaces as a structured issue.
       try {
-        const selection = await this.resolveAutomaticSelection({
+        const selection = await this.previewAutomaticSelection(previewMemo, {
           taskName: summary.name,
-          requirements: this.withRoleRoutingExclusions(effective.dispatch, summary.name),
+          requirements: this.withRoleRoutingExclusions(effective.dispatch, summary.name, routingExclusions),
           timeoutMs: effective.runTimeLimitMinutes * MS_PER_MINUTE,
           routingWeights: effective.routingWeights,
-        }, previewMemo)
+        })
         if (selection.ok) {
           // Attach the paired authoritative Catalog display labels to the
           // selected automatic dispatch; canonical ids stay authoritative.
@@ -1503,13 +1506,17 @@ export class TaskSettingsService {
       }
     }
 
-    return {
-      identity,
-      name: summary.name,
-      display_name: displayName,
-      ...(projectName !== undefined ? { project: projectName } : {}),
-      ...(projectDisplayName !== undefined ? { project_display_name: projectDisplayName } : {}),
-      builtin: {
+    // The builtin prompt payload is assembled only when the snapshot carries
+    // builtin metadata (the scoped task detail); unscoped list rows omit it.
+    let builtin: TaskSettingsTaskRow['builtin'] | undefined
+    let inheritanceChain = summary.inheritanceChain
+    if (includeBuiltinMetadata) {
+      const detail = await this.definitionDetailOrUndefined(summary, project)
+      const source = summary.source ?? detail?.source ?? ''
+      const description = summary.description ?? detail?.description
+      const instructionTemplate = summary.instructionTemplate ?? detail?.instructionTemplate ?? []
+      inheritanceChain = summary.inheritanceChain ?? detail?.inheritanceChain
+      builtin = {
         identity,
         name: summary.name,
         source,
@@ -1518,7 +1525,18 @@ export class TaskSettingsService {
         prompt_template: summary.promptTemplate ?? detail?.promptTemplate ?? 'dynamic',
         instruction_template: instructionTemplate,
         dispatch: toSnakeDispatch(builtinLayer.dispatch ?? {}),
-      },
+      }
+    }
+
+    return {
+      identity,
+      name: summary.name,
+      display_name: summary.displayName ?? summary.name,
+      ...(projectName !== undefined ? { project: projectName } : {}),
+      ...(kind === 'project'
+        ? { project_display_name: summary.projectDisplayName ?? projectName ?? '' }
+        : {}),
+      ...(builtin !== undefined ? { builtin } : {}),
       user_task: this.toLayerDto(userTaskLayer),
       effective: {
         run_time_limit_minutes: { value: effective.runTimeLimitMinutes, source: toSourceLayer(effective.sources.runTimeLimitMinutes) },
@@ -1719,9 +1737,9 @@ export class TaskSettingsService {
   private withRoleRoutingExclusions(
     requirements: ConfigTaskDispatchRequirements,
     role: string,
-    record?: import('../../config/data.mts').ConfigRecord,
+    exclusions?: ReturnType<typeof readRoutingExclusions>,
   ): ConfigTaskDispatchRequirements {
-    const roleEntry = readRoutingExclusions(record ?? this.readConfigRecord().record)?.roles?.[role]
+    const roleEntry = (exclusions ?? readRoutingExclusions(this.readConfigRecord().record))?.roles?.[role]
     if (roleEntry === undefined) return requirements
     const models = roleEntry.models
     const providers = roleEntry.providers
@@ -1735,6 +1753,74 @@ export class TaskSettingsService {
         ? { excludeProviderIds: [...(requirements.excludeProviderIds ?? []), ...providers] }
         : {}),
     }
+  }
+
+  /** Preview-only quota read: an expired shared snapshot is served stale when
+   *  a prior value exists while a single background refresh is started for the
+   *  next request; absent the service or prior value it reads fresh. */
+  private previewQuotaSnapshot(
+    previewMemo: AutomaticPreviewMemo,
+  ): Promise<AutoRoutingBoundQuotaSnapshot | null> {
+    if (this.quotaSnapshots === undefined) return Promise.resolve(null)
+    const refresh = (): Promise<AutoRoutingBoundQuotaSnapshot | null> =>
+      this.quotaSnapshots!.routingSnapshot()
+        .then((bound) => {
+          this.lastQuotaPreview = bound
+          return bound
+        })
+        .catch(() => null)
+    const last = this.lastQuotaPreview
+    if (last !== undefined) {
+      if (last.snapshot.validUntilMs > this.now()) return Promise.resolve(last)
+      // Expired preview: serve the prior value and re-validate in the
+      // background; one request shares one in-flight refresh.
+      const pending = previewMemo.refresh ?? (previewMemo.refresh = refresh())
+      void pending
+      return Promise.resolve(last)
+    }
+    const pending = previewMemo.refresh ?? (previewMemo.refresh = refresh())
+    return pending
+  }
+
+  /** Preview-only native readiness read: the last usable sample is served
+   *  stale while a background refresh re-arms the memo promise. */
+  private previewNativeProviderReadiness(
+    previewMemo: AutomaticPreviewMemo,
+  ): Promise<NativeProviderReadinessSnapshot | null> {
+    const started = Promise.resolve()
+      .then(() => this.nativeProviderReadiness!())
+      .then((value) => {
+        this.lastNativePreview = { value, atMs: this.now() }
+        return value
+      })
+      .catch(() => null)
+    const last = this.lastNativePreview
+    if (last !== undefined && this.now() - last.atMs > 60_000) {
+      // Stale preview sample: serve it and refresh in the background so the
+      // next preview observes the re-armed value.
+      void started
+      return Promise.resolve(last.value)
+    }
+    return started
+  }
+
+  /** Snapshot-row entry point into automatic selection: identical effective
+   *  inputs share one resolver run inside the request. Shared results are
+   *  never mutated here. */
+  private previewAutomaticSelection(
+    previewMemo: AutomaticPreviewMemo | undefined,
+    params: AutomaticSelectionParams,
+    trace?: AutomaticSelectionTrace,
+  ): Promise<AutomaticSelectionResult> {
+    if (previewMemo === undefined) return this.resolveAutomaticSelection(params, previewMemo, trace)
+    const key = automaticSelectionKey(params)
+    const selections = previewMemo.selections ?? (previewMemo.selections = new Map())
+    let pending = selections.get(key)
+    if (pending === undefined) {
+      pending = this.resolveAutomaticSelection(params, previewMemo, trace)
+      selections.set(key, pending)
+    }
+    return pending
   }
 
   private async resolveAutomaticSelection(
@@ -1761,18 +1847,22 @@ export class TaskSettingsService {
     if (trace !== undefined) trace.eligibleIds = eligible.choices.map((choice) => choice.exactAgentRuntime)
 
     const quotaPromise = previewMemo?.quota
-      ?? (this.quotaSnapshots
-        ? this.quotaSnapshots.routingSnapshot()
-        : Promise.resolve(null))
+      ?? (previewMemo !== undefined
+        ? this.previewQuotaSnapshot(previewMemo)
+        : this.quotaSnapshots
+          ? this.quotaSnapshots.routingSnapshot()
+          : Promise.resolve(null))
     if (previewMemo !== undefined) previewMemo.quota = quotaPromise
 
     const needsNative = needsNativeProviderReadiness(eligible.choices)
     let nativeReadinessPromise: Promise<NativeProviderReadinessSnapshot | null> = Promise.resolve(null)
     if (needsNative && this.nativeProviderReadiness !== undefined) {
       nativeReadinessPromise = previewMemo?.nativeProviderReadiness
-        ?? Promise.resolve()
-          .then(() => this.nativeProviderReadiness!())
-          .catch(() => null)
+        ?? (previewMemo !== undefined
+          ? this.previewNativeProviderReadiness(previewMemo)
+          : Promise.resolve()
+            .then(() => this.nativeProviderReadiness!())
+            .catch(() => null))
       if (previewMemo !== undefined) previewMemo.nativeProviderReadiness = nativeReadinessPromise
     }
 
@@ -2153,6 +2243,9 @@ interface AutomaticPreviewMemo {
   /** Immutable quota snapshot promise for this request, created on the first
    *  automatic row that needs one and reused by the rest of the rows. */
   quota?: Promise<AutoRoutingBoundQuotaSnapshot | null>
+  /** Prior in-flight refresh of the same quota snapshot, consumed when the
+   *  shared service returned a stale preview. */
+  refresh?: Promise<AutoRoutingBoundQuotaSnapshot | null>
   /** One immutable authoritative native-provider status sample shared by all
    * relevant automatic rows in this snapshot request. Null is a sampled
    * failure and must never trigger a second query or optimistic fallback. */
@@ -2163,12 +2256,31 @@ interface AutomaticPreviewMemo {
   clientReadiness?: Promise<ClientReadinessSnapshot | null>
   /** Non-billable runtimeAvailability probe per canonical runtime triple. */
   availability: Map<string, Promise<TaskSettingsProviderAvailability>>
+  /** One shared result per distinct automatic-selection input so identical
+   *  effective settings never re-run the resolver inside one request. The
+   *  resolver's own task-name argument never reaches a result value (it only
+   *  formats NoEligiblePlanError text), so it stays out of the key. */
+  selections?: Map<string, Promise<AutomaticSelectionResult>>
 }
 
 /** Canonical string key of a resolved runtime triple used to dedupe identical
  *  non-billable readiness probes within one snapshot request. */
 function runtimeTripleKey(runtime: TaskSettingsRuntimeAvailabilityTarget): string {
   return `${runtime.provider}/${runtime.model}:${runtime.client}#${runtime.mode}`
+}
+
+/** Canonical string key of one automatic-selection input; JSON key order is
+ *  fixed by construction so equal requirement sets collide. */
+function automaticSelectionKey(params: AutomaticSelectionParams): string {
+  const requirements = params.requirements as Record<string, unknown>
+  const keys = Object.keys(requirements).sort()
+  const ordered: Record<string, unknown> = {}
+  for (const key of keys) ordered[key] = requirements[key]
+  return JSON.stringify({
+    requirements: ordered,
+    timeoutMs: params.timeoutMs,
+    routingWeights: params.routingWeights ?? null,
+  })
 }
 
 type AutomaticSelectionResult =

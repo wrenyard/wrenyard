@@ -27,7 +27,7 @@ import { ActivityStatusProjector } from './main/activity-status.js';
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RemoteConnectionTestInput, type RemoteConnectionTestResult, type RemoteConnectionSnapshot, type RemoteHostListResult, type RemoteHostMutationResult, type RemoteHostView, type AgentMethod, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome, type OperationComponentAction, type OperationComponentId, type OperationComponentSnapshot } from './shell-contract.js';
+import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RemoteConnectionTestInput, type RemoteConnectionTestResult, type RemoteConnectionSnapshot, type RemoteHostListResult, type RemoteHostMutationResult, type RemoteHostView, type AgentMethod, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskDefinitionListResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome, type OperationComponentAction, type OperationComponentId, type OperationComponentSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { MiniCardManager } from './mini-cards.js';
 import { Notifier } from './main/notifications/notifier.js';
@@ -1080,6 +1080,11 @@ async function bootstrap(): Promise<void> {
     if (taskId !== undefined) params.task_id = taskId;
     return (await requestForeman('task.settings.snapshot', params)) as TaskSettingsSnapshot;
   };
+  const getTaskDefinitionList = async (project?: string): Promise<TaskDefinitionListResult> => {
+    const params: Record<string, unknown> = {};
+    if (project !== undefined) params.project = project;
+    return (await requestForeman('task.definition.list', params)) as TaskDefinitionListResult;
+  };
   // Read-only routing test: the daemon owns evaluation, ranking, and scoring.
   // Desktop only forwards the typed form request and transports the result back.
   const requestTaskRoutingTest = async (params: TaskRoutingTestParams): Promise<TaskRoutingTestResult> => {
@@ -2060,6 +2065,7 @@ async function bootstrap(): Promise<void> {
     openTaskTranscript: (taskRunId, title) => windowOwner.openTaskTranscript(taskRunId, title),
     openTaskGraph: (taskGraphId) => windowOwner.openTaskGraph(taskGraphId),
     getTaskSettings: (project?: string, taskId?: string) => getTaskSettings(project, taskId),
+    getTaskDefinitionList: (project?: string) => getTaskDefinitionList(project),
     saveTaskSettings: (request: TaskSettingsSaveRequest) => saveTaskSettings(request),
     requestTaskRoutingTest: (params: TaskRoutingTestParams) => requestTaskRoutingTest(params),
     requestRoutingTestTasks: () => requestRoutingTestTasks(),

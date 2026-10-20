@@ -110,7 +110,11 @@ export function TaskDetail({
           ) : null}
         </dl>
 
-        <TemplatePreview template={row.builtin.instruction_template} className="min-h-72 flex-1" />
+        {loading || row.builtin === undefined ? (
+          <Skeleton className="min-h-72 flex-1" />
+        ) : (
+          <TemplatePreview template={row.builtin.instruction_template} className="min-h-72 flex-1" />
+        )}
       </div>
     </section>
   );

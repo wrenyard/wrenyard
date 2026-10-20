@@ -1409,6 +1409,12 @@ export function createDemoShell(control?: DemoControl): DemoShell {
     onViewChanged: (listener) => viewChanged.subscribe(listener),
 
     getTaskSettings: async () => TASK_SETTINGS,
+    getTaskDefinitionList: async () => TASK_ROWS.map((row) => ({
+      name: row.name,
+      displayName: row.display_name,
+      source: row.project === undefined ? 'builtin' : 'project',
+      ...(row.project !== undefined ? { project: row.project } : {}),
+    })),
     saveTaskSettings: async () => TASK_SETTINGS,
     requestTaskRoutingTest: async (): Promise<TaskRoutingTestResult> => ({
       rows: ROUTING_CANDIDATES.map((candidate, index) => ({
