@@ -150,7 +150,7 @@ export function SessionUsagePanel({ clusters, groups, note, rootRef, currency }:
   const find = (key: MetricCluster['key']): MetricCluster | undefined => clusters.find((cluster) => cluster.key === key);
 
   return (
-    <div ref={rootRef} tabIndex={-1} className="flex flex-col gap-3 p-3 text-xs tabular-nums outline-none" data-slot="session-usage-panel">
+    <div ref={rootRef} tabIndex={-1} className="flex flex-col gap-3 text-xs tabular-nums outline-none" data-slot="session-usage-panel">
       <SourceSection featured alwaysExpanded label="推理" cluster={find('reason')} groups={groups.reason} currency={currency} />
       <Separator />
       <SourceSection label="辅助" cluster={find('aux')} groups={groups.aux} currency={currency} />

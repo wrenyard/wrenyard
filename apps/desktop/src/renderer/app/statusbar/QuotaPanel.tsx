@@ -88,7 +88,7 @@ export function QuotaPanel({ onClose, firstProviderId, scrollProviderId, embedde
 
   return (
     <div className={cn('w-full min-w-0', !embedded && 'flex max-h-[560px] flex-col')}>
-      <div className="flex min-h-14 items-center gap-2 px-4 py-3">
+      {!embedded && <div className="flex min-h-14 items-center gap-2 px-4 py-3">
         <span className="text-sm font-medium">额度</span>
         <span className="text-xs text-muted-foreground">{updatedAgo(data?.refreshedAt, now)}</span>
         <Button
@@ -102,13 +102,13 @@ export function QuotaPanel({ onClose, firstProviderId, scrollProviderId, embedde
         >
           <RotateCw className={cn(refresh.isPending && 'animate-spin')} />
         </Button>
-      </div>
+      </div>}
       {!embedded && <Separator />}
       <div className={cn(embedded ? '' : 'min-h-0 flex-1 overflow-y-auto')}>
         {providers.length === 0 ? (
           <p className="px-4 py-10 text-center text-xs text-muted-foreground">暂无额度数据</p>
         ) : (
-          <div ref={listRef} className="flex flex-col gap-3 px-4 py-3">
+          <div ref={listRef} className={cn('flex flex-col gap-3', !embedded && 'px-4 py-3')}>
             {providers.map((provider) => (
               <div key={provider.id} data-provider-id={provider.id}>
                 <QuotaProviderBlock provider={provider} />
@@ -127,6 +127,20 @@ export function QuotaPanel({ onClose, firstProviderId, scrollProviderId, embedde
           }}
         />
       </>}
+    </div>
+  );
+}
+
+export function QuotaCardActions() {
+  const quota = useQuery(quotaQuery);
+  const refresh = useQuotaRefresh();
+  const now = useMinuteNow();
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-muted-foreground">{updatedAgo(quota.data?.refreshedAt, now)}</span>
+      <Button type="button" variant="ghost" size="icon-sm" aria-label="刷新额度" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
+        <RotateCw className={cn(refresh.isPending && 'animate-spin')} />
+      </Button>
     </div>
   );
 }

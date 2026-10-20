@@ -34,11 +34,9 @@ export interface ContextBreakdownProps {
   groups: UsageGroupView[];
   /** Display name of the reason model, for the overflow alert. */
   modelName?: string;
-  /** Optional header spacing override for compact panel compositions. */
-  headerClassName?: string;
 }
 
-export function ContextBreakdown({ roles, budget, groups, modelName, headerClassName }: ContextBreakdownProps) {
+export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBreakdownProps) {
   const [expanded, setExpanded] = useState(false);
   const segments: TokenBarSegment[] = groups.map((group) => ({
     id: group.id,
@@ -99,13 +97,8 @@ export function ContextBreakdown({ roles, budget, groups, modelName, headerClass
 
   return (
     <div className="flex flex-col" data-slot="context-breakdown">
-      {/* Header */}
-      <div className={cn('flex items-center justify-between gap-3', headerClassName ?? 'px-3 pt-3')}>
-        <span className="text-sm font-medium">会话上下文</span>
-      </div>
-
       {budget?.exceeded === true && (
-        <div className="px-3 pt-2">
+        <div className="pt-2">
           <Alert variant="destructive">
             <AlertDescription>
               {`${modelName ?? reason?.model ?? '主推理'} 的上下文较大（可用窗口 ${formatTokenCount(budget.available)}），发送时将先压缩`}
@@ -114,9 +107,9 @@ export function ContextBreakdown({ roles, budget, groups, modelName, headerClass
         </div>
       )}
 
-      <div className="px-3 pt-2">{estimateDetail}</div>
+      <div className="pt-2">{estimateDetail}</div>
 
-      <div className="flex flex-col gap-2.5 px-3 py-3">
+      <div className="flex flex-col gap-2.5 py-3">
         {reason !== undefined && <RoleRow entry={reason} />}
         {auxiliary.length > 0 && (
           <>

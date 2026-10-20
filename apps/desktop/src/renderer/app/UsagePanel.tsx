@@ -8,8 +8,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChartColumn } from 'lucide-react';
-import { Separator } from '@/renderer/components/ui/separator';
 import { PanelFooterAction } from '@/renderer/components/panel-footer-action';
+import { Separator } from '@/renderer/components/ui/separator';
+import { UsageCard } from '@/renderer/components/usage/UsageCard';
 import { consumeActivityPanelProvider } from '@/renderer/lib/activity-panel';
 import { useActiveSession } from '@/renderer/lib/navigation';
 import { shell } from '@/renderer/lib/desktop';
@@ -21,7 +22,7 @@ import { SessionUsageProvider, useComposerSelection, useSessionUsage } from '@/r
 import { useSessionUsagePanelData } from '@/renderer/pages/session/components/usage/useSessionUsagePanelData';
 import { SessionUsagePanel } from '@/renderer/pages/session/components/usage/SessionUsagePanel';
 import { ContextBreakdown } from '@/renderer/pages/session/components/usage/ContextBreakdown';
-import { QuotaPanel } from '@/renderer/app/statusbar/QuotaPanel';
+import { QuotaCardActions, QuotaPanel } from '@/renderer/app/statusbar/QuotaPanel';
 
 /** The models the usage panel resolves names and routes against. */
 function useSessionModels() {
@@ -116,14 +117,16 @@ function SessionUsageSectionBody({ turns }: { turns: ReturnType<typeof fold>['tu
   ].filter(Boolean).join(' · ') || undefined;
 
   return (
-    <div className="flex flex-col" data-slot="usage-session-section">
+    <div className="flex flex-col gap-3" data-slot="usage-session-section">
+      <UsageCard id="context" title="上下文">
       <ContextBreakdown
         roles={data.roles}
         budget={data.budget}
         groups={data.groups}
         modelName={data.models.find((entry) => entry.publicId === data.modelId)?.displayName}
-        headerClassName="min-h-14 px-4 py-3"
       />
+      </UsageCard>
+      <UsageCard id="session" title="本会话用量">
       <SessionUsagePanel
         clusters={data.clusters}
         groups={{ reason: data.callGroups.reason, aux: data.callGroups.aux, task: data.taskGroups }}
@@ -131,6 +134,7 @@ function SessionUsageSectionBody({ turns }: { turns: ReturnType<typeof fold>['tu
         rootRef={panelRef}
         currency={data.currency}
       />
+      </UsageCard>
     </div>
   );
 }
@@ -147,16 +151,13 @@ export function UsagePanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-slot="usage-panel">
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
         {activeSession !== '' ? (
-          <>
-            <section>
-              <SessionUsageSection sessionId={activeSession} />
-            </section>
-            <Separator />
-          </>
+          <SessionUsageSection sessionId={activeSession} />
         ) : null}
-        <QuotaPanel embedded firstProviderId={focus ?? undefined} scrollProviderId={scrollTarget} />
+        <UsageCard id="quota" title="额度" actions={<QuotaCardActions />}>
+          <QuotaPanel embedded firstProviderId={focus ?? undefined} scrollProviderId={scrollTarget} />
+        </UsageCard>
       </div>
       <Separator />
       <PanelFooterAction
