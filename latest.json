@@ -1,47 +1,47 @@
 {
   "schema_version": "wrenyard.update.v1",
-  "version": "1.0.143",
-  "published_at": "2026-10-20T19:29:32.000Z",
+  "version": "1.0.144",
+  "published_at": "2026-10-20T19:51:24.000Z",
   "assets": [
     {
-      "name": "wrenyard-desktop-1.0.143-darwin-arm64.dmg",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.143/wrenyard-desktop-1.0.143-darwin-arm64.dmg",
-      "sha256": "3b6f8fc625e65724856129e748a548acb9b542d3d7a1b58b0f0283d6317216f2"
+      "name": "wrenyard-desktop-1.0.144-darwin-arm64.dmg",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.144/wrenyard-desktop-1.0.144-darwin-arm64.dmg",
+      "sha256": "6099be397df261b90b73f281563efb088408a383f15b84f136ff7f724ba2f124"
     },
     {
-      "name": "wrenyard-desktop-1.0.143-darwin-arm64.zip",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.143/wrenyard-desktop-1.0.143-darwin-arm64.zip",
-      "sha256": "d1df558fee9e15e17d0dd389e62309c48598d569b7c2918fa242e86f8710f8db"
+      "name": "wrenyard-desktop-1.0.144-darwin-arm64.zip",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.144/wrenyard-desktop-1.0.144-darwin-arm64.zip",
+      "sha256": "42b7fe713fccd05a5dc98f17775b1a9678a7ba1010eeddbfff90e1a4cc3e3824"
     },
     {
-      "name": "wrenyard-desktop-1.0.143-win32-x64-setup.exe",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.143/wrenyard-desktop-1.0.143-win32-x64-setup.exe",
-      "sha256": "c41aebfb249bae4c582563b9d40b36ce4d1809fc8c8d38aa7efc7165a5e2a1d0"
+      "name": "wrenyard-desktop-1.0.144-win32-x64-setup.exe",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.144/wrenyard-desktop-1.0.144-win32-x64-setup.exe",
+      "sha256": "b64ca2257e368d0feb493136b5cdd6ce646553bc7426fad4e2e1cd6f53239daa"
     },
     {
-      "name": "wrenyard-desktop-1.0.143-linux-x64.AppImage",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.143/wrenyard-desktop-1.0.143-linux-x64.AppImage",
-      "sha256": "55c362915c3b2bdbaf4b40e8951d4f6cc4dc78d85aff4f1f4a54dacf8ed081d5"
+      "name": "wrenyard-desktop-1.0.144-linux-x64.AppImage",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.144/wrenyard-desktop-1.0.144-linux-x64.AppImage",
+      "sha256": "0d433e221a621f27c1b7d782b067dc0521d647a38f1e4e1dbdbcaf0aaf8c5ed0"
     }
   ],
   "remote_payloads": [
     {
       "target": "darwin-arm64",
-      "name": "wrenyard-remote-1.0.143-darwin-arm64.tar.gz",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.143/wrenyard-remote-1.0.143-darwin-arm64.tar.gz",
-      "sha256": "97659e28fb539809be9cd87af13ede83ea4a5621465984105031d752717c9d94"
+      "name": "wrenyard-remote-1.0.144-darwin-arm64.tar.gz",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.144/wrenyard-remote-1.0.144-darwin-arm64.tar.gz",
+      "sha256": "58cec287fae90431451dc29c2357fa2fbdd181b1de3bd1392b0d0f6b761736f9"
     },
     {
       "target": "win32-x64",
-      "name": "wrenyard-remote-1.0.143-win32-x64.tar.gz",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.143/wrenyard-remote-1.0.143-win32-x64.tar.gz",
-      "sha256": "7c317ddb4ce0ed6d6f2f607f92954997c80be87ca64d23d9b41a66d4a7959457"
+      "name": "wrenyard-remote-1.0.144-win32-x64.tar.gz",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.144/wrenyard-remote-1.0.144-win32-x64.tar.gz",
+      "sha256": "e1b2ebfce6b244e4388d67369e29b7ebd9ff57f56233143430ab9b6e1a4667ec"
     },
     {
       "target": "linux-x64",
-      "name": "wrenyard-remote-1.0.143-linux-x64.tar.gz",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.143/wrenyard-remote-1.0.143-linux-x64.tar.gz",
-      "sha256": "97eb439633a1a6a851c16cdff50a43abfaba81bb93c0ede8375f0e304632b514"
+      "name": "wrenyard-remote-1.0.144-linux-x64.tar.gz",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.144/wrenyard-remote-1.0.144-linux-x64.tar.gz",
+      "sha256": "c4e150d3306eb7462997e758cf51dc871e0f7deafee5735e44f8de40298d36ab"
     }
   ]
 }
