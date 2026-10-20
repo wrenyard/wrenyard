@@ -105,10 +105,26 @@ function upstreamErrorParts(body: unknown): { identity: string; message: string;
     : root;
   const text = (value: unknown): string => typeof value === 'string' ? value : '';
   return {
-    identity: `${text(error.type)} ${text(error.code)}`,
+    identity: `${text(error.type)} ${text(error.code)} ${text(error.reason)}`.trim(),
     message: `${text(error.message)} ${text(root.message)}`.trim(),
-    resetsAt: text(error.resets_at),
+    resetsAt: text(error.resets_at) || text(error.reset_at) || text(root.resets_at),
   };
+}
+
+function zenFreeQuotaExhausted(identity: string, message: string): boolean {
+  const blob = `${identity} ${message}`;
+  if (/\bFreeUsageLimitError\b/i.test(blob)) return true;
+  if (/\bfree[_-]?tier[_-]?limit\b/i.test(blob)) return true;
+  if (/\bfree usage exceeded\b/i.test(message)) return true;
+  return /\bfree\b/i.test(blob) && /\busage[\w_ ]*exceeded\b/i.test(blob);
+}
+
+function zenGoQuotaExhausted(identity: string, message: string): boolean {
+  const blob = `${identity} ${message}`;
+  if (/\bGoUsageLimitError\b/i.test(blob)) return true;
+  if (/\baccount_rate_limit\b/i.test(blob)) return true;
+  if (/\bgo usage exceeded\b/i.test(message)) return true;
+  return false;
 }
 
 export const definition = defineProvider({
@@ -162,11 +178,13 @@ export const definition = defineProvider({
     }
     // Free/Go usage is exhausted until the reset instant the upstream states;
     // a native OpenCode client reports this without an HTTP status.
-    if (/\busage[\w_ ]*exceeded\b/i.test(`${identity} ${message}`)) {
-      if (/\bfree\b/i.test(`${identity} ${message}`)) {
-        return { state: 'quota_exhausted', scope: 'pool', quotaPoolId: 'opencode-zen/free', ...(resetsAt ? { until: resetsAt } : {}) };
-      }
-      return { state: 'quota_exhausted', scope: 'route', ...(resetsAt ? { until: resetsAt } : {}) };
+    const until = resetsAt ? { until: resetsAt } : {};
+    if (zenFreeQuotaExhausted(identity, message)) {
+      return { state: 'quota_exhausted', scope: 'pool', quotaPoolId: 'opencode-zen/free', ...until };
+    }
+    if (zenGoQuotaExhausted(identity, message)) {
+      // Paid Zen rows bind opencode-zen/balance; Go limits are account-scoped like that pool, not the free pool.
+      return { state: 'quota_exhausted', scope: 'route', ...until };
     }
     const modelGone = /model not found|unknown model|(?:do(?:es)? not|don't) have access to (?:the )?model/i.test(message);
     if (modelGone || (status === 404 && /not found|unknown model|access to the model/i.test(message))) {
