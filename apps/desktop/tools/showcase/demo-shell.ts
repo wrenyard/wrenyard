@@ -998,7 +998,7 @@ const AGENT_BOTS: AgentBot[] = [
     tools: ['session', 'todo', 'message'],
     lastWakeAt: iso(NOW - 12 * MINUTE),
     queued: 0,
-    sessionId: 'bot-reviewer',
+    sessionId: 'demo-reviewer',
   },
   {
     id: 'release',
