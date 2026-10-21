@@ -57,7 +57,7 @@ function taskRowKey(taskRunId: string): ExpandedKey {
 
 function graphStateLabel(graph: ListedGraph, active: boolean): string {
   if (!active && graph.finishedAt !== undefined && isActiveGraph(graph)) {
-    return '已结束';
+    return '';
   }
   switch (graph.state) {
     case 'done':
@@ -335,11 +335,7 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
         }
         throw error;
       }),
-    ).then((confirmed) => {
-      if (!confirmed) return;
-      setFinishedGroupOpen(true);
-      setExpandedKey(taskRowKey(taskRunId));
-    });
+    );
   };
 
   const hideVisibleFinished = (): void => {
@@ -496,7 +492,9 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
                 </TooltipTrigger>
                 <TooltipContent>取消任务</TooltipContent>
               </Tooltip>
-            ) : null}
+            ) : (
+              <span className="size-6" aria-hidden="true" />
+            )}
           </span>
           <button type="button" className="shrink-0 text-muted-foreground" onClick={() => toggleExpand(key)} aria-label={expanded ? '收起' : '展开'}>
             {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
@@ -560,6 +558,7 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
     const key = graphRowKey(graph);
     const expanded = expandedKey === key;
     const title = graph.title ?? graph.taskgraphId;
+    const stateLabel = graphStateLabel(graph, active);
 
     return (
       <div key={graph.taskgraphId} className="flex flex-col gap-1">
@@ -575,7 +574,7 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
             onClick={() => toggleExpand(key)}
           >
             <span className="min-w-0 flex-1 truncate text-sm" title={title}>{title}</span>
-            <span className="shrink-0 text-sm text-muted-foreground">{graphStateLabel(graph, active)}</span>
+            <span className="shrink-0 text-sm text-muted-foreground">{stateLabel}</span>
             {expanded ? <ChevronDown className="size-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
           </button>
         </div>
@@ -588,7 +587,7 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
             >
               任务图 {title}
             </button>
-            {!active ? <span>· {graphStateLabel(graph, active)}</span> : null}
+            {!active && stateLabel !== '' ? <span>· {stateLabel}</span> : null}
           </p>
         ) : null}
       </div>
@@ -600,20 +599,45 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
       <div className="flex h-12 items-center justify-between gap-2 px-4">
         <span className="text-sm font-medium">后台任务</span>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon-sm" aria-label="清除已结束" onClick={hideVisibleFinished}>
-            <Trash2 />
-          </Button>
-          <Button variant="ghost" size="icon-sm" aria-label="关闭" onClick={closeActivityPanel}>
-            <X />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={(
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="清除已结束"
+                  disabled={finishedCount === 0}
+                  onClick={hideVisibleFinished}
+                />
+              )}
+            >
+              <Trash2 />
+            </TooltipTrigger>
+            <TooltipContent>清除已结束</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={(
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="关闭"
+                  onClick={closeActivityPanel}
+                />
+              )}
+            >
+              <X />
+            </TooltipTrigger>
+            <TooltipContent>关闭</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
-        {stale ? <p className="px-2 py-1 text-xs text-warning">活动数据暂未更新</p> : null}
+        {stale ? <p className="px-2 py-1 text-xs text-warning">后台任务数据暂未更新</p> : null}
         {empty ? (
           <p className="px-2 py-6 text-center text-sm text-muted-foreground">
-            {sessions.isPending ? '正在读取活动…' : '没有后台任务'}
+            {sessions.isPending ? '正在读取后台任务…' : '没有后台任务'}
           </p>
         ) : (
           <>
