@@ -3,6 +3,7 @@ import {
   type AuxiliaryDefinitionId,
   type DefinitionPorts,
   type LoopHelpers,
+  type LoopRecord,
 } from '@wrenyard/agent-loop';
 
 import { escapeBody, renderEventsBlock, renderEventText } from '../context/render.ts';
@@ -122,6 +123,40 @@ export async function computeReplyConversationTokenBudget(
 
 export function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+export const OBSERVATION_TOTAL_CHAR_CAP = 32_768;
+export const OBSERVATION_TRUNCATED_NOTE =
+  '[observation truncated: total observation size cap reached]';
+export const OBSERVATION_OMITTED_NOTE =
+  '[further observations omitted: total observation size cap reached]';
+
+/** Read-only project/vcs results reach the caller through the run record, with a total size cap. */
+export function observeSuccessfulToolResult(record: LoopRecord, content: string): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return;
+  }
+  if (parsed === null || typeof parsed !== 'object') return;
+  if (!Array.isArray(parsed)) {
+    const value = parsed as { error?: unknown };
+    if (value.error !== undefined) return;
+  }
+  const used = record.observations.reduce((total, entry) => total + entry.length, 0);
+  const remaining = OBSERVATION_TOTAL_CHAR_CAP - used;
+  if (remaining <= 0) {
+    if (record.observations[record.observations.length - 1] !== OBSERVATION_OMITTED_NOTE) {
+      record.observations.push(OBSERVATION_OMITTED_NOTE);
+    }
+    return;
+  }
+  if (content.length <= remaining) {
+    record.observations.push(content);
+    return;
+  }
+  record.observations.push(`${content.slice(0, remaining)}\n${OBSERVATION_TRUNCATED_NOTE}`);
 }
 
 export function renderRunFiles(files: readonly { path: string; bytes: number }[]): string {

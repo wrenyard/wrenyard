@@ -32,7 +32,8 @@ export async function runTodoAction(
     ...createLoopRecord(),
     helpers: await createAuxiliaryLoopHelpers(deps.host, 'todo'),
   };
-  // Only the todo task records every successful authoritative payload.
+  // Todo records every successful authoritative payload; project and vcs record
+  // successful tool results through the shared helper.
   record.observeToolResult = (content) => observe(record, content);
   return runAuxiliary('todo', action.intent, {
     catalog: deps.host,

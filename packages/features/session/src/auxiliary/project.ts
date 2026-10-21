@@ -13,7 +13,7 @@
 
 import { runAuxiliary, type AuxiliaryRecordPort, createLoopRecord } from '@wrenyard/agent-loop';
 
-import { createAuxiliaryLoopHelpers } from './shared.ts';
+import { createAuxiliaryLoopHelpers, observeSuccessfulToolResult } from './shared.ts';
 import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';
 
 /** Start one project session for a parsed action. */
@@ -26,6 +26,7 @@ export async function runProjectAction(
     ...createLoopRecord(),
     helpers: await createAuxiliaryLoopHelpers(deps.host, 'project'),
   };
+  record.observeToolResult = (content) => observeSuccessfulToolResult(record, content);
   return runAuxiliary('project', action.intent, {
     catalog: deps.host,
     calls: deps.calls,

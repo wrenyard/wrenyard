@@ -453,9 +453,9 @@ export interface LoopRecord {
    */
   captureDocument?(args: Record<string, unknown>, result: unknown): void | Promise<void>;
   /**
-   * Host hook for one returned tool result. A host that records authoritative
-   * observations (the workspace todo operator) supplies it; every other host
-   * leaves it absent and records nothing.
+   * Host hook for one returned tool result. Todo records successful todo
+   * payloads; project and vcs record successful tool results through a shared
+   * helper capped in total size. Other hosts leave it absent.
    */
   observeToolResult?(content: string): void;
 }

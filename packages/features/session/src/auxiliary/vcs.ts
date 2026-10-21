@@ -11,7 +11,7 @@
 
 import { runAuxiliary, type AuxiliaryRecordPort, createLoopRecord } from '@wrenyard/agent-loop';
 
-import { createAuxiliaryLoopHelpers } from './shared.ts';
+import { createAuxiliaryLoopHelpers, observeSuccessfulToolResult } from './shared.ts';
 import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';
 
 /** Start one version-control session for a parsed action. */
@@ -24,6 +24,7 @@ export async function runVcsAction(
     ...createLoopRecord(),
     helpers: await createAuxiliaryLoopHelpers(deps.host, 'vcs'),
   };
+  record.observeToolResult = (content) => observeSuccessfulToolResult(record, content);
   return runAuxiliary('vcs', action.intent, {
     catalog: deps.host,
     calls: deps.calls,
