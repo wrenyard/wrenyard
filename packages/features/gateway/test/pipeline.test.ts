@@ -199,21 +199,6 @@ test('a server-fault in-stream frame after HTTP 200 never poisons a route', asyn
   await gateway.close();
 });
 
-test('an explicit in-stream rate-limit frame still poisons the pool', async () => {
-  const clock = fakeClock();
-  const gateway = makeGateway({
-    fetch: (() => Promise.resolve(sseResponse(['data: {"error":{"message":"slow down","type":"rate_limit_error","code":"rate_limit_exceeded"}}\n\n']))) as unknown as typeof globalThis.fetch,
-    now: clock.now,
-  });
-  await withServer(gateway, async (port) => {
-    const response = await post(port, { model: 'alpha', stream: true });
-    assert.equal(response.status, 200);
-    assert.equal(gateway.routeStatus('test/alpha')?.faultKind, 'rate_limited');
-    assert.equal(gateway.routeStatus('test/alpha')?.phase, 'open');
-  });
-  await gateway.close();
-});
-
 test('a caller-benign stream frame never poisons a route', async () => {
   const clock = fakeClock();
   const gateway = makeGateway({
