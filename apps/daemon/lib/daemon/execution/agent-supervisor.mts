@@ -1054,9 +1054,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     const status = this.determineTerminalStatus(entry, intent)
     const killReason = this.determineKillReason(entry, status, intent)
     const messageOutput = (entry.finalOutput ?? entry.outputParts.join('')).trim() || null
-    // A run that ends abnormally returns its process — messages, tool calls
-    // and results — as its output, so the caller sees the work it did.
-    const processOutput = status === 'timeout' || status === 'failed' ? entry.processTail.trim() || null : null
+    // Failures retain their diagnostic process tail; timeouts retain only
+    // the executor's report, with tool activity available in the event ledger.
+    const processOutput = status === 'failed' ? entry.processTail.trim() || null : null
     const finalText = entry.finalOutput?.trim()
     const rawAgentOutput = processOutput === null
       ? messageOutput

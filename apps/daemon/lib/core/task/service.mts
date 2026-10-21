@@ -546,7 +546,10 @@ export class TaskService {
     if (!row) return null
 
     const output = row.output ?? row.execution_output ?? ''
-    const parsedOutput = row.status === 'done' ? parseJsonValue(output) : undefined
+    const parsed = parseJsonValue(output)
+    const capturedReport = row.output !== null && parsed !== null && typeof parsed === 'object'
+      && !Array.isArray(parsed) && typeof (parsed as JsonRecord)['report'] === 'string'
+    const parsedOutput = row.status === 'done' || capturedReport || typeof parsed === 'string' ? parsed : undefined
     const metadata = readTaskRunMetadata(row.id, taskRunMetadataDeps)
     const artifactErrors = readTaskArtifactErrors(row.id)
     const meta = taskRowMeta(row)
@@ -792,7 +795,8 @@ function readTaskStatusRow(taskRunId: string): DbTaskStatusRow | null {
 }
 
 function taskStatusRowToJson(row: DbTaskStatusRow): JsonRecord {
-  const output = row.output ?? row.execution_output
+  const storedOutput = row.output === null ? undefined : parseJsonValue(row.output)
+  const output = typeof storedOutput === 'string' ? storedOutput : row.output ?? row.execution_output
   const metadata = readTaskRunMetadata(row.id, taskRunMetadataDeps)
   return {
     task_run_id: row.id,

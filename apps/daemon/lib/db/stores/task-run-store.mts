@@ -1,5 +1,5 @@
 import type { ForemanDatabase, RunResult } from '../types.mts'
-import { toJsonText, toOutputText } from './json.mts'
+import { toJsonText } from './json.mts'
 
 export type TaskRunStoreStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted'
 export type TaskRunTerminalStatus = Exclude<TaskRunStoreStatus, 'queued' | 'running'>
@@ -121,7 +121,7 @@ export class TaskRunStore {
         ended_at = ?, updated_at = ?
       WHERE id = ? AND status IN ('queued', 'running')`,
       write.status,
-      toOutputText(write.output),
+      toJsonText(write.output),
       write.summary ?? null,
       write.error ?? null,
       write.failureCategory ?? null,
