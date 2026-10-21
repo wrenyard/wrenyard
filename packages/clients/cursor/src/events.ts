@@ -58,15 +58,13 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: s
                 const failed = endReason !== '' || !terminal || terminal.signal !== undefined;
                 let runError: Record<string, unknown> | string | undefined;
                 if (failed) {
+                    const stderrLine = lastNonEmptyStderrLine(stderrTail, 600);
                     if (terminal?.signal !== undefined)
                         runError = cursorTerminalError(terminal.signal, terminal.record);
                     else if (endReason !== '')
-                        runError = endReason;
-                    else {
-                        const stderrLine = lastNonEmptyStderrLine(stderrTail, 600);
-                        if (stderrLine !== '')
-                            runError = `stderr: ${stderrLine}`;
-                    }
+                        runError = stderrLine === '' ? endReason : `${endReason}; stderr: ${stderrLine}`;
+                    else if (stderrLine !== '')
+                        runError = `stderr: ${stderrLine}`;
                 }
                 yield finishedEvent('cursor', sessionId, output, failed, runError);
             }
