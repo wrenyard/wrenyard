@@ -1,6 +1,5 @@
 import type { ZodType } from 'zod'
 import { agentFailedError } from './failure.ts'
-import type { MarkableFailure } from '@wrenyard/gateway'
 import type { TaskResolvedDispatch } from '@wrenyard/protocol'
 
 /**
@@ -34,17 +33,10 @@ export interface TaskUpstreamError {
 }
 
 /**
- * A terminal route fault: the gateway's structured-output delivery failure
- * payload, or the upstream error a failed native execution reported.
+ * A terminal route fault: the upstream error a failed native execution
+ * reported.
  */
-export type TaskRouteFault = MarkableFailure | TaskUpstreamError
-
-/** The gateway's structured-output delivery failure, scoped to the exact route. */
-const STRUCTURED_OUTPUT_FAILURE: MarkableFailure = {
-  state: 'model_unavailable',
-  scope: 'route',
-  faultKind: 'structured_output',
-}
+export type TaskRouteFault = TaskUpstreamError
 
 export interface StructuredOutputOptions {
   profile: string
@@ -75,12 +67,6 @@ export interface StructuredOutputOptions {
 }
 
 export type StructuredOutputAgentStatus = 'queued' | 'starting' | 'running' | 'done' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
-
-/**
- * The client-observed failure class of a CodeBuddy process that exited without
- * its terminal result record.
- */
-const MISSING_TERMINAL_RESULT_FAILURE_CLASS = 'protocol_missing_terminal_result'
 
 const RESET_TIME_PATTERNS: readonly RegExp[] = [
   /(?:resets?|resetting)\s+(?:at|after|on)\s+([^.,;，。；\n]{3,64})/iu,
@@ -260,7 +246,6 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
     )
   }
   if (terminal.status === 'failed') {
-    if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.(STRUCTURED_OUTPUT_FAILURE)
     if (terminal.upstreamError !== undefined) opts.onRouteFault?.(terminal.upstreamError)
     throw agentFailedError(
       terminal.executionId ?? lastExecutionId ?? 'unknown',

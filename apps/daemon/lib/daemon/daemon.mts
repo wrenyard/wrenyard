@@ -1200,11 +1200,6 @@ async function createForemanDaemonResources(
         return undefined
       }
       const routeKey = `${provider}/${bareModel}`
-      // A structured-output delivery failure is already classified.
-      if ('state' in fault) {
-        gateway.reportNativeRouteFault(provider, bareModel, fault, guard)
-        return gateway.routeStatus(routeKey)
-      }
       const providerDefinition = catalog.provider(provider)
       if (providerDefinition === undefined) return undefined
       // The provider hook reads the error identity exactly as it would from a
@@ -1362,9 +1357,6 @@ async function createForemanDaemonResources(
       ),
       resolveInferenceProvider: id => catalog.provider(id),
       routeStatus: model => gateway.routeStatus(model),
-      beginRouteAttempt: (publicModel, attemptId) => gateway.beginRouteAttempt(publicModel, attemptId),
-      reportRouteFault: (publicModel, attemptId, kind) => gateway.reportRouteFault(publicModel, attemptId, kind),
-      completeRouteAttempt: (publicModel, attemptId) => gateway.completeRouteAttempt(publicModel, attemptId),
     })
     const daemonSessionHost = createDaemonSessionHost({
       workspaceRoot,

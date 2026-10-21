@@ -28,9 +28,6 @@ export function createTaskOutputModelCallPort(options: {
   ) => Promise<readonly AuxiliaryRoute[]> | readonly AuxiliaryRoute[]
   resolveInferenceProvider: (providerId: string) => ProviderDefinition | undefined
   routeStatus?: (model: string) => GatewayRouteStatus | undefined
-  beginRouteAttempt?: (publicModel: string, attemptId: string) => void
-  reportRouteFault?: (publicModel: string, attemptId: string, kind: 'transport') => void
-  completeRouteAttempt?: (publicModel: string, attemptId: string) => void
 }): TaskOutputModelCallPort {
   const runner = createCallRunner({
     transport: createModelTransport({ gateway: options.gateway }),
@@ -42,9 +39,6 @@ export function createTaskOutputModelCallPort(options: {
     },
     resolveProvider: (providerId: string) => options.resolveInferenceProvider(providerId),
     ...(options.routeStatus === undefined ? {} : { routeStatus: options.routeStatus }),
-    ...(options.beginRouteAttempt === undefined ? {} : { beginRouteAttempt: options.beginRouteAttempt }),
-    ...(options.reportRouteFault === undefined ? {} : { reportRouteFault: options.reportRouteFault }),
-    ...(options.completeRouteAttempt === undefined ? {} : { completeRouteAttempt: options.completeRouteAttempt }),
     append: async () => {},
     sessionId: `task-output-compile-${randomUUID()}`,
   })
