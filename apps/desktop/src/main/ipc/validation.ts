@@ -18,6 +18,8 @@ export const TASK_SETTINGS_PATCH_KEYS = new Set([
   'automatic',
   'routing_weights',
   'health_error_rate_threshold',
+  'retry_sessions',
+  'retry_bots',
 ]);
 export const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
   'expected_tps',
@@ -150,6 +152,13 @@ export function validateTaskSettingsSaveRequest(value: unknown): TaskSettingsSav
       healthErrorRateThreshold > 100
     ) {
       throw new Error('健康错误率阈值无效');
+    }
+  }
+  for (const field of ['retry_sessions', 'retry_bots'] as const) {
+    const value = patch[field];
+    if (value !== undefined && value !== null) {
+      if (scope !== 'global') throw new Error('重试开关仅可在全局设置中修改');
+      if (typeof value !== 'boolean') throw new Error('重试开关无效');
     }
   }
   const request: TaskSettingsSaveRequest = {

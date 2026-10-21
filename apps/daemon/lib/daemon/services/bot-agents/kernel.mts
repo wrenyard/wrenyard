@@ -1461,50 +1461,11 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     if (state.group.peerWakes[wakeId] !== undefined) delete state.group.peerWakes[wakeId]
   }
 
-  async function retryWake(
-    botId: string,
-    wake: Wake,
-    sessionId: string,
-    failedTurn: number,
-    route: AgentModelRoute,
-  ): Promise<void> {
-    // Hold the wake id while it is re-queued and sent again: the first
-    // admission released it from `admitting`, so without this the periodic
-    // pending-wake poll would dispatch the same wake a second time.
-    admitting.add(wake.id)
-    try {
-      // A turn that already published its final answer is never re-sent: the
-      // retry would produce a fresh reply and publish it to the group again.
-      const alreadyPublished = contextSession().readLedger(sessionId)
-        .some(event => event.type === 'reply.sent' && event.turn === failedTurn && event.kind !== 'progress')
-      if (alreadyPublished) {
-        removePendingWake(botId, wake.id)
-        if (wake.meta !== undefined) markWakeKeys(ensureBotState(botId), sessionWakeKeys(wake.meta))
-        finishWakeTurn(botId, wake, sessionId, {
-          turn: failedTurn,
-          status: 'failed',
-          error: 'the failed turn already published its final reply',
-        })
-        return
-      }
-      pendingWake(botId, wake)
-      await persistChain
-      if (stopped) return
-      await sendWake(botId, wake, sessionId, route)
-    } catch (error) {
-      removePendingWake(botId, wake.id)
-      finishWakeTurn(botId, wake, sessionId, { turn: failedTurn, status: 'failed', error: errorText(error) })
-    } finally {
-      admitting.delete(wake.id)
-    }
-  }
-
   async function sendWake(
     botId: string,
     wake: Wake,
     sessionId: string,
     route: AgentModelRoute,
-    fallback?: AgentModelRoute,
   ): Promise<void> {
     subscribeGroupReplies(botId, sessionId)
     holdModel(botId, route)
@@ -1514,12 +1475,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       if (wake.meta !== undefined) markWakeKeys(ensureBotState(botId), sessionWakeKeys(wake.meta))
       persist()
       trackTurn(botId, sessionId, steered.turn, outcome => {
-        if (outcome.status === 'failed' && fallback !== undefined && !stopped) {
-          const retry = retryWake(botId, wake, sessionId, steered.turn, fallback)
-          admissions.add(retry)
-          void retry.finally(() => admissions.delete(retry))
-          return
-        }
         finishWakeTurn(botId, wake, sessionId, outcome)
       })
       return
@@ -1529,12 +1484,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     if (wake.meta !== undefined) markWakeKeys(ensureBotState(botId), sessionWakeKeys(wake.meta))
     persist()
     trackTurn(botId, sessionId, turn, outcome => {
-      if (outcome.status === 'failed' && fallback !== undefined && !stopped) {
-        const retry = retryWake(botId, wake, sessionId, turn, fallback)
-        admissions.add(retry)
-        void retry.finally(() => admissions.delete(retry))
-        return
-      }
       finishWakeTurn(botId, wake, sessionId, outcome)
     })
   }
@@ -1602,7 +1551,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       const fitting = routes.filter(route => routeFits(route, fittingInput))
       if (fitting.length === 0) throw new Error('no allowed route fits the bot context within its context window')
       if (stopped) return
-      await sendWake(botId, wake, activeSessionId, fitting[0], fitting[1])
+      await sendWake(botId, wake, activeSessionId, fitting[0])
     } catch (error) {
       if (stopped) return
       removePendingWake(botId, wake.id)

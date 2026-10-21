@@ -169,6 +169,16 @@ export interface TaskSettingsLayer {
    */
   healthErrorRateThreshold?: number
   /**
+   * Optional user-global-only switch: retry a main reasoning call whose failure
+   * has no explicit meaning. Absent (or an explicit unset) means retries on.
+   */
+  retrySessions?: boolean
+  /**
+   * Optional user-global-only switch: retry a bot turn the same way. Absent (or
+   * an explicit unset) means retries on.
+   */
+  retryBots?: boolean
+  /**
    * Optional user-global-only declaration of execution tools the environment
    * provides beyond the built-in operation components — for example a named MCP
    * server. Accepts an array of unique non-empty ids and defaults to absent. It
@@ -243,6 +253,8 @@ export interface EffectiveTaskSettingsSources {
   runTimeLimitMinutes?: TaskSettingsSourceTag
   routingWeights?: TaskSettingsSourceTag
   healthErrorRateThreshold?: TaskSettingsSourceTag
+  retrySessions?: TaskSettingsSourceTag
+  retryBots?: TaskSettingsSourceTag
   dispatch?: Partial<Record<TaskDispatchField, TaskSettingsSourceTag>>
 }
 
@@ -252,6 +264,10 @@ export interface EffectiveTaskSettings {
   /** User-global routing score weights; undefined falls back to scorer defaults. */
   routingWeights?: TaskRoutingWeights
   healthErrorRateThreshold: number
+  /** Main reasoning retries; an absent layer field defaults to true. */
+  retrySessions: boolean
+  /** Bot turn retries; an absent layer field defaults to true. */
+  retryBots: boolean
   /** Winning source per field; dispatch sources are per dispatch field. */
   sources: EffectiveTaskSettingsSources
 }
@@ -476,6 +492,8 @@ const LAYER_FIELD_ALIASES = {
   runTimeLimitMinutes: ['runTimeLimitMinutes', 'run_time_limit_minutes'],
   routingWeights: ['routingWeights', 'routing_weights'],
   healthErrorRateThreshold: ['healthErrorRateThreshold', 'health_error_rate_threshold'],
+  retrySessions: ['retrySessions', 'retry_sessions'],
+  retryBots: ['retryBots', 'retry_bots'],
   environmentTools: ['environmentTools', 'environment_tools'],
   dispatch: ['dispatch'],
 } as const
@@ -517,6 +535,22 @@ export function normalizeTaskSettingsLayer(
   const healthErrorRateThreshold = resolveAliased(record, LAYER_FIELD_ALIASES.healthErrorRateThreshold)
   if (healthErrorRateThreshold.value !== undefined) {
     layer.healthErrorRateThreshold = assertHealthErrorRateThresholdPercent(healthErrorRateThreshold.value, scope)
+  }
+
+  const retrySessions = resolveAliased(record, LAYER_FIELD_ALIASES.retrySessions)
+  if (retrySessions.value !== undefined) {
+    if (retrySessions.value !== true && retrySessions.value !== false) {
+      fail(scope, 'retrySessions must be a boolean')
+    }
+    layer.retrySessions = retrySessions.value
+  }
+
+  const retryBots = resolveAliased(record, LAYER_FIELD_ALIASES.retryBots)
+  if (retryBots.value !== undefined) {
+    if (retryBots.value !== true && retryBots.value !== false) {
+      fail(scope, 'retryBots must be a boolean')
+    }
+    layer.retryBots = retryBots.value
   }
 
   // `environmentTools` is a user-global-only declaration: it is validated only
@@ -781,6 +815,13 @@ export function resolveEffectiveTaskSettings(
   const healthErrorRateThreshold =
     healthThresholdLeaf.value ?? SYSTEM_DEFAULT_HEALTH_ERROR_RATE_THRESHOLD_PERCENT
   const healthErrorRateThresholdSource = healthThresholdLeaf.source ?? 'system_global'
+  // Both retry switches are on unless a layer turns one off.
+  const retrySessionsLeaf = rightmostDefined(entries, (layer) => layer.retrySessions)
+  const retrySessions = retrySessionsLeaf.value ?? true
+  const retrySessionsSource = retrySessionsLeaf.source ?? 'system_global'
+  const retryBotsLeaf = rightmostDefined(entries, (layer) => layer.retryBots)
+  const retryBots = retryBotsLeaf.value ?? true
+  const retryBotsSource = retryBotsLeaf.source ?? 'system_global'
 
   const dispatch: TaskDispatchRequirements = {}
   const dispatchSources: Partial<Record<TaskDispatchField, TaskSettingsSourceTag>> = {}
@@ -856,6 +897,8 @@ export function resolveEffectiveTaskSettings(
   }
   if (routingWeights !== undefined) sources.routingWeights = 'user_global'
   sources.healthErrorRateThreshold = healthErrorRateThresholdSource
+  sources.retrySessions = retrySessionsSource
+  sources.retryBots = retryBotsSource
   sources.dispatch = dispatchSources
 
   return {
@@ -863,6 +906,8 @@ export function resolveEffectiveTaskSettings(
     dispatch,
     routingWeights,
     healthErrorRateThreshold,
+    retrySessions,
+    retryBots,
     sources,
   }
 }

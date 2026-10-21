@@ -57,6 +57,12 @@ export interface TaskSettingsLayer {
   routing_weights?: TaskSettingsRoutingWeights | null
   /** Global-only health-avoidance error-rate threshold (percent, 1–100); null clears. */
   health_error_rate_threshold?: number | null
+  /** Global-only: retry a main reasoning call whose failure has no explicit
+   *  meaning; null clears to the default, which is on. */
+  retry_sessions?: boolean | null
+  /** Global-only: retry a bot turn the same way; null clears to the default,
+   *  which is on. */
+  retry_bots?: boolean | null
 }
 
 /** Global-only automatic scoring weights, one finite number in [0, 1] per key;
@@ -76,6 +82,10 @@ export interface TaskSettingsPatch {
   routing_weights?: TaskSettingsRoutingWeights | null
   /** Global-only health-avoidance threshold (percent, 1–100); null resets to default. */
   health_error_rate_threshold?: number | null
+  /** Global-only: set or clear (null) session main-reasoning retries. */
+  retry_sessions?: boolean | null
+  /** Global-only: set or clear (null) bot turn retries. */
+  retry_bots?: boolean | null
 }
 
 /** An effective value plus the layer it came from. */
@@ -109,6 +119,8 @@ export interface TaskSettingsEffective {
    *  layer; a null value means the scorer defaults apply. */
   routing_weights?: TaskSettingsSourcedValue<TaskSettingsRoutingWeights | null>
   health_error_rate_threshold: TaskSettingsSourcedValue<number>
+  retry_sessions: TaskSettingsSourcedValue<boolean>
+  retry_bots: TaskSettingsSourcedValue<boolean>
 }
 
 /** Wire-owned closed resolution-failure code. Mirrors the structurally

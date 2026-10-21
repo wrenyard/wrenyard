@@ -647,6 +647,12 @@ function canonicalLayerToRaw(layer?: ConfigTaskSettingsLayer): Record<string, un
   if (layer.healthErrorRateThreshold !== undefined) {
     raw.health_error_rate_threshold = layer.healthErrorRateThreshold
   }
+  if (layer.retrySessions !== undefined) {
+    raw.retry_sessions = layer.retrySessions
+  }
+  if (layer.retryBots !== undefined) {
+    raw.retry_bots = layer.retryBots
+  }
   if (layer.dispatch !== undefined && Object.keys(layer.dispatch).length > 0) {
     raw.dispatch = toSnakeDispatch(layer.dispatch)
   }
@@ -1403,6 +1409,11 @@ export class TaskSettingsService {
         'health_error_rate_threshold is global-only and cannot be applied at task scope',
       )
     }
+    if (params.patch.retry_sessions !== undefined || params.patch.retry_bots !== undefined) {
+      throw new TaskSettingsInvalidSettingsError(
+        'retry_sessions and retry_bots are global-only and cannot be applied at task scope',
+      )
+    }
     if (params.patch.run_time_limit_minutes !== undefined) {
       throw new TaskSettingsInvalidSettingsError(
         'run_time_limit_minutes is global-only and cannot be applied at task scope',
@@ -1592,6 +1603,14 @@ export class TaskSettingsService {
         health_error_rate_threshold: {
           value: effective.healthErrorRateThreshold,
           source: toSourceLayer(effective.sources.healthErrorRateThreshold),
+        },
+        retry_sessions: {
+          value: effective.retrySessions,
+          source: toSourceLayer(effective.sources.retrySessions ?? 'user_global'),
+        },
+        retry_bots: {
+          value: effective.retryBots,
+          source: toSourceLayer(effective.sources.retryBots ?? 'user_global'),
         },
         automatic,
       },
@@ -2169,6 +2188,22 @@ export class TaskSettingsService {
       }
     }
 
+    if (patch.retry_sessions !== undefined) {
+      if (patch.retry_sessions === null) {
+        delete raw.retry_sessions
+      } else {
+        raw.retry_sessions = patch.retry_sessions
+      }
+    }
+
+    if (patch.retry_bots !== undefined) {
+      if (patch.retry_bots === null) {
+        delete raw.retry_bots
+      } else {
+        raw.retry_bots = patch.retry_bots
+      }
+    }
+
     if (patch.automatic !== undefined) {
       if (patch.automatic === null) {
         delete raw.dispatch
@@ -2217,6 +2252,8 @@ export class TaskSettingsService {
       ...(layer.healthErrorRateThreshold !== undefined
         ? { health_error_rate_threshold: layer.healthErrorRateThreshold }
         : {}),
+      ...(layer.retrySessions !== undefined ? { retry_sessions: layer.retrySessions } : {}),
+      ...(layer.retryBots !== undefined ? { retry_bots: layer.retryBots } : {}),
     }
   }
 

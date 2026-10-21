@@ -18,6 +18,7 @@ import {
   PetShowTaskgraphsControl,
   PetShowWorkersControl,
 } from './PetSettings.js';
+import { BotRetryControl, SessionRetryControl } from '../model/supply/SessionBotRetrySettings.js';
 import { RoutingHealthErrorRateControl } from './RoutingHealthErrorRateSettings.js';
 import { RoutingWeightsControl } from './RoutingWeightsSettings.js';
 import {
@@ -58,7 +59,9 @@ export const CUSTOM_CONTROLS: Readonly<Record<CustomControlKey, ComponentType>> 
   petShowHouse: PetShowHouseControl,
   petShowTaskgraphs: PetShowTaskgraphsControl,
   petShowWorkers: PetShowWorkersControl,
+  routingBotRetry: BotRetryControl,
   routingHealthErrorRate: RoutingHealthErrorRateControl,
+  routingSessionRetry: SessionRetryControl,
   routingWeights: RoutingWeightsControl,
   service: ServiceControl,
   settingsFile: SettingsFileControl,

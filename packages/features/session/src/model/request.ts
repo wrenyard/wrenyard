@@ -8,9 +8,14 @@
  * invocation. The runner keeps no session state, never parses JSON output and
  * never repairs schemas — those belong to `actions.ts` / `engine.ts`.
  *
- * Every call sends one request on one route: the transport never retries and
- * the runner never fails over. An auxiliary call uses the route the selector
- * ranked first; a bot turn moves to another model only through the bot kernel.
+ * Every transport call sends one request on one route: the transport never
+ * retries. The main reasoning call owns its own retry: it repeats a failure
+ * whose meaning is unclear (overload, another server error, a connection
+ * failure or a rate limit without a stated reset) with a jittered 2/4/8/16 s
+ * backoff, up to four times, and never replays output that already started. A
+ * bot turn — an automatically selected one — may also move to the next
+ * automatic candidate after two consecutive failures on the same model. An
+ * auxiliary call uses the route the selector ranked first.
  */
 import { randomUUID } from 'node:crypto';
 import { getEncoding } from 'js-tiktoken';
@@ -55,6 +60,22 @@ export type CallRole = (typeof CALL_ROLES)[number];
  * reasoning omits the header and uses the Gateway default (120 s).
  */
 export const AUXILIARY_FIRST_RESPONSE_TIMEOUT_SEC = 30;
+
+/** Backoff steps of one main reasoning call (milliseconds), before jitter. */
+const REASONING_RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000] as const;
+/** Retries after the first attempt; at most five upstream tries per call. */
+const REASONING_MAX_RETRIES = 4;
+/** Upper bound of one timer, so an extreme delay can never overflow it. */
+const MAX_WAIT_MS = 2_147_483_647;
+
+/**
+ * Live retry switches for main reasoning, read at call time. An absent policy
+ * or an absent getter means retries are on.
+ */
+export interface ReasoningRetryPolicy {
+  retrySessions?: () => boolean;
+  retryBots?: () => boolean;
+}
 
 /**
  * Route health the runner reads: the Gateway's typed route status. A present
@@ -195,6 +216,17 @@ export interface CallRunnerOptions {
   ) => readonly AuxiliaryRoute[] | Promise<readonly AuxiliaryRoute[]>;
   /** Whether routing.exclude currently names a `provider/model` route. */
   isRouteExcluded?: (model: string) => boolean;
+  /**
+   * Fresh ranked routes for a main reasoning turn whose model was chosen
+   * automatically, read only when such a turn switches model. Absent means an
+   * automatic turn keeps the model it started with.
+   */
+  selectAutomaticRoutes?: () => readonly ReasonSelection[] | Promise<readonly ReasonSelection[]>;
+  /**
+   * Live global retry switches for main reasoning, read at call time; absent or
+   * absent getters default to enabled.
+   */
+  retryPolicy?: ReasoningRetryPolicy;
   /** Structural sink: the span events of every attempted invocation, in order. */
   append: (event: SpanEventDraft) => void | Promise<void>;
   /** Forwarded as the request cache key on every call of this runner. */
@@ -474,6 +506,55 @@ function settleWithAbort<T>(value: T | Promise<T>, signal: AbortSignal): Promise
       },
     );
   });
+}
+
+/**
+ * Wait one backoff step. The wait ends at once, as an abort, when the call's
+ * signal fires, so a cancelled turn never keeps waiting for a retry.
+ */
+function delayWithAbort(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(abortError());
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, Math.min(Math.max(delayMs, 0), MAX_WAIT_MS));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** The switch that governs one main reasoning call: bots for a bot-owned turn. */
+function reasoningRetriesEnabled(automatic: boolean, policy?: ReasoningRetryPolicy): boolean {
+  const getter = automatic ? policy?.retryBots : policy?.retrySessions;
+  return getter?.() ?? true;
+}
+
+/**
+ * True for a main reasoning failure the caller may retry: a failure whose
+ * meaning is unclear — overload or another server error, a connection failure
+ * or a first-response timeout, or a rate limit without a stated reset — that
+ * happened before any output. An explicit answer (an exhausted quota, a rate
+ * limit with a reset, authentication, an unknown model or a caller error), a
+ * local admission refusal and anything observed after output started fail at
+ * once.
+ */
+function isReasoningCallerRetryable(error: unknown, outputStarted: boolean): boolean {
+  if (outputStarted || !isModelError(error)) return false;
+  if (error.outputStarted === true || error.source === 'admission') return false;
+  if (error.kind === 'server' || error.kind === 'network') return true;
+  if (error.kind === 'rate_limited') return error.retryAt === undefined && error.retryAfterMs === undefined;
+  return false;
+}
+
+/** One jittered backoff step: the ordinal step times a fresh 0.75–1.0 jitter. */
+function reasoningRetryDelayMs(retryOrdinal: number): number {
+  const base = REASONING_RETRY_DELAYS_MS[Math.min(Math.max(retryOrdinal, 1) - 1, REASONING_RETRY_DELAYS_MS.length - 1)]!;
+  const jitter = 0.75 + Math.random() * 0.25;
+  return Math.round(base * jitter);
 }
 
 /** Human-readable failure message for one abort cause. */
@@ -814,54 +895,143 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         }
       };
 
-      /** One main reasoning turn on the single route chosen for this step. */
+      /** One main reasoning turn on the route chosen for this step. */
       const runReasoning = async (): Promise<ModelResult> => {
-        const candidate = input.reason!;
-        const candidateModel = routeKeyOf(candidate.provider, candidate.model);
-        const budget = checkContextBudget(candidateModel, messages, options.resolveProvider, maxTokens);
-        const providerDefaultOnly = isProviderDefaultReasoningOnly(budget.metadata);
-        if (!providerDefaultOnly && !isReasoningEffortSupported(budget.metadata, candidate.reasoningEffort)) {
-          return await fail(`Model ${candidateModel} does not support reasoning effort "${candidate.reasoningEffort ?? ''}"`);
+        const first = input.reason!;
+        const automatic = first.automatic === true;
+        // The automatic ladder is read only when a switch really happens, so an
+        // ordinary step never pays for a routing query.
+        const candidates: ReasonSelection[] = [first];
+        let ladderLoaded = false;
+        const addLadder = async (): Promise<void> => {
+          if (ladderLoaded || !automatic || options.selectAutomaticRoutes === undefined) return;
+          ladderLoaded = true;
+          let ladder: readonly ReasonSelection[];
+          try {
+            ladder = await settleWithAbort(options.selectAutomaticRoutes(), controller.signal);
+          } catch (error) {
+            // A cancellation still wins; a routing failure just leaves the turn
+            // with the candidates it already has.
+            if (controller.signal.aborted) throw error;
+            return;
+          }
+          for (const candidate of ladder) {
+            const key = routeKeyOf(candidate.provider, candidate.model);
+            if (candidates.some((known) => routeKeyOf(known.provider, known.model) === key)) continue;
+            candidates.push(candidate);
+          }
+        };
+
+        let started = false;
+        const excludedModels = new Set<string>();
+        const consecutiveFailures = new Map<string, number>();
+        let retriesUsed = 0;
+        const retriesEnabled = reasoningRetriesEnabled(automatic, options.retryPolicy);
+        let lastError: unknown;
+        for (let index = 0; index < candidates.length; index += 1) {
+          const candidate = candidates[index]!;
+          const candidateModel = routeKeyOf(candidate.provider, candidate.model);
+          if (excludedModels.has(candidateModel)) continue;
+          // A later ladder route is skipped when routing.exclude already names
+          // it; it never spends the turn.
+          if (candidate !== first && options.isRouteExcluded?.(candidateModel) === true) continue;
+          const budget = checkContextBudget(candidateModel, messages, options.resolveProvider, maxTokens);
+          // A route whose whole ladder is the provider-default sentinel has no
+          // selectable level: it accepts any requested effort and is sent at its
+          // own default. Every other route keeps the exact support check.
+          const providerDefaultOnly = isProviderDefaultReasoningOnly(budget.metadata);
+          if (!providerDefaultOnly && !isReasoningEffortSupported(budget.metadata, candidate.reasoningEffort)) {
+            if (candidate === first) {
+              return await fail(`Model ${candidateModel} does not support reasoning effort "${candidate.reasoningEffort ?? ''}"`);
+            }
+            continue;
+          }
+          if (!budget.ok) {
+            if (candidate === first) return await fail(`context_overflow: ${budget.reason}`);
+            continue;
+          }
+          model = candidateModel;
+          estimatedInputTokens = budget.estimatedInputTokens;
+          actualReasoningEffort = providerDefaultOnly ? PROVIDER_DEFAULT_REASONING : candidate.reasoningEffort;
+          const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? maxTokens;
+          // One invocation writes exactly one started span, whichever route
+          // ends up answering it.
+          if (!started) {
+            started = true;
+            requestedReasoningEffort = candidate.reasoningEffort;
+            await options.append({
+              type: 'span.started',
+              id: input.spanId,
+              parent: input.parent,
+              kind: spanKind,
+              ...(input.turn === undefined ? {} : { turn: input.turn }),
+              ...(input.step === undefined ? {} : { step: input.step }),
+              request: {
+                model,
+                effort: {
+                  ...(requestedReasoningEffort === undefined ? {} : { requested: requestedReasoningEffort }),
+                  ...(actualReasoningEffort === undefined ? {} : { sent: actualReasoningEffort }),
+                },
+                inputEstimate: estimatedInputTokens,
+                layers: input.layers,
+              },
+            });
+          }
+          for (;;) {
+            try {
+              return await settleWithAbort(options.transport.complete({
+                model: candidateModel,
+                messages,
+                reasoningEffort: actualReasoningEffort,
+                // The main reasoning path carries the user's explicit Fast
+                // preference, including an explicit false; an absent preference
+                // sends no field at all. Auxiliary requests never set it.
+                ...(candidate.fast === undefined ? {} : { fast: candidate.fast }),
+                attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
+                ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
+                ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),
+                ...(input.tools === undefined ? {} : { tools: input.tools }),
+                ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
+                ...(options.routeStatus === undefined && options.isRouteExcluded === undefined
+                  ? {}
+                  : { preflight: () => reasoningPreflight(candidateModel) }),
+                signal: controller.signal,
+                onEvent,
+              }), controller.signal);
+            } catch (error) {
+              lastError = error;
+              // A bot turn that failed twice on the same model leaves that
+              // model out for the rest of this call and continues on the next
+              // candidate of its ladder. A turn whose model was chosen by a
+              // person never switches: it fails with the error.
+              if (automatic) {
+                const failures = (consecutiveFailures.get(candidateModel) ?? 0) + 1;
+                consecutiveFailures.set(candidateModel, failures);
+                if (failures >= 2) {
+                  excludedModels.add(candidateModel);
+                  await addLadder();
+                  break;
+                }
+              }
+              if (!retriesEnabled
+                || !isReasoningCallerRetryable(error, outputStarted)
+                || retriesUsed >= REASONING_MAX_RETRIES) {
+                throw error;
+              }
+              retriesUsed += 1;
+              const delayMs = reasoningRetryDelayMs(retriesUsed);
+              // The waiting line carries the real time the next attempt starts.
+              reportWait({ reason: 'recovery', retryAt: new Date(Date.now() + delayMs).toISOString() });
+              try {
+                await delayWithAbort(delayMs, controller.signal);
+              } finally {
+                reportWait(null);
+              }
+            }
+          }
         }
-        if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
-        model = candidateModel;
-        estimatedInputTokens = budget.estimatedInputTokens;
-        actualReasoningEffort = providerDefaultOnly ? PROVIDER_DEFAULT_REASONING : candidate.reasoningEffort;
-        requestedReasoningEffort = candidate.reasoningEffort;
-        const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? maxTokens;
-        await options.append({
-          type: 'span.started',
-          id: input.spanId,
-          parent: input.parent,
-          kind: spanKind,
-          ...(input.turn === undefined ? {} : { turn: input.turn }),
-          ...(input.step === undefined ? {} : { step: input.step }),
-          request: {
-            model,
-            effort: {
-              ...(requestedReasoningEffort === undefined ? {} : { requested: requestedReasoningEffort }),
-              ...(actualReasoningEffort === undefined ? {} : { sent: actualReasoningEffort }),
-            },
-            inputEstimate: estimatedInputTokens,
-            layers: input.layers,
-          },
-        });
-        return await settleWithAbort(options.transport.complete({
-          model: candidateModel,
-          messages,
-          reasoningEffort: actualReasoningEffort,
-          ...(candidate.fast === undefined ? {} : { fast: candidate.fast }),
-          attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
-          ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
-          ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),
-          ...(input.tools === undefined ? {} : { tools: input.tools }),
-          ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
-          ...(options.routeStatus === undefined && options.isRouteExcluded === undefined
-            ? {}
-            : { preflight: () => reasoningPreflight(candidateModel) }),
-          signal: controller.signal,
-          onEvent,
-        }), controller.signal);
+        // No candidate is left: the turn fails with what it last saw.
+        throw lastError ?? new Error('Main reasoning: no candidate qualified');
       };
 
       try {

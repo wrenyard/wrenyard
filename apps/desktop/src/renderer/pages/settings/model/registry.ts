@@ -33,7 +33,9 @@ export type CustomControlKey =
   | 'petShowHouse'
   | 'petShowTaskgraphs'
   | 'petShowWorkers'
+  | 'routingBotRetry'
   | 'routingHealthErrorRate'
+  | 'routingSessionRetry'
   | 'routingWeights'
   | 'service'
   | 'settingsFile'
@@ -268,6 +270,28 @@ const SUPPLY_CATEGORY: SettingDefinition[] = [
       '最近 1 小时请求 ≥100 且错误率不低于该值的路线将被自动选路避开；全部候选被避开时按错误率排序。',
     keywords: ['健康', '错误率', '路由', 'health', 'error rate', 'routing', '自动选路'],
     control: custom('routingHealthErrorRate'),
+    source: { kind: 'daemon' },
+  },
+  {
+    id: 'models.retrySessions',
+    category: 'supply',
+    group: 'routing',
+    title: '会话重试',
+    description:
+      '主推理遇到过载、服务错误、连接失败或没有重置时间的限流时按 2/4/8/16 秒退避重试，最多 4 次；关闭后单次尝试，失败立即返回。',
+    keywords: ['会话重试', 'retry', '重试', '退避', '主推理'],
+    control: custom('routingSessionRetry'),
+    source: { kind: 'daemon' },
+  },
+  {
+    id: 'models.retryBots',
+    category: 'supply',
+    group: 'routing',
+    title: 'Bot 重试',
+    description:
+      'Bot 回合按同样方式重试，同一模型连续失败两次后在本回合内改用其他模型；关闭后 Bot 回合失败后等待下次唤醒。',
+    keywords: ['Bot 重试', 'bot', 'retry', '重试', '换模型'],
+    control: custom('routingBotRetry'),
     source: { kind: 'daemon' },
   },
   {

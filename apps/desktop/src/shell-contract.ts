@@ -1089,11 +1089,18 @@ export interface TaskSettingsRoutingWeights {
 }
 
 export interface TaskSettingsLayer
-  extends Omit<ProtocolTaskSettingsLayer, 'automatic' | 'routing_weights' | 'health_error_rate_threshold'> {
+  extends Omit<
+    ProtocolTaskSettingsLayer,
+    'automatic' | 'routing_weights' | 'health_error_rate_threshold' | 'retry_sessions' | 'retry_bots'
+  > {
   /** Global-only automatic scoring weights; null clears them. */
   routing_weights?: TaskSettingsRoutingWeights | null;
   /** Global-only health-avoidance threshold (percent, 1–100); null clears to default. */
   health_error_rate_threshold?: number | null;
+  /** Global-only: retry a main reasoning call; null clears to the default (on). */
+  retry_sessions?: boolean | null;
+  /** Global-only: retry a bot turn; null clears to the default (on). */
+  retry_bots?: boolean | null;
   /** Desktop's dispatch form edits the narrowed automatic dispatch shape. */
   automatic?: Partial<TaskSettingsAutomaticDispatch> | null;
 }
@@ -1103,6 +1110,8 @@ export interface TaskSettingsPatch {
   run_time_limit_minutes?: number | null;
   routing_weights?: TaskSettingsRoutingWeights | null;
   health_error_rate_threshold?: number | null;
+  retry_sessions?: boolean | null;
+  retry_bots?: boolean | null;
   automatic?: TaskSettingsAutomaticPatch | null;
 }
 

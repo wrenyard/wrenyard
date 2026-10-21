@@ -202,6 +202,26 @@ function declaredEnvironmentTools(configPath: string | undefined): readonly stri
   }
 }
 
+/**
+ * The current global retry switches, read from the authoritative daemon config
+ * on every call so toggling a switch affects sessions that are already open. A
+ * missing, unreadable or invalid layer falls back to retries on.
+ */
+function readGlobalRetrySwitches(configPath: string): { retrySessions: boolean; retryBots: boolean } {
+  try {
+    const record = JSON.parse(readFileSync(configPath, 'utf8')) as {
+      tasks?: { settings?: unknown }
+    }
+    const layer = readGlobalTaskSettings({ settings: record?.tasks?.settings ?? null })
+    return {
+      retrySessions: layer?.retrySessions ?? true,
+      retryBots: layer?.retryBots ?? true,
+    }
+  } catch {
+    return { retrySessions: true, retryBots: true }
+  }
+}
+
 /** In-process feature ports; task admission goes through TaskService, never RPC. */
 export function createDaemonSessionHost(options: DaemonSessionHostOptions): SessionHost {
   const { stateRoot, taskService } = options
@@ -227,6 +247,16 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     resolveInferenceProvider: options.resolveInferenceProvider,
     selectAuxiliary: (role, input) => options.selectAuxiliary(role, input),
     ...(options.isRouteExcluded === undefined ? {} : { isRouteExcluded: (model: string) => options.isRouteExcluded!(model) }),
+    // Read at call time, so a switch the user toggles now applies to a turn
+    // that is already running without a restart.
+    ...(options.taskSettingsConfigPath === undefined
+      ? {}
+      : {
+          retryPolicy: {
+            retrySessions: () => readGlobalRetrySwitches(options.taskSettingsConfigPath!).retrySessions,
+            retryBots: () => readGlobalRetrySwitches(options.taskSettingsConfigPath!).retryBots,
+          },
+        }),
     routeStatus: options.routeStatus,
     recordAuxiliaryRun: (input) => auxiliaryRunStoreOf().insert(toAuxiliaryRunRecord(input)),
     /**

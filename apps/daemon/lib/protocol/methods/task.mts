@@ -526,6 +526,10 @@ const taskSettingsNullableHealthErrorRateThresholdSchema = {
   anyOf: [taskSettingsHealthErrorRateThresholdSchema, { type: 'null' }],
 } as const satisfies JsonSchema
 
+const taskSettingsNullableBooleanSchema = {
+  anyOf: [{ type: 'boolean' }, { type: 'null' }],
+} as const satisfies JsonSchema
+
 export const taskSettingsLayerSchema = {
   type: 'object',
   properties: {
@@ -533,6 +537,8 @@ export const taskSettingsLayerSchema = {
     automatic: taskSettingsNullableAutomaticSchema,
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
     health_error_rate_threshold: taskSettingsNullableHealthErrorRateThresholdSchema,
+    retry_sessions: taskSettingsNullableBooleanSchema,
+    retry_bots: taskSettingsNullableBooleanSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -543,6 +549,8 @@ export const taskSettingsLayerInputSchema = {
     automatic: taskSettingsNullableAutomaticSchema,
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
     health_error_rate_threshold: taskSettingsNullableHealthErrorRateThresholdSchema,
+    retry_sessions: taskSettingsNullableBooleanSchema,
+    retry_bots: taskSettingsNullableBooleanSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -554,6 +562,8 @@ export const taskSettingsPatchSchema = {
     automatic: { anyOf: [taskSettingsAutomaticPatchSchema, { type: 'null' }] },
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
     health_error_rate_threshold: taskSettingsNullableHealthErrorRateThresholdSchema,
+    retry_sessions: taskSettingsNullableBooleanSchema,
+    retry_bots: taskSettingsNullableBooleanSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -697,6 +707,8 @@ const taskSettingsEffectiveSchema = {
       },
       additionalProperties: false,
     },
+    retry_sessions: taskSettingsSourcedBooleanSchema,
+    retry_bots: taskSettingsSourcedBooleanSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

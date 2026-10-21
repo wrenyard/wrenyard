@@ -21,7 +21,7 @@
 import { Ledger } from './ledger/store.ts';
 import { WorkspaceFileSource } from './workspace.ts';
 import { createWorkspaceMemory } from './memory-write.ts';
-import { createCallRunner, type CallRunner } from './model/request.ts';
+import { createCallRunner, type CallRunner, type ReasonSelection, type ReasoningRetryPolicy } from './model/request.ts';
 import { createModelTransport } from './transport/index.ts';
 import { FileStore } from './media.ts';
 import { createEngine } from './turn/engine.ts';
@@ -76,7 +76,16 @@ export type {
 export { ActionRunner } from './reasoning/actions.ts';
 export type { SchemaValidation } from './auxiliary/dispatch.ts';
 export { validateJsonSchema } from './auxiliary/dispatch.ts';
-export type { AuxiliaryRoute, CallErrorFact, CallRole, ModelCallInput, ModelCallOutput, SpanEventDraft } from './model/request.ts';
+export type {
+  AuxiliaryRoute,
+  CallErrorFact,
+  CallRole,
+  ModelCallInput,
+  ModelCallOutput,
+  ReasonSelection,
+  ReasoningRetryPolicy,
+  SpanEventDraft,
+} from './model/request.ts';
 export {
   CALL_ROLES,
   IMAGE_INPUT_TOKEN_ESTIMATE,
@@ -223,8 +232,23 @@ export type {
   WorkspaceUpdate,
 } from '@wrenyard/agent-loop';
 
+/**
+ * Options a host passes beside the host itself. Both members are optional: an
+ * automatic main reasoning turn without `selectAutomaticRoutes` keeps the model
+ * it started with, and retries without `retryPolicy` are on.
+ */
+export interface CreateSessionOptions {
+  /**
+   * Fresh ranked routes for an automatic main reasoning turn, read only when
+   * such a turn switches model.
+   */
+  selectAutomaticRoutes?: () => readonly ReasonSelection[] | Promise<readonly ReasonSelection[]>;
+  /** Live global retry switches for main reasoning. */
+  retryPolicy?: ReasoningRetryPolicy;
+}
+
 /** Create the session feature over a host. */
-export function createSession(host: SessionHost): Session {
+export function createSession(host: SessionHost, options?: CreateSessionOptions): Session {
   const ledger = new Ledger({ stateRoot: host.stateRoot, workspaceRoot: host.workspaceRoot, now: host.now });
 
   // The request executor is session-scoped: it reports every request to the
@@ -243,6 +267,12 @@ export function createSession(host: SessionHost): Session {
           isRouteExcluded: (model: string) => host.isRouteExcluded!(model),
         }),
         ...(host.routeStatus === undefined ? {} : { routeStatus: (model: string) => host.routeStatus!(model) }),
+        ...(options?.selectAutomaticRoutes === undefined
+          ? {}
+          : { selectAutomaticRoutes: () => options.selectAutomaticRoutes!() }),
+        ...(options?.retryPolicy === undefined
+          ? (host.retryPolicy === undefined ? {} : { retryPolicy: host.retryPolicy })
+          : { retryPolicy: options.retryPolicy }),
         resolveProvider: (id) => host.resolveInferenceProvider(id),
         cacheKey: sessionId,
         sessionId,

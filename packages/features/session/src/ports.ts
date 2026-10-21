@@ -66,6 +66,11 @@ export interface SessionHost {
   ): Promise<readonly import('./model/request.ts').AuxiliaryRoute[]>;
   /** Whether routing.exclude currently names a `provider/model` route. */
   isRouteExcluded?(model: string): boolean;
+  /**
+   * Live global retry switches for main reasoning, read at call time: an absent
+   * policy or an absent getter means retries are on.
+   */
+  retryPolicy?: import('./model/request.ts').ReasoningRetryPolicy;
   /** Read-only, per-role rank-1 auxiliary route preview; never calls a model. */
   previewAuxiliaryRoutes(): Promise<readonly import('./model/roles.ts').AuxiliaryRoutePreview[]>;
   listProjects(): Promise<ProjectInfo[]>;

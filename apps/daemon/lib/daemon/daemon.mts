@@ -1377,7 +1377,9 @@ async function createForemanDaemonResources(
       // CodeBuddy model is only offered after the daemon read the real install.
       resolveInferenceProvider: id => catalog.provider(id),
     })
-    const session = createSession(daemonSessionHost)
+    // A bot turn that fails twice on the same model continues on the next route
+    // of the same automatic selection, inside the same turn.
+    const session = createSession(daemonSessionHost, { selectAutomaticRoutes: async () => selectModels() })
     // The daemon-owned scheduler persists to the same state root as the session
     // ledger. A due routine wakes its owning bot agent through the `wake`
     // callback instead of sending into a session; the bot agent kernel owns the
