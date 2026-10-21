@@ -206,6 +206,8 @@ interface RegistryEntry {
   pendingFailureClass?: string
   // Structured upstream identity from a failed terminal record, verbatim.
   pendingUpstreamError?: UpstreamError
+  /** True when pendingUpstreamError came from the terminal record's structured error field. */
+  pendingUpstreamErrorProvenance?: boolean
   /** Resolved by the attempt-deadline (timeout) handler so a bounded
    *  stream-drain await converges at the deadline instead of hanging on a
    *  held stdio pipe after an early child close. */
@@ -1000,7 +1002,10 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       // structured error object; keep it verbatim beside the scraped text.
       if (final?.isError) {
         const structured = extractUpstreamErrorRecord(event)
-        if (structured) entry.pendingUpstreamError = mergeUpstreamError(entry.pendingUpstreamError, structured)
+        if (structured) {
+          entry.pendingUpstreamError = mergeUpstreamError(entry.pendingUpstreamError, structured)
+          entry.pendingUpstreamErrorProvenance = true
+        }
       }
       const streamErrorText = extractStreamJsonErrorText(event, final)
       if (streamErrorText) {
@@ -1071,7 +1076,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     // Read from the client's own messages and diagnostics, never from tool
     // results, so a status line the agent merely printed cannot fault a route.
     const upstreamError = status === 'failed'
-      ? mergeUpstreamError(entry.pendingUpstreamError, extractUpstreamError([messageOutput === null ? null : redactDiagnosticText(messageOutput), failureDiagnostic].filter((part): part is string => part !== null).join('\n') || null))
+      ? entry.pendingUpstreamErrorProvenance
+        ? entry.pendingUpstreamError
+        : mergeUpstreamError(entry.pendingUpstreamError, extractUpstreamError([messageOutput === null ? null : redactDiagnosticText(messageOutput), failureDiagnostic].filter((part): part is string => part !== null).join('\n') || null))
       : undefined
 
     this.terminalizeRunning(entry, {

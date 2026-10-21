@@ -27,7 +27,7 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: s
     // The turn's official usage and terminal are buffered until the stream
     // ends so usage is always emitted before the single terminal record.
     let usage: Record<string, unknown> | undefined;
-    let terminal: { failed: boolean } | undefined;
+    let terminal: { signal: string | undefined; record: Record<string, unknown> } | undefined;
     let endReason = '';
     const flushMessage = (): AgentEvent | undefined => {
         if (!message)
@@ -52,7 +52,11 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: s
                     yield flushed;
                 if (usage)
                     yield { type: 'output', record: turnUsageRecord(withSample(usage, sampler, model)) };
-                yield finishedEvent('cursor', sessionId, output, endReason !== '' || !terminal || terminal.failed);
+                const failed = endReason !== '' || !terminal || terminal.signal !== undefined;
+                const structuredError = failed && terminal?.signal !== undefined
+                    ? cursorTerminalError(terminal.signal, terminal.record)
+                    : undefined;
+                yield finishedEvent('cursor', sessionId, output, failed, structuredError);
             }
             yield item.event;
             continue;
@@ -88,7 +92,7 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: s
         }
         if (type === 'result' || type === 'run_finished' || type === 'error' || type === 'failed') {
             if (!terminal) {
-                terminal = { failed: terminalFailed(type, record) };
+                terminal = { signal: terminalFailureSignal(type, record), record };
                 const id = cursorSessionId(record);
                 if (id)
                     sessionId = id;
@@ -237,17 +241,33 @@ function cursorUsage(record: Record<string, unknown>): Record<string, unknown> |
     };
 }
 
-/** A native failure signals through subtype=error or is_error=true. */
-function terminalFailed(type: string, record: Record<string, unknown>): boolean {
+const CURSOR_TERMINAL_FAILURE_VALUES = new Set(['error', 'failed', 'failure', 'cancelled', 'canceled']);
+
+/** Returns the first native failure signal on a terminal record, if any. */
+function terminalFailureSignal(type: string, record: Record<string, unknown>): string | undefined {
     if (type === 'error' || type === 'failed')
-        return true;
+        return `type=${type}`;
     if (record.is_error === true)
-        return true;
-    const subtype = stringOf(record, 'subtype').toLowerCase().trim();
-    if (['error', 'failed', 'failure', 'cancelled', 'canceled'].includes(subtype))
-        return true;
-    const status = stringOf(record, 'status').toLowerCase().trim();
-    return ['error', 'failed', 'failure', 'cancelled', 'canceled'].includes(status);
+        return 'is_error=true';
+    const subtype = stringOf(record, 'subtype').trim();
+    const normalizedSubtype = subtype.toLowerCase();
+    if (CURSOR_TERMINAL_FAILURE_VALUES.has(normalizedSubtype))
+        return `subtype=${subtype}`;
+    const status = stringOf(record, 'status').trim();
+    const normalizedStatus = status.toLowerCase();
+    if (CURSOR_TERMINAL_FAILURE_VALUES.has(normalizedStatus))
+        return `status=${status}`;
+    return undefined;
+}
+
+/** Structured terminal error for run_finished, preserving Cursor's own message text. */
+function cursorTerminalError(signal: string, record: Record<string, unknown>): Record<string, unknown> {
+    const nested = recordOf(record, 'error');
+    const message = stringOf(nested, 'message')
+        || stringOf(nested, 'error')
+        || (typeof record.error === 'string' ? record.error : '')
+        || stringOf(record, 'message');
+    return message ? { type: signal, message } : { type: signal };
 }
 
 function cursorSessionId(record: Record<string, unknown>): string {

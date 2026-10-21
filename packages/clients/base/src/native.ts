@@ -10,7 +10,13 @@ export function messageEvent(text: string, role = 'assistant'): AgentEvent {
     return { type: 'output', record: { type: 'message', role, text } };
 }
 
-export function finishedEvent(family: string, sessionId: string | undefined, output: string, failed = false): AgentEvent {
+export function finishedEvent(
+    family: string,
+    sessionId: string | undefined,
+    output: string,
+    failed = false,
+    error?: Record<string, unknown>,
+): AgentEvent {
     return {
         type: 'output',
         record: {
@@ -20,6 +26,7 @@ export function finishedEvent(family: string, sessionId: string | undefined, out
             ...(sessionId ? { native_session_id: sessionId } : {}),
             ...(output ? { output } : {}),
             is_error: failed,
+            ...(error !== undefined ? { error } : {}),
         },
     };
 }
