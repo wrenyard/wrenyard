@@ -72,8 +72,8 @@ export function LegendRow({ label, value, percent, swatch, muted = false, expand
     <>
       {expandable ? <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-90')} aria-hidden="true" /> : <span className="size-2.5 shrink-0 rounded-[3px]" style={swatch === undefined ? undefined : { backgroundColor: swatch }} />}
       <span className="min-w-0 flex-1 truncate" title={title}>{label}</span>
-      {value !== undefined && <span className="w-16 shrink-0 text-right tabular-nums text-muted-foreground">{value}</span>}
-      {percent !== undefined && <span className="w-14 shrink-0 text-right tabular-nums">{percent}</span>}
+      {value !== undefined && <span className="w-16 shrink-0 whitespace-nowrap text-right tabular-nums text-muted-foreground">{value}</span>}
+      {percent !== undefined && <span className="w-20 shrink-0 overflow-hidden whitespace-nowrap text-right tabular-nums">{percent}</span>}
     </>
   );
   return (

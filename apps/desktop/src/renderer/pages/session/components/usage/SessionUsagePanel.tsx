@@ -141,7 +141,7 @@ export function SessionUsagePanel({ clusters, groups, rootRef, currency }: Sessi
       <div className="flex items-baseline gap-2">
         <span className="text-sm font-medium">共 {formatTokenCount(totals.total)} tokens</span>
         <span className="flex-1" />
-        <span className="text-sm tabular-nums text-muted-foreground">{costLabel(totals.cost, currency)}</span>
+        <span className="shrink-0 whitespace-nowrap text-sm tabular-nums text-muted-foreground">{costLabel(totals.cost, currency)}</span>
       </div>
       <TokenBar segments={segments} />
       {segments.map((segment) => (
