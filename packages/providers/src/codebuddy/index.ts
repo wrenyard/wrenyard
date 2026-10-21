@@ -43,11 +43,10 @@ export function createCodeBuddy(options: CodeBuddyOptions = {}): CodeBuddy {
   // The supplier request/response hooks (client identity, per-turn round cache,
   // private-error correction) are part of the registered definition, so the
   // Gateway executes them generically without any CodeBuddy branch of its own.
-  const definition = {
-    ...state.definition,
+  const definition = Object.assign(state.definition, {
     beforeRequest: (context: Parameters<typeof runtime.beforeRequest>[0]) => runtime.beforeRequest(context),
     afterResponse: (context: Parameters<typeof runtime.afterResponse>[0]) => runtime.afterResponse(context),
-  };
+  });
   return {
     id: definition.id,
     definition,

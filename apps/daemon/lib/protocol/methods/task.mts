@@ -962,6 +962,7 @@ const taskRoutingTestRowSchema = {
     provider_name: { type: 'string', minLength: 1 },
     model: { type: 'string', minLength: 1 },
     model_name: { type: 'string', minLength: 1 },
+    unhealthy: { type: 'boolean' },
     effective_tps: { anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }] },
     first_token_ms: { anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }] },
     price_score: { anyOf: [{ type: 'number' }, { type: 'null' }] },

@@ -64,7 +64,7 @@ export function codeBuddyPoolsForModel(modelId: string, environment?: string) {
 }
 
 export function createCodeBuddyQuota(definition: ProviderDefinition): ProviderQuota {
-    return { bindings: codeBuddyQuotaBindings(definition), defaultPools: codeBuddyDefaultPools(),
+    return { get bindings() { return codeBuddyQuotaBindings(definition); }, defaultPools: codeBuddyDefaultPools(),
       read: async source => normalizeCodeBuddyQuota(await source.read()) };
   }
 

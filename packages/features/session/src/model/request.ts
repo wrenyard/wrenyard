@@ -979,7 +979,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           }
           for (;;) {
             try {
-              return await settleWithAbort(options.transport.complete({
+              const completed = await settleWithAbort(options.transport.complete({
                 model: candidateModel,
                 messages,
                 reasoningEffort: actualReasoningEffort,
@@ -998,27 +998,28 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
                 signal: controller.signal,
                 onEvent,
               }), controller.signal);
+              collectAttempts(completed.metrics, retryInstantOf(candidateModel));
+              return completed;
             } catch (error) {
               lastError = error;
-              // A bot turn that failed twice on the same model leaves that
-              // model out for the rest of this call and continues on the next
-              // candidate of its ladder. A turn whose model was chosen by a
-              // person never switches: it fails with the error.
-              if (automatic) {
-                const failures = (consecutiveFailures.get(candidateModel) ?? 0) + 1;
-                consecutiveFailures.set(candidateModel, failures);
-                if (failures >= 2) {
-                  excludedModels.add(candidateModel);
-                  await addLadder();
-                  break;
-                }
-              }
-              if (!retriesEnabled
-                || !isReasoningCallerRetryable(error, outputStarted)
-                || retriesUsed >= REASONING_MAX_RETRIES) {
+              collectAttempts(metricsOf(error), retryInstantOf(candidateModel));
+              const capacityFailure = isModelError(error) && (error.kind === 'quota_exhausted'
+                || (error.kind === 'rate_limited' && (error.retryAt !== undefined || error.retryAfterMs !== undefined)));
+              if (!retriesEnabled || controller.signal.aborted || outputStarted
+                || (isModelError(error) && error.outputStarted)
+                || retriesUsed >= REASONING_MAX_RETRIES
+                || (!isReasoningCallerRetryable(error, outputStarted) && !(automatic && capacityFailure))) {
                 throw error;
               }
+              const failures = (consecutiveFailures.get(candidateModel) ?? 0) + 1;
+              consecutiveFailures.set(candidateModel, failures);
+              const switchRoute = automatic && (capacityFailure || failures >= 2);
+              if (switchRoute) {
+                excludedModels.add(candidateModel);
+                await addLadder();
+              }
               retriesUsed += 1;
+              if (capacityFailure) break;
               const delayMs = reasoningRetryDelayMs(retriesUsed);
               // The waiting line carries the real time the next attempt starts.
               reportWait({ reason: 'recovery', retryAt: new Date(Date.now() + delayMs).toISOString() });
@@ -1027,6 +1028,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
               } finally {
                 reportWait(null);
               }
+              if (switchRoute) break;
             }
           }
         }

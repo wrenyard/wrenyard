@@ -688,7 +688,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   })
 
   function contextSession(): Session {
-    if (context === undefined) context = createSession(botHost)
+    if (context === undefined) context = createSession(botHost, { selectAutomaticRoutes: () => options.selectModels() })
     return context
   }
 
