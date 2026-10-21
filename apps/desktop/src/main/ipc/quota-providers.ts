@@ -28,6 +28,17 @@ export function registerQuotaProvidersIpc(ipcMain: IpcMain, deps: ShellIpcDeps):
     if (typeof key !== 'string' || !key || key.length > 4096) throw new Error('API Key 无效');
     return options.configureProviderKey(providerId, key);
   });
+  ipcMain.handle(SHELL_CHANNELS.signInProvider, async (event, providerId: unknown, input: unknown) => {
+    assertShellSender(event.sender);
+    if (providerId !== 'workbuddy' && providerId !== 'workbuddy-ai') throw new Error('不支持的登录提供方');
+    if (input !== undefined && (typeof input !== 'object' || input === null || Array.isArray(input))) {
+      throw new Error('登录参数无效');
+    }
+    const params = input as { switchAccount?: unknown; source?: unknown } | undefined;
+    if (params?.switchAccount !== undefined && typeof params.switchAccount !== 'boolean') throw new Error('登录参数无效');
+    if (params?.source !== undefined && params.source !== 'browser' && params.source !== 'desktop') throw new Error('登录来源无效');
+    return options.request('provider.signIn', { ...params, provider: providerId });
+  });
   ipcMain.handle(SHELL_CHANNELS.openProviderKeyPage, async (event, providerId: unknown) => {
     assertShellSender(event.sender);
     const url = providerKeyPageUrl(providerId);
@@ -40,6 +51,7 @@ export function registerQuotaProvidersIpc(ipcMain: IpcMain, deps: ShellIpcDeps):
       SHELL_CHANNELS.quotaSnapshot,
       SHELL_CHANNELS.saveProviderOrder,
       SHELL_CHANNELS.configureProviderKey,
+      SHELL_CHANNELS.signInProvider,
       SHELL_CHANNELS.openProviderKeyPage,
     ]) ipcMain.removeHandler(channel);
   };

@@ -54,6 +54,7 @@ import {
   type OperationComponentAction,
   type OperationComponentSnapshot,
 } from './shell-contract.js';
+import type { ProviderSignInParams, ProviderSignInResult } from '@wrenyard/protocol/provider';
 import { exposeSession } from './session/preload.js';
 
 const APPEARANCE_ARG_PREFIX = '--wy-appearance=';
@@ -177,6 +178,9 @@ const api: WrenyardShellApi = {
   },
   configureProviderKey(providerId: string, key: string): Promise<QuotaSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.configureProviderKey, providerId, key) as Promise<QuotaSnapshot>;
+  },
+  signInProvider(providerId: string, options?: Omit<ProviderSignInParams, 'provider'>): Promise<ProviderSignInResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.signInProvider, providerId, options) as Promise<ProviderSignInResult>;
   },
   openProviderKeyPage(providerId: string): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.openProviderKeyPage, providerId) as Promise<void>;

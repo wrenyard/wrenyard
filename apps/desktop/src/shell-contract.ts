@@ -325,6 +325,7 @@ export const SHELL_CHANNELS = {
   copyText: 'wrenyard-shell:copy-text',
   openExternal: 'wrenyard-shell:open-external',
   configureProviderKey: 'wrenyard-shell:configure-provider-key',
+  signInProvider: 'wrenyard-shell:sign-in-provider',
   openProviderKeyPage: 'wrenyard-shell:open-provider-key-page',
   updateSnapshot: 'wrenyard-shell:update-snapshot',
   checkUpdate: 'wrenyard-shell:check-update',

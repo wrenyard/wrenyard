@@ -157,7 +157,7 @@ export function ProviderDialog({ entry, snapshot, displayCurrency, onClose, onSa
   const pending = configure.isPending || openingPage;
   const isWorkBuddy = WORKBUDDY_PROVIDER_IDS.has(entry.id);
   const identityLabel = isWorkBuddy
-    ? workBuddyIdentityLabel(entry.quota ?? snapshot?.providers.find((item) => item.id === entry.id))
+    ? workBuddyIdentityLabel(snapshot?.providers.find((item) => item.id === entry.id) ?? entry.quota)
     : '';
 
   const handleSave = (): void => {
