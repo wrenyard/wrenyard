@@ -1067,7 +1067,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     const output = failureDiagnostic === null
       ? agentOutput
       : (agentOutput === null ? failureDiagnostic : `${agentOutput}\n${failureDiagnostic}`)
-    const error = this.determineTerminalError(entry, status, failureDiagnostic)
+    const error = this.determineTerminalError(entry, status, failureDiagnostic, exitCode, signal)
     // The upstream identity the client reported, when its captured diagnostics
     // state one. It is carried beside the failure diagnostic so the downstream
     // gateway classification can decide the fault; this layer never classifies.
@@ -1149,6 +1149,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     entry: RegistryEntry,
     status: TerminalStatus,
     failureDiagnostic: string | null,
+    exitCode: number | null,
+    signal: NodeJS.Signals | null,
   ): string | null {
     if (status === 'done') return null
     if (status === 'cancelled') return 'cancelled'
@@ -1156,8 +1158,25 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     // The whole bounded, redacted diagnostic tail is reported instead of only the
     // first truthy captured field, so a generic child error never hides the real
     // cause.
-    if (!entry.sawTerminalResult && !entry.sawErrorResult) return failureDiagnostic ?? 'no terminal event'
-    return failureDiagnostic ?? 'execution failed'
+    if (!entry.sawTerminalResult && !entry.sawErrorResult) {
+      return this.appendKnownProcessExitFacts(failureDiagnostic ?? 'no terminal event', exitCode, signal)
+    }
+    return this.appendKnownProcessExitFacts(failureDiagnostic ?? 'execution failed', exitCode, signal)
+  }
+
+  private appendKnownProcessExitFacts(
+    message: string,
+    exitCode: number | null,
+    signal: NodeJS.Signals | null,
+  ): string {
+    let text = message
+    if (exitCode !== null && !text.includes(`(execution exited with code ${exitCode})`)) {
+      text = `${text} (execution exited with code ${exitCode})`
+    }
+    if (signal !== null && !text.includes(`(signal ${signal})`)) {
+      text = `${text} (signal ${signal})`
+    }
+    return text
   }
 
   private terminalizeRunning(

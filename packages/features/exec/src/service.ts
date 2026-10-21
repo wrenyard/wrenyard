@@ -88,7 +88,9 @@ interface ExecEntry {
 
 interface ObservedFacts {
   exitCode?: number | null;
+  signal?: NodeJS.Signals | null;
   error?: string;
+  runFailed?: boolean;
 }
 
 interface PreparedRun {
@@ -413,7 +415,16 @@ export class ExecService {
     this.#wake(entry);
     if (event.type === 'output') {
       if (event.record.type === 'run_finished' && (event.record.is_error === true || event.record.status === 'failed')) {
-        observed.error = typeof event.record.error === 'string' ? event.record.error : 'Agent turn failed';
+        observed.runFailed = true;
+        const nativeError = event.record.error;
+        if (typeof nativeError === 'string' && nativeError !== '') {
+          observed.error = nativeError;
+        } else if (nativeError !== null && typeof nativeError === 'object') {
+          const message = typeof (nativeError as Record<string, unknown>).message === 'string'
+            ? (nativeError as Record<string, unknown>).message as string
+            : '';
+          if (message !== '') observed.error = message;
+        }
       }
       entry.replay.append(entry.id, event.record);
       return;
@@ -428,6 +439,7 @@ export class ExecService {
       return;
     }
     observed.exitCode = event.exitCode;
+    observed.signal = event.signal;
     entry.exitCodeSeen = true;
     entry.replay.append(entry.id, {
       type: 'exit',
@@ -454,21 +466,38 @@ export class ExecService {
     if (entry.cancelRequested) {
       entry.status = 'cancelled';
       entry.error = 'cancelled';
-    } else if (observed.error !== undefined) {
+    } else if (observed.runFailed || observed.error !== undefined) {
       entry.status = 'failed';
-      entry.error = observed.error;
+      entry.error = this.#failureErrorText(observed, entry);
     } else if (entry.exitCode === 0) {
       entry.status = 'completed';
       entry.error = undefined;
     } else {
       entry.status = 'failed';
-      entry.error = entry.exitCode === undefined
-        ? 'execution ended before reporting an exit code'
-        : `execution exited with code ${entry.exitCode}`;
+      entry.error = this.#failureErrorText(observed, entry);
     }
     entry.session = undefined;
     this.#wake(entry);
     void this.#pruneCompleted();
+  }
+
+  #failureErrorText(observed: ObservedFacts, entry: ExecEntry): string {
+    const errorText = observed.error;
+    let text: string;
+    if (errorText !== undefined && errorText !== '') {
+      text = errorText;
+    } else if (entry.exitCode !== undefined && entry.exitCode !== null) {
+      text = `execution exited with code ${entry.exitCode}`;
+    } else if (observed.runFailed) {
+      text = 'Agent turn failed';
+    } else {
+      text = 'execution ended before reporting an exit code';
+    }
+    const signal = observed.signal;
+    if (signal !== undefined && signal !== null && !text.includes(`(signal ${signal})`)) {
+      text = `${text} (signal ${signal})`;
+    }
+    return text;
   }
 
   /**
