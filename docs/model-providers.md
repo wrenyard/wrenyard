@@ -18,8 +18,8 @@ asks for the password.
 | ChatGPT | `chatgpt` | Codex ChatGPT login | yes |
 | Cursor | `cursor` | Cursor agent login | yes |
 | CodeBuddy | `codebuddy` | CodeBuddy login | yes |
-| WorkBuddy | `workbuddy` | WorkBuddy login | — |
-| WorkBuddy AI | `workbuddy-ai` | WorkBuddy AI login | — |
+| WorkBuddy | `workbuddy` | WorkBuddy login | yes |
+| WorkBuddy AI | `workbuddy-ai` | WorkBuddy AI login | yes |
 | SpaceXAI (Grok CLI) | `spacex-ai` | Grok login | — |
 | Super Grok | `super-grok` | Grok login | yes |
 | Devin | `devin` | Devin login | yes |
@@ -124,3 +124,13 @@ Quota windows (for example a 5-hour and a 7-day window) show the share used, a
 pace marker comparing your use with an even rate, and the time until reset.
 The status bar shows the tightest window, and routing avoids routes that are
 rate-limited, out of quota or failing until they recover.
+
+### WorkBuddy and WorkBuddy AI credits
+
+WorkBuddy and WorkBuddy AI bill through a prepaid credit pool tied to your
+subscription plan and any top-up or reward credit groups. The app combines all
+non-empty groups into one **credits** window for routing and shows each group
+separately when the account reports them. Groups can expire on different
+schedules, and the app does not invent a monthly reset date when the account
+does not provide one. Models priced at **x0.00** credits do not draw on the
+credit pool and stay available for routing under the usual free-model rules.

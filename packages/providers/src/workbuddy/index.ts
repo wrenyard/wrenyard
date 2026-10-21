@@ -33,7 +33,7 @@ export function createWorkBuddyProvider(build: WorkBuddyBuild, options: WorkBudd
   const definition = state.definition;
   definition.beforeRequest = (hookContext) => runtime.beforeRequest(hookContext);
   definition.afterResponse = (hookContext) => runtime.afterResponse(hookContext);
-  const quota = createWorkBuddyQuota(definition, () => runtime.credential());
+  const quota = createWorkBuddyQuota(definition, () => runtime.readQuotaObservation());
   return {
     id: build.id,
     definition,

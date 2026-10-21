@@ -161,6 +161,40 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
     await pendingCatalog;
   }
 
+  async function fetchQuotaSnapshot(session: WorkBuddySession, signal?: AbortSignal): Promise<unknown> {
+    const headers = meterAuthHeaders(session, WORKBUDDY_USER_AGENT);
+    const summaryResponse = await fetchImpl(userResourceSummaryUrl(store.build), {
+      method: 'POST',
+      headers,
+      body: '{}',
+      signal,
+    });
+    if (!summaryResponse.ok) {
+      await summaryResponse.body?.cancel();
+      throw new Error('WorkBuddy quota request failed');
+    }
+    const summaryPayload = await summaryResponse.json() as Record<string, unknown>;
+    const summaryData = summaryPayload.data;
+    const summaryRoot = summaryData && typeof summaryData === 'object' && !Array.isArray(summaryData)
+      ? summaryData as Record<string, unknown>
+      : {};
+    if (Array.isArray(summaryRoot.CreditGroups)) return summaryPayload;
+    const packages = summaryRoot.Packages;
+    if (Array.isArray(packages) && packages.length > 0) return summaryPayload;
+    if (!session.enterpriseId?.trim()) return summaryPayload;
+    const usageResponse = await fetchImpl(enterpriseUserUsageUrl(store.build), {
+      method: 'POST',
+      headers,
+      body: '{}',
+      signal,
+    });
+    if (!usageResponse.ok) {
+      await usageResponse.body?.cancel();
+      throw new Error('WorkBuddy enterprise quota request failed');
+    }
+    return await usageResponse.json();
+  }
+
   return {
     get definition(): ProviderDefinition {
       return state.definition;
@@ -271,36 +305,17 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
       catalogRetryAt = 0;
       await fetchCatalog(session, signal);
     },
-    async fetchQuotaSnapshot(session: WorkBuddySession, signal?: AbortSignal): Promise<unknown> {
-      const headers = meterAuthHeaders(session, WORKBUDDY_USER_AGENT);
-      const summaryResponse = await fetchImpl(userResourceSummaryUrl(store.build), {
-        method: 'POST',
-        headers,
-        body: '{}',
-        signal,
-      });
-      if (!summaryResponse.ok) {
-        await summaryResponse.body?.cancel();
-        throw new Error('WorkBuddy quota request failed');
-      }
-      const summaryPayload = await summaryResponse.json() as Record<string, unknown>;
-      const summaryData = summaryPayload.data;
-      const packages = summaryData && typeof summaryData === 'object' && !Array.isArray(summaryData)
-        ? (summaryData as Record<string, unknown>).Packages
-        : undefined;
-      if (Array.isArray(packages) && packages.length > 0) return summaryPayload;
-      if (!session.enterpriseId?.trim()) return summaryPayload;
-      const usageResponse = await fetchImpl(enterpriseUserUsageUrl(store.build), {
-        method: 'POST',
-        headers,
-        body: '{}',
-        signal,
-      });
-      if (!usageResponse.ok) {
-        await usageResponse.body?.cancel();
-        throw new Error('WorkBuddy enterprise quota request failed');
-      }
-      return await usageResponse.json();
+    fetchQuotaSnapshot,
+    async readQuotaObservation(signal?: AbortSignal): Promise<{ source: string; fetched_at: string; data: unknown } | undefined> {
+      const bounded = signal ?? AbortSignal.timeout(30_000);
+      const session = await resolveWorkBuddySession(store, bounded, fetchImpl);
+      if (!session) return undefined;
+      const data = await fetchQuotaSnapshot(session, bounded);
+      return {
+        source: `${store.build.id}.meter`,
+        fetched_at: new Date().toISOString(),
+        data,
+      };
     },
     async persistBrowserAuth(auth: WorkBuddyStoredAuth): Promise<void> {
       await writePersistedAuth(store, auth);
