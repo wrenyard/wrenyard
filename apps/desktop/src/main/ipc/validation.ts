@@ -156,15 +156,9 @@ export function validateTaskRoutingTestParams(value: unknown): TaskRoutingTestPa
   const automatic = value.automatic;
   if (!isBoundedPlainObject(automatic)) throw new Error('自动约束无效');
   validateAutomaticDispatch(automatic);
-  const timeoutMs = value.timeout_ms;
-  if (timeoutMs !== undefined) {
-    if (typeof timeoutMs !== 'number' || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error('超时设置无效');
-  }
-  const params: TaskRoutingTestParams = {
+  return {
     automatic: { ...automatic } as TaskSettingsAutomaticDispatch,
   };
-  if (timeoutMs !== undefined) params.timeout_ms = timeoutMs;
-  return params;
 }
 
 export const EXEC_ID_MAX = 200;

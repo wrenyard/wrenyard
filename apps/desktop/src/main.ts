@@ -1088,9 +1088,9 @@ async function bootstrap(): Promise<void> {
   // Read-only routing test: the daemon owns evaluation, ranking, and scoring.
   // Desktop only forwards the typed form request and transports the result back.
   const requestTaskRoutingTest = async (params: TaskRoutingTestParams): Promise<TaskRoutingTestResult> => {
-    const request: Record<string, unknown> = { automatic: params.automatic };
-    if (params.timeout_ms !== undefined) request.timeout_ms = params.timeout_ms;
-    return (await requestForeman('task.settings.routingTest', request)) as TaskRoutingTestResult;
+    return (await requestForeman('task.settings.routingTest', {
+      automatic: params.automatic,
+    })) as TaskRoutingTestResult;
   };
   // Read-only import list: raw definition automatic configuration for every
   // valid builtin and project task. No effective user settings, no inference.

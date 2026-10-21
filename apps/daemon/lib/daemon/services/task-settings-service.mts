@@ -107,8 +107,6 @@ export type {
  * with daemon admission and live provider credential/availability supplied by
  * injected non-billable callbacks.
  */
-const ROUTING_TEST_DEFAULT_TIMEOUT_MS = 15 * 60 * 1000
-
 const MS_PER_MINUTE = 60_000
 
 export interface TaskSettingsDefinitionSummary {
@@ -1132,9 +1130,10 @@ export class TaskSettingsService {
     const globalSettings = readGlobalTaskSettings(tasksSectionOf(currentRecord), currentRecord)
     const routingWeights = globalSettings?.routingWeights
     const requirements = mergeRoutingExclusions(routingFormRequirements(params.automatic), globalSettings?.dispatch)
-    const timeoutMs = typeof params.timeout_ms === 'number' && params.timeout_ms >= 1
-      ? params.timeout_ms
-      : ROUTING_TEST_DEFAULT_TIMEOUT_MS
+    const effective = resolveEffectiveTaskSettings({
+      userGlobal: globalSettings ?? undefined,
+    })
+    const timeoutMs = effective.runTimeLimitMinutes * MS_PER_MINUTE
 
     // Baseline availability with NO submitted gates: `diagnose` evaluates each
     // exact pair's availability against empty requirements (so a pair rejected
@@ -1250,8 +1249,6 @@ export class TaskSettingsService {
         display_name: summary.displayName ?? summary.name,
         ...(summary.project !== undefined ? { project: summary.project } : {}),
         automatic: toSnakeDispatch(effective.dispatch),
-        // The system fallback timeout is not a declared constraint, so it stays
-        // out of the form and leaves the field blank.
       }
     })
     return { tasks }

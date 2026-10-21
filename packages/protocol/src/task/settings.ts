@@ -252,11 +252,11 @@ export interface TaskSettingsSaveParams {
 export type TaskSettingsSaveResult = TaskSettingsSnapshotResult
 
 /** Simplified form-based routing diagnostics input: the caller submits the
- *  automatic dispatch form fields directly plus an optional timeout. No task
- *  identity, saved settings layer, or global layer is consulted. */
+ *  automatic dispatch form fields directly. No task identity or saved settings
+ *  layer is consulted for dispatch; the daemon applies the effective global
+ *  run-time limit for pricing/selection timing. */
 export interface TaskRoutingTestParams {
   automatic: TaskSettingsAutomaticDispatch
-  timeout_ms?: number
 }
 
 /** One provider+model routing diagnostic row. Qualified rows carry the
@@ -292,8 +292,8 @@ export interface TaskRoutingTestResult {
   rows: TaskRoutingTestRow[]
 }
 
-/** One task importable into the routing form. `automatic`/`timeout_ms` are the
- *  raw definition configuration, never the effective user settings snapshot. */
+/** One task importable into the routing form. `automatic` is the raw
+ *  definition configuration. */
 export interface TaskRoutingTestTask {
   /** Stable identity: `builtin:<name>` or `project:<project>:<name>`. */
   identity: string
@@ -301,7 +301,6 @@ export interface TaskRoutingTestTask {
   display_name: string
   project?: string
   automatic: TaskSettingsAutomaticDispatch
-  timeout_ms?: number
 }
 
 export interface TaskRoutingTestTasksParams {}

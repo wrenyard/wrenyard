@@ -71,8 +71,6 @@ export interface RoutingTestFormState {
   excludeClientIds: string[];
   /** Always requested when this form is submitted. */
   requireText: boolean;
-  /** Optional request timeout in milliseconds, or '' when unset. */
-  timeoutMs: string;
 }
 
 /** Blank form defaults: no minimum/recommended mid, no cap, text-only. */
@@ -90,7 +88,6 @@ export function defaultRoutingTestForm(): RoutingTestFormState {
     excludeProfileIds: [],
     excludeClientIds: [],
     requireText: false,
-    timeoutMs: '',
   };
 }
 
@@ -146,17 +143,12 @@ export function serializeRoutingTestRequest(form: RoutingTestFormState, currency
   const excludeClientIds = unique(form.excludeClientIds);
   if (excludeClientIds.length > 0) automatic.exclude_client_ids = excludeClientIds;
 
-  const params: TaskRoutingTestParams = { automatic: automatic as TaskSettingsAutomaticDispatch };
-  const timeoutMs = Number(form.timeoutMs.trim());
-  if (form.timeoutMs.trim().length > 0 && Number.isSafeInteger(timeoutMs) && timeoutMs > 0) {
-    params.timeout_ms = timeoutMs;
-  }
-  return params;
+  return { automatic: automatic as TaskSettingsAutomaticDispatch };
 }
 
 /**
- * Copies a task's effective automatic configuration and timeout into editable
- * form state. The daemon resolves the user's global and per-task layers before
+ * Copies a task's effective automatic configuration into editable form state.
+ * The daemon resolves the user's global and per-task layers before
  * this point, so a locally excluded provider arrives already selected.
  * Imported capability requirements and exclusions are preserved: the form only
  * surfaces image/search checkboxes plus model/provider exclusions, so

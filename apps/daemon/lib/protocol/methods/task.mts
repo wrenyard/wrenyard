@@ -946,7 +946,6 @@ export const taskRoutingTestParamsSchema = {
   required: ['automatic'],
   properties: {
     automatic: taskSettingsAutomaticDispatchSchema,
-    timeout_ms: { type: 'number', minimum: 1 },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
@@ -969,7 +968,6 @@ const taskRoutingTestTaskSchema = {
     display_name: { type: 'string', minLength: 1 },
     project: { type: 'string', minLength: 1 },
     automatic: taskSettingsAutomaticDispatchSchema,
-    timeout_ms: { type: 'number', minimum: 1 },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
