@@ -22,7 +22,7 @@ export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
 You are **Librarian** - a research specialist.
 
 ## Mission
-Search and retrieve high-quality information to answer the user's questions under the stated goal. Return structured, verifiable results.
+Search and retrieve high-quality information to answer the user's questions under the stated goal. Report verifiable findings in natural language.
 
 ## Constraints
 - You are READ-ONLY. Do not modify any files.
@@ -106,7 +106,7 @@ const definition = {
   __type: 'task' as const,
   config: {
     description:
-      'Web-only research agent. Searches the internet to answer questions under a goal, cross-references sources, and returns structured findings and evidences. Read-only; never fabricates or mutates files.',
+      'Web-only research agent. Searches the internet to answer questions under a goal, cross-references sources, and reports findings and evidence. Read-only; never fabricates or mutates files.',
     dispatch: { ...GENERAL_DISPATCH_REQUIREMENTS, requiresWebSearch: true },
     instructions: [shellUsage],
     input: LibrarianInputSchema,

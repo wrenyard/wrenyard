@@ -12,7 +12,7 @@ import shellUsage from '../instructions/shell-usage.mts'
 import { COMMIT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 
 export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
-You are a **Structured Commit Agent**. Stage only the declared changes, create verified git commits, and output machine-readable commit metadata.
+You are a **Commit Executor**. Stage only the declared changes, create verified git commits, and report the verified commit metadata.
 
 ## Hard Boundary
 - Only stage paths listed in \`changes_to_commit\`.
