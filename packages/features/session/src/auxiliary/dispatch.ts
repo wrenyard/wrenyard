@@ -319,7 +319,7 @@ const DISPATCH_METHOD_INFOS: readonly MethodInfo[] = [
       properties: {
         project: { type: 'string' },
         task: { type: 'string' },
-        input: { description: 'Task input matching the task schema.' },
+        input: { type: 'object', description: 'Task input object matching the task schema; pass a JSON object, never a string.' },
         worktree: {
           type: 'string',
           description:

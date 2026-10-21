@@ -452,6 +452,8 @@ export function createWorkspaceMemory(workspaceRoot: string, directoryName = 'me
     }
     const merged: string[] = [];
     const pruned: string[] = [];
+    const oldIndex = directFile(indexPath) !== undefined ? readFileSync(indexPath, 'utf8') : '';
+    let nextIndex = oldIndex;
     const parsed = listParsed();
     const bySubject = new Map<string, ParsedMemory[]>();
     for (const entry of parsed) {
@@ -475,8 +477,10 @@ export function createWorkspaceMemory(workspaceRoot: string, directoryName = 'me
       const keeperType = isObject(metadata) ? metadata.type : undefined;
       for (const duplicate of sorted.slice(1)) {
         body = body === duplicate.body ? body : `${body}\n\n${duplicate.body}`;
-        pruned.push(typeof duplicate.data.name === 'string' ? duplicate.data.name : stemOf(duplicate.filename));
+        const duplicateName = typeof duplicate.data.name === 'string' ? duplicate.data.name : stemOf(duplicate.filename);
+        pruned.push(duplicateName);
         rmSync(join(directory, duplicate.filename));
+        nextIndex = dropFromIndex(nextIndex, duplicateName, duplicate.filename);
       }
       if (sorted.length > 1) merged.push(keeperName);
       const now = new Date().toISOString();
@@ -491,20 +495,13 @@ export function createWorkspaceMemory(workspaceRoot: string, directoryName = 'me
         metadata: { ...(isObject(metadata) ? metadata : {}), ...(keeperType === undefined ? {} : { type: keeperType }) },
       })}---\n\n${body}\n`;
       atomicWrite(join(directory, keeper.filename), content);
+      if (!nextIndex.split(/\r?\n/u).some((line) => references(line, keeperName, keeper.filename))) {
+        nextIndex = updateIndex(nextIndex, keeperName, keeper.filename, description).text;
+      }
     }
-    const survivors = listParsed();
-    const eol = '\n';
-    const indexLines = survivors
-      .map((entry) => {
-        const entryName = typeof entry.data.name === 'string' ? entry.data.name : stemOf(entry.filename);
-        const description = typeof entry.data.description === 'string' ? entry.data.description : entryName;
-        return indexLine(entryName, entry.filename, description);
-      })
-      .sort((left, right) => left.localeCompare(right));
-    const rebuilt = indexLines.length === 0 ? '' : `${indexLines.join(eol)}${eol}`;
-    const oldIndex = directFile(indexPath) !== undefined ? readFileSync(indexPath, 'utf8') : '';
-    const indexRebuilt = rebuilt !== oldIndex;
-    if (indexRebuilt) atomicWrite(indexPath, rebuilt);
+    // Only the merged entries change; every other index line, heading and note stays as written.
+    const indexRebuilt = nextIndex !== oldIndex;
+    if (indexRebuilt) atomicWrite(indexPath, nextIndex);
     return { merged, pruned, indexRebuilt };
   };
 
