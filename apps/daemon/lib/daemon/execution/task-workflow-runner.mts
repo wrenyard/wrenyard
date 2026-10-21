@@ -145,12 +145,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
     )
     if (!row) throw new Error(`Task run '${taskRunId}' not found`)
     if (isTaskTerminal(row.status)) {
-      return {
-        ok: false,
-        task_run_id: taskRunId,
-        status: row.status,
-        message: 'Task run is already in a terminal state',
-      }
+      return { ok: true, task_run_id: taskRunId, status: row.status }
     }
 
     if (row.execution_id) {
@@ -180,8 +175,8 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
         `SELECT status FROM tasks WHERE id = ?`,
         taskRunId,
       )
-      if (taskAfterCancel && taskAfterCancel.status === 'cancelled') {
-        return { ok: true, task_run_id: taskRunId, status: 'cancelled' }
+      if (taskAfterCancel && isTaskTerminal(taskAfterCancel.status)) {
+        return { ok: true, task_run_id: taskRunId, status: taskAfterCancel.status }
       }
     }
 
@@ -201,8 +196,8 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
         taskRunId,
       )
       if (!current) throw new Error(`Task run '${taskRunId}' not found`)
-      if (current.status === 'cancelled') {
-        return { ok: true, task_run_id: taskRunId, status: 'cancelled' }
+      if (isTaskTerminal(current.status)) {
+        return { ok: true, task_run_id: taskRunId, status: current.status }
       }
       return {
         ok: false,

@@ -570,18 +570,26 @@ export class ForemanDaemon implements RunningForemanDaemon {
   }
 
   /**
-   * Forced-shutdown step run once drain has been skipped or escalated. Cancels
-   * session first, then active graphs and their bound task runs, then every
-   * remaining admitted task run, awaiting terminal cancellation so no agent
-   * child outlives the daemon and the DB is
-   * only closed after cancellation has converged. The services use their
-   * existing cancellation APIs and bound their own work; a failure is logged
-   * rather than aborting teardown so close() still runs. Normal (non-forced)
-   * shutdown never calls this.
+   * Forced-shutdown step run once drain has been skipped or escalated. Settles
+   * live agent executions as interrupted with kill_reason shutdown (same as
+   * graceful close), then interrupts remaining admitted task rows, closes
+   * sessions, and cancels active task graphs. Failures are logged rather than
+   * aborting teardown so close() still runs. Normal (non-forced) shutdown never
+   * calls this.
    */
   private async cancelActiveWork(): Promise<void> {
     const resources = this.resources
     if (!resources) return
+    try {
+      await resources.runtime.supervisor.shutdown()
+    } catch (error) {
+      writeDaemonLog('warn', 'supervisor forced shutdown settlement failed', error)
+    }
+    try {
+      await resources.taskService.interruptActive()
+    } catch (error) {
+      writeDaemonLog('warn', 'task force interruption failed', error)
+    }
     try {
       await resources.session.close()
     } catch (error) {
@@ -591,11 +599,6 @@ export class ForemanDaemon implements RunningForemanDaemon {
       await resources.taskgraphService.cancelActive()
     } catch (error) {
       writeDaemonLog('warn', 'taskgraph force cancellation failed', error)
-    }
-    try {
-      await resources.taskService.cancelActive()
-    } catch (error) {
-      writeDaemonLog('warn', 'task force cancellation failed', error)
     }
   }
 

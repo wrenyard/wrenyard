@@ -1,4 +1,8 @@
-import { get as dbGet, query as dbQuery } from '../../db/connection.mts'
+import { get as dbGet, getDb, query as dbQuery } from '../../db/connection.mts'
+import { TaskRunStore } from '../../db/stores/task-run-store.mts'
+import { appendForemanEvent } from '../../events/event-store.mts'
+import { minimalRunFactsForTaskRun } from '../../daemon/execution/run-facts.mts'
+import { releaseTaskWriteTargets } from '../../daemon/execution/task-write-targets.mts'
 import { getForemanEventBus } from '../../events/event-bus.mts'
 import { ProjectManager } from '../project/manager.mts'
 import { discoverProjects } from '../project/loader.mts'
@@ -391,25 +395,49 @@ export class TaskService {
   }
 
   /**
-   * Forced-shutdown cancellation: cancel every admitted (queued or running)
-   * task run and await the authoritative terminal transition for each. The
-   * per-run cancel already terminates the linked agent execution before
-   * resolving, so awaiting it here guarantees no task child outlives a forced
-   * daemon shutdown and the caller may close the database immediately after.
-   * Never throws: a per-run failure is logged and the remaining runs are still
-   * cancelled. A no-op when nothing is admitted.
+   * Forced-shutdown cleanup: terminalize every still-admitted (queued or
+   * running) task row as interrupted after supervisor shutdown settlement.
+   * Never throws: a per-run failure is logged and remaining rows are still
+   * processed. A no-op when nothing is admitted.
    */
-  async cancelActive(): Promise<void> {
-    const { tasks } = this.activeRuns()
-    await Promise.all(tasks.map(async (taskRunId) => {
+  async interruptActive(): Promise<void> {
+    const INTERRUPT_ERROR = 'Task run interrupted by daemon shutdown'
+    const rows = dbQuery<{ id: string; project: string | null }>(
+      `SELECT id, project
+      FROM tasks
+      WHERE status IN ('queued', 'running')
+      ORDER BY created_at ASC, id ASC`,
+    )
+    if (rows.length === 0) return
+
+    const store = new TaskRunStore(getDb())
+    const endedAt = new Date().toISOString()
+    for (const row of rows) {
       try {
-        await this.cancel(taskRunId)
+        const changed = store.markTerminal({
+          taskRunId: row.id,
+          status: 'interrupted',
+          error: INTERRUPT_ERROR,
+          endedAt,
+          facts: minimalRunFactsForTaskRun(row.id, 'interrupted'),
+        })
+        if (!changed) continue
+        await appendForemanEvent({
+          id: `foreman:${row.id}:interrupted`,
+          kind: 'task.run.interrupted',
+          source: 'daemon.execution.runner',
+          severity: 'warning',
+          refs: { taskId: row.id, ...(row.project ? { project: row.project } : {}) },
+          data: { status: 'interrupted', error: INTERRUPT_ERROR },
+          occurredAt: endedAt,
+        })
+        releaseTaskWriteTargets(row.id)
       } catch (error) {
         process.stderr.write(
-          `[task] force cancellation failed for '${taskRunId}': ${errorMessage(error)}\n`,
+          `[task] force interruption failed for '${row.id}': ${errorMessage(error)}\n`,
         )
       }
-    }))
+    }
   }
 
   activeRuns(): { tasks: string[]; count: number } {
