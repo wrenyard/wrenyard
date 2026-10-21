@@ -764,7 +764,7 @@ function agentStoppedError(
   detail?: string | null,
 ): Error & { failure_category: string; error_message: string } {
   return Object.assign(
-    new Error(`Agent execution ${status}: ${executionId}`),
+    new Error(`Agent execution ${status === 'interrupted' ? 'interrupted by daemon shutdown' : status}: ${executionId}`),
     {
       failure_category: status === 'cancelled' ? 'agent_cancelled' : 'agent_interrupted',
       error_message: JSON.stringify({
