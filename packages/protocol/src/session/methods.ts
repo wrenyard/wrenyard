@@ -156,6 +156,8 @@ export interface SessionModelEntry {
   supportsFast?: boolean
   /** Catalog intelligence tier of this offering; absent when genuinely unknown. */
   intelligence?: 'low' | 'mid' | 'high' | 'premium'
+  /** Automatic routing preview score for this provider/model; absent when unrated. */
+  routingScore?: number
   /** Circuit state of this model's own route; absent while the route is healthy. */
   routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'access_denied' | 'model_unavailable'
   /** Phase of the route: `open` while a fault blocks it. */

@@ -426,6 +426,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         ? { routeNotice: routeUnavailableLabel(entry) }
         : {}),
       intelligence: entry.intelligence,
+      ...(entry.routingScore !== undefined ? { routingScore: entry.routingScore } : {}),
       label: isProbeEligible(entry) ? entry.displayName + RETRY_MARKER : entry.displayName,
       group: entry.providerDisplayName,
       badges: modelBadges(entry),

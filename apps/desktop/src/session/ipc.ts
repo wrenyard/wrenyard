@@ -6,7 +6,13 @@ import { WrenyardIpcClient, WrenyardRpcError, type WrenyardGatewayConnection } f
 import { REASONING_EFFORT_NAMES, type ReasoningEffort } from '@wrenyard/models';
 import type { ProviderListResult, ProviderQuotaResult } from '@wrenyard/protocol/provider';
 import type { SessionEventsResult } from '@wrenyard/protocol/session';
-import type { TaskRunCancelResult } from '@wrenyard/protocol/task';
+import type {
+  TaskRoutingTestResult,
+  TaskRunCancelResult,
+  TaskSettingsAutomaticDispatch,
+  TaskSettingsSnapshotResult,
+} from '@wrenyard/protocol/task';
+import { TASK_SETTINGS_AUTOMATIC_KEYS } from '../main/ipc/validation.js';
 import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';
 import type { TaskRunUsage } from '../shell-contract.js';
 import {
@@ -32,6 +38,25 @@ import {
 } from './media.js';
 import type { SessionSeenStore } from './seen-store.js';
 import { StaleGenerationError } from '../main/remote/context.js';
+
+function automaticDispatchForRoutingTest(
+  snapshot: TaskSettingsSnapshotResult | undefined,
+): TaskSettingsAutomaticDispatch {
+  const source = snapshot?.user_global?.automatic;
+  if (source == null || typeof source !== 'object' || Array.isArray(source)) return {};
+  const automatic: TaskSettingsAutomaticDispatch = {};
+  for (const key of TASK_SETTINGS_AUTOMATIC_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+    const value = (source as Record<string, unknown>)[key];
+    if (value === undefined || value === null) continue;
+    (automatic as Record<string, unknown>)[key] = value;
+  }
+  if (source.fast !== undefined && source.fast !== null) automatic.fast = source.fast;
+  if (source.expected_reasoning_effort !== undefined && source.expected_reasoning_effort !== null) {
+    automatic.expected_reasoning_effort = source.expected_reasoning_effort;
+  }
+  return automatic;
+}
 
 export { SESSION_CHANNELS };
 export type {
@@ -486,13 +511,34 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     // The Provider list carries configured eligibility and display metadata;
     // the Gateway connection carries each model's own protocols, which is the
     // only source for the model's session protocol.
-    const [providers, connection, quota] = await Promise.all([
+    const settingsSnapshotPromise = request<TaskSettingsSnapshotResult>('task.settings.snapshot', {}).catch(
+      () => undefined,
+    );
+    const [providers, connection, quota, routingTest] = await Promise.all([
       request<ProviderListResult>('provider.list', {}),
       request<WrenyardGatewayConnection>('gateway.connection', {}),
       // Quota is display-only here: a failed read never breaks the picker.
       request<ProviderQuotaResult>('provider.quota', {}).catch(() => undefined),
+      settingsSnapshotPromise.then((snapshot) =>
+        request<TaskRoutingTestResult>('task.settings.routingTest', {
+          automatic: automaticDispatchForRoutingTest(snapshot),
+        }).catch(() => undefined),
+      ),
     ]);
-    return toModelEntries(providers, connection.models, undefined, quota?.providers);
+    const entries = toModelEntries(providers, connection.models, undefined, quota?.providers);
+    const rows = routingTest?.rows;
+    if (rows === undefined || rows.length === 0) return entries;
+    const scoreByRoute = new Map<string, number>();
+    for (const row of rows) {
+      if (typeof row.score === 'number' && Number.isFinite(row.score)) {
+        scoreByRoute.set(`${row.provider}/${row.model}`, row.score);
+      }
+    }
+    if (scoreByRoute.size === 0) return entries;
+    return entries.map((entry) => {
+      const routingScore = scoreByRoute.get(entry.publicId);
+      return routingScore === undefined ? entry : { ...entry, routingScore };
+    });
   });
   handle(SESSION_CHANNELS.context, (_event, value) =>
     request('session.context.inspect', value));

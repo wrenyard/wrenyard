@@ -80,6 +80,8 @@ export interface ModelOption {
   providerQuotaSummary?: string;
   /** Catalog intelligence tier; absent when unknown. */
   intelligence?: 'low' | 'mid' | 'high' | 'premium';
+  /** Automatic routing preview score; absent when unrated. */
+  routingScore?: number;
   /** Short label shown when this route is currently faulted. */
   routeNotice?: string;
   /** Explicit free supply: keeps the free badge and normal placement. */
@@ -111,13 +113,23 @@ function routeFaulted(option: ModelOption): boolean {
   return option.routeNotice !== undefined;
 }
 
-/** Stable picker order: route health → intelligence → quota → input order. */
+/** Scored routes rank above unrated ones; higher scores rank first within each tier. */
+function compareRoutingScore(left: ModelOption, right: ModelOption): number {
+  const leftScored = left.routingScore !== undefined;
+  const rightScored = right.routingScore !== undefined;
+  if (leftScored !== rightScored) return Number(rightScored) - Number(leftScored);
+  if (leftScored && rightScored) return (right.routingScore ?? 0) - (left.routingScore ?? 0);
+  return 0;
+}
+
+/** Stable picker order: route health → routing score → intelligence → quota → input order. */
 function orderPickerItems(items: readonly ModelOption[]): ModelOption[] {
   return items
     .map((option, index) => ({ option, index }))
     .sort(
       (left, right) =>
         Number(routeFaulted(left.option)) - Number(routeFaulted(right.option))
+        || compareRoutingScore(left.option, right.option)
         || intelligenceTier(left.option) - intelligenceTier(right.option)
         || quotaTier(left.option) - quotaTier(right.option)
         || left.index - right.index,
@@ -252,6 +264,7 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
         if (a === undefined || b === undefined) return left.index - right.index;
         return (
           Number(routeFaulted(a)) - Number(routeFaulted(b))
+          || compareRoutingScore(a, b)
           || intelligenceTier(a) - intelligenceTier(b)
           || quotaTier(a) - quotaTier(b)
           || left.index - right.index
