@@ -104,7 +104,7 @@ save nothing. No extra model call is made.
 Save only user-stated preferences or corrections, confirmed project decisions
 and verified facts useful in later sessions; never transcripts, task status,
 secrets or guesses. Each `memories/*.md` file has YAML frontmatter with `name`,
-`description` and `metadata.type` (`user`, `feedback`, `project` or
+`description` (one short line saying when the memory applies, shown in the memory index) and `metadata.type` (`user`, `feedback`, `project` or
 `reference`), then the fact as Markdown. An upsert matches the frontmatter
 `name`, keeps the existing filename, requires the exact previous body to change
 an existing fact, and skips logically unchanged content. No existing memory is

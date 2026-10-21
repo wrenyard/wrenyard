@@ -394,7 +394,8 @@ function buildShortlistMemoryIndex(
   const lines: string[] = [];
   for (const path of shortlist) {
     const doc = docByPath.get(path);
-    const label = shortlistLinkLabel(path);
+    const title = doc === undefined ? '' : sanitizeShortlistText(doc.title);
+    const label = title !== '' ? title : shortlistLinkLabel(path);
     lines.push(`- [${label}](${path})`);
     if (doc !== undefined && doc.description !== '') lines.push(sanitizeShortlistText(doc.description));
     const excerpt = doc === undefined ? '' : bodyExcerptNearQuery(doc.body, query, SHORTLIST_BODY_EXCERPT);

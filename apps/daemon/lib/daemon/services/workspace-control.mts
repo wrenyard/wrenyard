@@ -30,7 +30,7 @@ This directory is a Wrenyard workspace. The desktop app treats the presence of
 \`workspace.wrws\` as metadata about this directory; it is not required in order
 to select an existing directory as a workspace.
 
-Read \`instructions/tasks.md\` before dispatch and \`instructions/documents.md\` before writing documents. Keep business source in registered checkouts; maintain workspace instructions here. Follow the user's authorization for publishing, deletion, and messages.
+Read \`instructions/tasks.md\` before dispatch, \`instructions/documents.md\` before writing documents, and \`instructions/memory.md\` before saving memories. Keep business source in registered checkouts; maintain workspace instructions here. Follow the user's authorization for publishing, deletion, and messages.
 
 ## Working with Wrenyard
 
@@ -90,6 +90,18 @@ Workspace documents use three kinds: spec, report and handoff.
 
 Do not include private paths, accounts, devices, or internal addresses, and do
 not copy private workspace text into documents.
+`,
+  'instructions/memory.md': `# Memory
+
+Durable workspace memories live in \`memories/*.md\`, one file per fact, with \`memories/INDEX.md\` holding one line per memory: the link text from the frontmatter \`name\`, then the frontmatter \`description\`.
+
+Each file starts with YAML frontmatter:
+
+- \`name\` — the stable kebab-case identity of the fact; updates match it.
+- \`description\` — one short line saying when this memory applies. Write it as guidance for deciding whether to load the file, not as a summary of its body.
+- \`metadata.type\` — \`user\`, \`feedback\`, \`project\` or \`reference\`.
+
+Save only durable user preferences, confirmed project decisions and verified facts. Keep the description accurate when a memory changes, and keep the index in sync with the files.
 `,
 }
 

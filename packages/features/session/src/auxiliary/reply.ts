@@ -62,7 +62,7 @@ const REPLY_TOOL_WITH_MEMORY: ToolSpec = {
           type: 'object',
           properties: {
             name: { type: 'string', description: 'Stable kebab-case name of the fact; reuse an existing memory name.' },
-            description: { type: 'string', description: 'One short line for the memory index.' },
+            description: { type: 'string', description: 'One short line for the memory index: say when this memory applies.' },
             type: { type: 'string', enum: ['user', 'feedback', 'project', 'reference'] },
             content: { type: 'string', description: 'The complete durable fact, without frontmatter.' },
             previous: { type: 'string', description: 'For an update, the exact existing body without frontmatter.' },
