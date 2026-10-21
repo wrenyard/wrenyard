@@ -6,6 +6,11 @@
 import { INTELLIGENCE_ORDER, type IntelligenceTier } from '@wrenyard/providers/catalog';
 import type { AutoRoutingResult, CandidateInput } from './types.ts';
 import { AutoRouter } from './auto-router.ts';
+import {
+  applyHealthAwareRouteOrdering,
+  type GatewayHealthWindowLike,
+  type RouteHealthDecision,
+} from './selector.ts';
 import type { AutoRoutingQuotaSnapshot } from './selector.ts';
 import { effectiveRoutingCap, toAutomaticCandidateInput, type AutomaticSelectionContext, type DeepSeekAutomaticPricing, type ModelRoutingEntry } from './selector-inputs.ts';
 
@@ -30,6 +35,10 @@ export interface AutomaticTaskRankingParams {
     intelligenceExpected?: IntelligenceTier;
     maxOutputUsdPerMillion?: number;
   };
+  healthPolicy?: {
+    thresholdPercent: number;
+    routeHealth: (provider: string, model: string) => GatewayHealthWindowLike | undefined;
+  };
 }
 
 export interface AutomaticTaskRankingResult {
@@ -38,6 +47,8 @@ export interface AutomaticTaskRankingResult {
   /** Collapsed candidates that could not build a truthful scored input. */
   unscorableIds: string[];
   capUsdPerM: number;
+  healthDecisions?: RouteHealthDecision[];
+  healthAllAvoidedFallback?: boolean;
 }
 
 function finiteOrDefault(value: number | undefined, fallback: number): number {
@@ -120,5 +131,31 @@ export function rankAutomaticTaskCandidates(
           I: routingWeights.intelligence,
         },
   );
-  return { inputs, ranked, unscorableIds, capUsdPerM };
+  let healthDecisions: RouteHealthDecision[] | undefined;
+  let healthAllAvoidedFallback = false;
+  if (params.healthPolicy !== undefined && ranked.ranked.length > 0) {
+    const entryById = new Map(entries.map((entry) => [entry.choice.exactAgentRuntime, entry]));
+    const healthOrdering = applyHealthAwareRouteOrdering(ranked.ranked, {
+      thresholdPercent: params.healthPolicy.thresholdPercent,
+      routeKeyOf: (candidate) => candidate.canonicalId,
+      healthOf: (candidate) => {
+        const entry = entryById.get(candidate.canonicalId);
+        if (entry === undefined) return undefined;
+        return params.healthPolicy!.routeHealth(entry.choice.provider, entry.choice.model);
+      },
+    });
+    healthDecisions = healthOrdering.decisions;
+    healthAllAvoidedFallback = healthOrdering.allAvoidedFallback;
+    ranked.ranked = healthOrdering.ordered.map((candidate, index) => ({
+      ...candidate,
+      rank: index + 1,
+    }));
+  }
+  return {
+    inputs,
+    ranked,
+    unscorableIds,
+    capUsdPerM,
+    ...(healthDecisions !== undefined ? { healthDecisions, healthAllAvoidedFallback } : {}),
+  };
 }

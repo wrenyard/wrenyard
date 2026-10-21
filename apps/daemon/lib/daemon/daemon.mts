@@ -1,5 +1,10 @@
 import { createRoutingAvailability, createAuxiliaryAvailability } from './services/model-routing-availability.mts'
-import { excludedModelIdsFor, selectRoutesByRequirement, type SelectorInputPort } from '@wrenyard/auto-routing'
+import {
+  excludedModelIdsFor,
+  selectRoutesByRequirement,
+  type GatewayHealthWindowLike,
+  type SelectorInputPort,
+} from '@wrenyard/auto-routing'
 import { ROLE_ROUTE_REQUIREMENTS } from '@wrenyard/session'
 import { BOT_ROUTING_REQUIREMENT } from './services/bot-agents/routing.mts'
 import { readAuxiliaryRoutingSettings } from '../config/task-settings.mts'
@@ -1223,6 +1228,7 @@ async function createForemanDaemonResources(
         known: true,
       }),
       runtimeAvailability,
+      gatewayHealth: () => gateway.health(),
     })
     const workspaceDocService = new WorkspaceDocService(workspaceRoot)
     // The todo index is disposable and lives under the daemon local state root
@@ -1239,6 +1245,10 @@ async function createForemanDaemonResources(
     // workspace's history stays intact on disk.
     // One shared routing input port feeds both the per-role auxiliary selector
     // and the bot requirement key the bot agent kernel uses.
+    const auxiliaryRouteHealthCache: { map?: Map<string, GatewayHealthWindowLike> } = {}
+    const resetAuxiliaryRouteHealth = (): void => {
+      auxiliaryRouteHealthCache.map = undefined
+    }
     const auxiliaryRoutingOptions: SelectorInputPort = {
       catalog,
       quotaSnapshots: autoRoutingQuotaSnapshots,
@@ -1248,11 +1258,25 @@ async function createForemanDaemonResources(
       runtimeAvailability: createAuxiliaryAvailability(runtimeAvailability, catalog, providerRuntime),
       localSpeed: readLocalSpeedSamplesCached,
       readSettings: () => readAuxiliaryRoutingSettings(authoritativeConfigPath),
+      gatewayRouteHealth: (routeKey) => {
+        if (auxiliaryRouteHealthCache.map === undefined) {
+          auxiliaryRouteHealthCache.map = new Map()
+          try {
+            for (const route of gateway.health().routes) {
+              auxiliaryRouteHealthCache.map.set(`${route.provider}/${route.model}`, route.last1h)
+            }
+          } catch {
+            // Passive health is best-effort; absence means no avoidance input.
+          }
+        }
+        return auxiliaryRouteHealthCache.map.get(routeKey)
+      },
     }
     // Bot agents select through the bot requirement key (high/premium at a high
     // reasoning level); each ranked `provider/model` route is split into the
     // explicit model session.send needs.
     const selectModels = async (): Promise<readonly AgentModelRoute[]> => {
+      resetAuxiliaryRouteHealth()
       const routes = await selectRoutesByRequirement(auxiliaryRoutingOptions, BOT_ROUTING_REQUIREMENT, 'bot')
       return routes.map(route => {
         const separator = route.model.indexOf('/')
@@ -1294,12 +1318,15 @@ async function createForemanDaemonResources(
       beginRouteAttempt: (publicModel, attemptId) => gateway.beginRouteAttempt(publicModel, attemptId),
       reportRouteFault: (publicModel, attemptId, kind: 'transport') => gateway.reportRouteFault(publicModel, attemptId, kind),
       completeRouteAttempt: (publicModel, attemptId) => gateway.completeRouteAttempt(publicModel, attemptId),
-      selectAuxiliary: (role, input) => selectRoutesByRequirement(
-        auxiliaryRoutingOptions,
-        ROLE_ROUTE_REQUIREMENTS[role],
-        role,
-        input,
-      ),
+      selectAuxiliary: (role, input) => {
+        resetAuxiliaryRouteHealth()
+        return selectRoutesByRequirement(
+          auxiliaryRoutingOptions,
+          ROLE_ROUTE_REQUIREMENTS[role],
+          role,
+          input,
+        )
+      },
       // A bot-originated turn may move down the same ranked ladder the bot
       // selects from, and an open wait must observe routing.exclude even when
       // the Gateway has no fault state for the route.

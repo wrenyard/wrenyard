@@ -63,6 +63,87 @@ export interface SelectorSettingsLayer {
   };
   /** Routing score weights keyed for config, mapped to scorer P/S/Q/I. */
   routingWeights?: { price: number; speed: number; quota: number; intelligence: number };
+  /** Global health-avoidance error-rate threshold (percent, 1–100). */
+  healthErrorRateThreshold?: number;
+}
+
+/** Passive gateway health figures for the sliding one-hour window. */
+export interface GatewayHealthWindowLike {
+  requests: number;
+  successes: number;
+  failures: Record<string, number>;
+  cancelled: number;
+  callerErrors: number;
+  admissionRefusals: number;
+}
+
+export const HEALTH_AVOIDANCE_MIN_REQUESTS = 100;
+export const DEFAULT_HEALTH_ERROR_RATE_THRESHOLD_PERCENT = 50;
+
+export function healthMeasuredFailures(window: GatewayHealthWindowLike): number {
+  return Object.values(window.failures).reduce((sum, count) => sum + count, 0);
+}
+
+export function healthErrorRatePercent(window: GatewayHealthWindowLike): number | null {
+  if (window.requests < HEALTH_AVOIDANCE_MIN_REQUESTS) return null;
+  return (healthMeasuredFailures(window) / window.requests) * 100;
+}
+
+export function shouldAvoidRouteForHealth(
+  window: GatewayHealthWindowLike,
+  thresholdPercent: number,
+): boolean {
+  const rate = healthErrorRatePercent(window);
+  return rate !== null && rate >= thresholdPercent;
+}
+
+export interface RouteHealthDecision {
+  routeKey: string;
+  requestCount: number;
+  errorRatePercent: number | null;
+  avoided: boolean;
+  allAvoidedFallback: boolean;
+}
+
+/** Filters or reorders ranked automatic routes using fresh gateway health. */
+export function applyHealthAwareRouteOrdering<T>(
+  items: readonly T[],
+  options: {
+    thresholdPercent: number;
+    healthOf: (item: T) => GatewayHealthWindowLike | undefined;
+    routeKeyOf: (item: T) => string;
+  },
+): { ordered: T[]; decisions: RouteHealthDecision[]; allAvoidedFallback: boolean } {
+  if (items.length === 0) {
+    return { ordered: [], decisions: [], allAvoidedFallback: false };
+  }
+  const decisions: RouteHealthDecision[] = items.map((item, index) => {
+    const window = options.healthOf(item);
+    const requestCount = window?.requests ?? 0;
+    const errorRatePercent = window === undefined ? null : healthErrorRatePercent(window);
+    const avoided = window !== undefined && shouldAvoidRouteForHealth(window, options.thresholdPercent);
+    return {
+      routeKey: options.routeKeyOf(item),
+      requestCount,
+      errorRatePercent,
+      avoided,
+      allAvoidedFallback: false,
+    };
+  });
+  const healthy = items.filter((_, index) => !decisions[index]!.avoided);
+  if (healthy.length > 0) {
+    return { ordered: [...healthy], decisions, allAvoidedFallback: false };
+  }
+  const ordered = [...items].sort((left, right) => {
+    const leftIndex = items.indexOf(left);
+    const rightIndex = items.indexOf(right);
+    const leftRate = decisions[leftIndex]!.errorRatePercent ?? Infinity;
+    const rightRate = decisions[rightIndex]!.errorRatePercent ?? Infinity;
+    if (leftRate !== rightRate) return leftRate - rightRate;
+    return leftIndex - rightIndex;
+  });
+  for (const decision of decisions) decision.allAvoidedFallback = true;
+  return { ordered, decisions, allAvoidedFallback: true };
 }
 
 /** One binding entry in a snapshot with its frozen required quota constraints. */
@@ -145,6 +226,8 @@ export interface SelectorInputPort {
    * newly available provider is admitted without a daemon restart.
    */
   gatewayModels: () => Promise<readonly GatewaySessionModel[]>;
+  /** Read-only gateway route health (`provider/model` key) for automatic avoidance. */
+  gatewayRouteHealth?: (routeKey: string) => GatewayHealthWindowLike | undefined;
 }
 
 /** Caller-supplied intelligence requirements for the requirement selector. */
@@ -308,7 +391,7 @@ function createSelector(
     for (const excluded of ranked.excluded) reject(excluded.reason);
     const levelsOf = new Map(entries.map(({ entry, levels }) => [entry.choice.exactAgentRuntime, levels]));
     const tiersOf = new Map(entries.map(({ entry }) => [entry.choice.exactAgentRuntime, entry.choice.intelligence]));
-    const admitted = ranked.ranked.map(candidate => {
+    let admitted = ranked.ranked.map(candidate => {
       return {
         model: candidate.canonicalId,
         levels: levelsOf.get(candidate.canonicalId)!,
@@ -319,6 +402,15 @@ function createSelector(
         quotaState: candidate.tier,
       };
     });
+    const healthThreshold = settings?.healthErrorRateThreshold ?? DEFAULT_HEALTH_ERROR_RATE_THRESHOLD_PERCENT;
+    if (port.gatewayRouteHealth !== undefined) {
+      const healthOrdering = applyHealthAwareRouteOrdering(admitted, {
+        thresholdPercent: healthThreshold,
+        healthOf: (entry) => port.gatewayRouteHealth!(entry.model),
+        routeKeyOf: (entry) => entry.model,
+      });
+      admitted = healthOrdering.ordered;
+    }
     const ladder = requirements.ladder;
     if (ladder !== undefined) {
       // Ladder mode pools the admitted candidates by the shared four-state

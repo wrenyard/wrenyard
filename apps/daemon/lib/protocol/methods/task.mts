@@ -516,12 +516,23 @@ const taskSettingsNullableRoutingWeightsSchema = {
   anyOf: [taskSettingsRoutingWeightsSchema, { type: 'null' }],
 } as const satisfies JsonSchema
 
+const taskSettingsHealthErrorRateThresholdSchema = {
+  type: 'number',
+  minimum: 1,
+  maximum: 100,
+} as const satisfies JsonSchema
+
+const taskSettingsNullableHealthErrorRateThresholdSchema = {
+  anyOf: [taskSettingsHealthErrorRateThresholdSchema, { type: 'null' }],
+} as const satisfies JsonSchema
+
 export const taskSettingsLayerSchema = {
   type: 'object',
   properties: {
     run_time_limit_minutes: taskSettingsRunTimeLimitMinutesSchema,
     automatic: taskSettingsNullableAutomaticSchema,
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
+    health_error_rate_threshold: taskSettingsNullableHealthErrorRateThresholdSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -531,6 +542,7 @@ export const taskSettingsLayerInputSchema = {
   properties: {
     automatic: taskSettingsNullableAutomaticSchema,
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
+    health_error_rate_threshold: taskSettingsNullableHealthErrorRateThresholdSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -541,6 +553,7 @@ export const taskSettingsPatchSchema = {
     run_time_limit_minutes: taskSettingsRunTimeLimitMinutesSchema,
     automatic: { anyOf: [taskSettingsAutomaticPatchSchema, { type: 'null' }] },
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
+    health_error_rate_threshold: taskSettingsNullableHealthErrorRateThresholdSchema,
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -675,6 +688,15 @@ const taskSettingsEffectiveSchema = {
     },
     automatic: taskSettingsEffectiveAutomaticSchema,
     routing_weights: taskSettingsSourcedNullableRoutingWeightsSchema,
+    health_error_rate_threshold: {
+      type: 'object',
+      required: ['value', 'source'],
+      properties: {
+        value: taskSettingsHealthErrorRateThresholdSchema,
+        source: taskSettingsSourceLayerSchema,
+      },
+      additionalProperties: false,
+    },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

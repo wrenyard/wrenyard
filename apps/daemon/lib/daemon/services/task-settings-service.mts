@@ -1,4 +1,11 @@
-import { quotaStateOf, deepSeekAutomaticPricingOf, rankAutomaticTaskCandidates, type DeepSeekAutomaticPricing } from '@wrenyard/auto-routing';
+import {
+  quotaStateOf,
+  deepSeekAutomaticPricingOf,
+  rankAutomaticTaskCandidates,
+  type DeepSeekAutomaticPricing,
+  type GatewayHealthWindowLike,
+  type RouteHealthDecision,
+} from '@wrenyard/auto-routing';
 import { createHash } from 'node:crypto'
 import { INTELLIGENCE_ORDER, type ReasoningEffort } from '@wrenyard/providers/catalog';
 import type { GatewayRouteStatus } from '@wrenyard/providers/base';
@@ -44,6 +51,7 @@ import {
   type TasksConfigSettingsInput,
 } from '@wrenyard/task'
 import type {
+  GatewayHealthResult,
   TaskAutoRoutingDecision,
   TaskResolvedDispatch,
 } from '@wrenyard/protocol'
@@ -262,6 +270,8 @@ export interface TaskSettingsServiceOptions {
    *  future, is not admitted, while a due half-open route is (the Gateway owns
    *  the bounded probe/lease). */
   routeStatus?: (model: string) => GatewayRouteStatus | undefined
+  /** Read-only passive gateway health snapshot for automatic route avoidance. */
+  gatewayHealth?: () => GatewayHealthResult | Promise<GatewayHealthResult>
   /** Injectable request clock for deterministic pricing snapshots. */
   now?: () => number
 }
@@ -621,6 +631,9 @@ function canonicalLayerToRaw(layer?: ConfigTaskSettingsLayer): Record<string, un
   if (layer.routingWeights !== undefined) {
     raw.routing_weights = layer.routingWeights
   }
+  if (layer.healthErrorRateThreshold !== undefined) {
+    raw.health_error_rate_threshold = layer.healthErrorRateThreshold
+  }
   if (layer.dispatch !== undefined && Object.keys(layer.dispatch).length > 0) {
     raw.dispatch = toSnakeDispatch(layer.dispatch)
   }
@@ -734,6 +747,7 @@ export class TaskSettingsService {
   private readonly clientReadiness?: TaskSettingsClientReadinessCallback
   private readonly quotaSnapshots?: AutoRoutingQuotaSnapshotService
   private readonly routeStatus?: (model: string) => GatewayRouteStatus | undefined
+  private readonly gatewayHealth?: () => GatewayHealthResult | Promise<GatewayHealthResult>
   private readonly now: () => number
   private readonly warnedLegacyStoredTimeouts = new Set<string>()
   /** Preview-only last-usable quota bundle and native readiness sample;
@@ -752,7 +766,22 @@ export class TaskSettingsService {
     this.clientReadiness = options.clientReadiness
     this.quotaSnapshots = options.quotaSnapshots
     this.routeStatus = options.routeStatus
+    this.gatewayHealth = options.gatewayHealth
     this.now = options.now ?? (() => Date.now())
+  }
+
+  private async gatewayHealthRouteMap(): Promise<Map<string, GatewayHealthWindowLike>> {
+    if (this.gatewayHealth === undefined) return new Map()
+    try {
+      const snapshot = await this.gatewayHealth()
+      const routes = new Map<string, GatewayHealthWindowLike>()
+      for (const route of snapshot.routes) {
+        routes.set(`${route.provider}/${route.model}`, route.last1h)
+      }
+      return routes
+    } catch {
+      return new Map()
+    }
   }
 
   private maybeWarnStoredLegacyTimeout(identity: string, raw: unknown): void {
@@ -938,6 +967,7 @@ export class TaskSettingsService {
       ),
       timeoutMs: effective.runTimeLimitMinutes * MS_PER_MINUTE,
       routingWeights: effective.routingWeights,
+      healthErrorRateThreshold: effective.healthErrorRateThreshold,
     })
     if (!selection.ok) throw selection.error
     return {
@@ -1148,7 +1178,13 @@ export class TaskSettingsService {
     const previewMemo: AutomaticPreviewMemo = { availability: new Map() }
     // Bind availability for the unconstrained pool before applying the form.
     // Both passes share quota/readiness snapshots and memoized non-billable probes.
-    await this.resolveAutomaticSelection({ taskName: ROUTING_FORM_TASK_NAME, requirements: {}, timeoutMs, routingWeights }, previewMemo)
+    await this.resolveAutomaticSelection({
+      taskName: ROUTING_FORM_TASK_NAME,
+      requirements: {},
+      timeoutMs,
+      routingWeights,
+      healthErrorRateThreshold: effective.healthErrorRateThreshold,
+    }, previewMemo)
     const bound = await previewMemo.quota
     const native = await previewMemo.nativeProviderReadiness
     const clientSample = await this.clientReadinessSample(previewMemo)
@@ -1185,6 +1221,7 @@ export class TaskSettingsService {
       requirements,
       timeoutMs,
       routingWeights,
+      healthErrorRateThreshold: effective.healthErrorRateThreshold,
     }, previewMemo, trace)
 
     return { rows: buildRoutingFormRows(availableChoices, trace, this.resolver, requirements) }
@@ -1343,6 +1380,11 @@ export class TaskSettingsService {
         'routing_weights is global-only and cannot be applied at task scope',
       )
     }
+    if (params.patch.health_error_rate_threshold !== undefined) {
+      throw new TaskSettingsInvalidSettingsError(
+        'health_error_rate_threshold is global-only and cannot be applied at task scope',
+      )
+    }
     if (params.patch.run_time_limit_minutes !== undefined) {
       throw new TaskSettingsInvalidSettingsError(
         'run_time_limit_minutes is global-only and cannot be applied at task scope',
@@ -1460,6 +1502,7 @@ export class TaskSettingsService {
           requirements: this.withRoleRoutingExclusions(effective.dispatch, summary.name, routingExclusions),
           timeoutMs: effective.runTimeLimitMinutes * MS_PER_MINUTE,
           routingWeights: effective.routingWeights,
+          healthErrorRateThreshold: effective.healthErrorRateThreshold,
         })
         if (selection.ok) {
           const labels = this.displayLabelsOf(selection.dispatch)
@@ -1528,6 +1571,10 @@ export class TaskSettingsService {
               },
             }
           : {}),
+        health_error_rate_threshold: {
+          value: effective.healthErrorRateThreshold,
+          source: toSourceLayer(effective.sources.healthErrorRateThreshold),
+        },
         automatic,
       },
       ...(automaticSelection !== undefined ? { automatic_selection: automaticSelection } : {}),
@@ -1974,6 +2021,7 @@ export class TaskSettingsService {
       if (pricing !== undefined) deepSeekPricing.set(entry.choice.exactAgentRuntime, pricing)
     }
 
+    const routeHealthMap = await this.gatewayHealthRouteMap()
     const ranking = rankAutomaticTaskCandidates(
       collapsed,
       {
@@ -1982,6 +2030,10 @@ export class TaskSettingsService {
         nowMs,
         timeoutMs: params.timeoutMs,
         requirements: params.requirements,
+        healthPolicy: {
+          thresholdPercent: params.healthErrorRateThreshold,
+          routeHealth: (provider, model) => routeHealthMap.get(`${provider}/${model}`),
+        },
       },
       params.routingWeights,
       deepSeekPricing,
@@ -2091,6 +2143,14 @@ export class TaskSettingsService {
       }
     }
 
+    if (patch.health_error_rate_threshold !== undefined) {
+      if (patch.health_error_rate_threshold === null) {
+        delete raw.health_error_rate_threshold
+      } else {
+        raw.health_error_rate_threshold = patch.health_error_rate_threshold
+      }
+    }
+
     if (patch.automatic !== undefined) {
       if (patch.automatic === null) {
         delete raw.dispatch
@@ -2136,6 +2196,9 @@ export class TaskSettingsService {
       ...(layer.routingWeights !== undefined
         ? { routing_weights: layer.routingWeights }
         : {}),
+      ...(layer.healthErrorRateThreshold !== undefined
+        ? { health_error_rate_threshold: layer.healthErrorRateThreshold }
+        : {}),
     }
   }
 
@@ -2179,6 +2242,8 @@ interface AutomaticSelectionParams {
   timeoutMs: number
   /** Global routing weights; undefined uses the scorer defaults. */
   routingWeights?: TaskRoutingWeights | undefined
+  /** Global health-avoidance error-rate threshold (percent, 1–100). */
+  healthErrorRateThreshold: number
 }
 
 /** Request-scoped optional trace collector instrumenting the exact automatic
@@ -2260,6 +2325,7 @@ function automaticSelectionKey(params: AutomaticSelectionParams): string {
     requirements: ordered,
     timeoutMs: params.timeoutMs,
     routingWeights: params.routingWeights ?? null,
+    healthErrorRateThreshold: params.healthErrorRateThreshold,
   })
 }
 

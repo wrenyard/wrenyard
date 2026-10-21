@@ -46,6 +46,9 @@ export const TASK_SETTINGS_SOURCE_ORDER: readonly TaskSettingsSourceTag[] = [
 export const SYSTEM_DEFAULT_RUN_TIME_LIMIT_MINUTES = 60
 export const MIN_RUN_TIME_LIMIT_MINUTES = 5
 export const MAX_RUN_TIME_LIMIT_MINUTES = 600
+export const SYSTEM_DEFAULT_HEALTH_ERROR_RATE_THRESHOLD_PERCENT = 50
+export const MIN_HEALTH_ERROR_RATE_THRESHOLD_PERCENT = 1
+export const MAX_HEALTH_ERROR_RATE_THRESHOLD_PERCENT = 100
 
 export type TaskDefinitionKind = 'builtin' | 'project'
 
@@ -161,6 +164,11 @@ export interface TaskSettingsLayer {
    */
   routingWeights?: TaskRoutingWeights
   /**
+   * Optional user-global-only health-avoidance error-rate threshold (percent,
+   * 1–100). Absent values inherit the system default during effective resolution.
+   */
+  healthErrorRateThreshold?: number
+  /**
    * Optional user-global-only declaration of execution tools the environment
    * provides beyond the built-in operation components — for example a named MCP
    * server. Accepts an array of unique non-empty ids and defaults to absent. It
@@ -234,6 +242,7 @@ export interface TaskSettingsLayersInput {
 export interface EffectiveTaskSettingsSources {
   runTimeLimitMinutes?: TaskSettingsSourceTag
   routingWeights?: TaskSettingsSourceTag
+  healthErrorRateThreshold?: TaskSettingsSourceTag
   dispatch?: Partial<Record<TaskDispatchField, TaskSettingsSourceTag>>
 }
 
@@ -242,6 +251,7 @@ export interface EffectiveTaskSettings {
   dispatch: TaskDispatchRequirements
   /** User-global routing score weights; undefined falls back to scorer defaults. */
   routingWeights?: TaskRoutingWeights
+  healthErrorRateThreshold: number
   /** Winning source per field; dispatch sources are per dispatch field. */
   sources: EffectiveTaskSettingsSources
 }
@@ -416,6 +426,20 @@ function normalizeDispatch(
  * finite number in [0, 1] with the four summing to 1. Invalid config throws;
  * it is never silently replaced by scorer defaults.
  */
+export function assertHealthErrorRateThresholdPercent(value: unknown, scope: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    fail(scope, 'healthErrorRateThreshold must be a finite number')
+  }
+  const rounded = Math.round(value)
+  if (rounded < MIN_HEALTH_ERROR_RATE_THRESHOLD_PERCENT || rounded > MAX_HEALTH_ERROR_RATE_THRESHOLD_PERCENT) {
+    fail(
+      scope,
+      `healthErrorRateThreshold must be an integer from ${MIN_HEALTH_ERROR_RATE_THRESHOLD_PERCENT} to ${MAX_HEALTH_ERROR_RATE_THRESHOLD_PERCENT}`,
+    )
+  }
+  return rounded
+}
+
 export function normalizeRoutingWeights(raw: unknown, scope: string): TaskRoutingWeights {
   if (!isPlainObject(raw)) {
     fail(scope, 'routingWeights must be an object with keys price, speed, quota, intelligence')
@@ -450,6 +474,7 @@ export function normalizeRoutingWeights(raw: unknown, scope: string): TaskRoutin
 const LAYER_FIELD_ALIASES = {
   runTimeLimitMinutes: ['runTimeLimitMinutes', 'run_time_limit_minutes'],
   routingWeights: ['routingWeights', 'routing_weights'],
+  healthErrorRateThreshold: ['healthErrorRateThreshold', 'health_error_rate_threshold'],
   environmentTools: ['environmentTools', 'environment_tools'],
   dispatch: ['dispatch'],
 } as const
@@ -486,6 +511,11 @@ export function normalizeTaskSettingsLayer(
   const routingWeights = resolveAliased(record, LAYER_FIELD_ALIASES.routingWeights)
   if (routingWeights.value !== undefined) {
     layer.routingWeights = normalizeRoutingWeights(routingWeights.value, scope)
+  }
+
+  const healthErrorRateThreshold = resolveAliased(record, LAYER_FIELD_ALIASES.healthErrorRateThreshold)
+  if (healthErrorRateThreshold.value !== undefined) {
+    layer.healthErrorRateThreshold = assertHealthErrorRateThresholdPercent(healthErrorRateThreshold.value, scope)
   }
 
   // `environmentTools` is a user-global-only declaration: it is validated only
@@ -746,6 +776,10 @@ export function resolveEffectiveTaskSettings(
   // defaults.
   const userGlobalEntry = entries.find((entry) => entry.tag === 'user_global')
   const routingWeights = userGlobalEntry?.layer.routingWeights
+  const healthThresholdLeaf = rightmostDefined(entries, (layer) => layer.healthErrorRateThreshold)
+  const healthErrorRateThreshold =
+    healthThresholdLeaf.value ?? SYSTEM_DEFAULT_HEALTH_ERROR_RATE_THRESHOLD_PERCENT
+  const healthErrorRateThresholdSource = healthThresholdLeaf.source ?? 'system_global'
 
   const dispatch: TaskDispatchRequirements = {}
   const dispatchSources: Partial<Record<TaskDispatchField, TaskSettingsSourceTag>> = {}
@@ -820,12 +854,14 @@ export function resolveEffectiveTaskSettings(
     runTimeLimitMinutes: runTimeLimitSource,
   }
   if (routingWeights !== undefined) sources.routingWeights = 'user_global'
+  sources.healthErrorRateThreshold = healthErrorRateThresholdSource
   sources.dispatch = dispatchSources
 
   return {
     runTimeLimitMinutes,
     dispatch,
     routingWeights,
+    healthErrorRateThreshold,
     sources,
   }
 }

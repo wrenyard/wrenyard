@@ -55,6 +55,8 @@ export interface TaskSettingsLayer {
   /** Global-only automatic scoring weights; null clears them. All four numeric
    *  fields are required, bounded [0, 1], and must sum to 1. */
   routing_weights?: TaskSettingsRoutingWeights | null
+  /** Global-only health-avoidance error-rate threshold (percent, 1–100); null clears. */
+  health_error_rate_threshold?: number | null
 }
 
 /** Global-only automatic scoring weights, one finite number in [0, 1] per key;
@@ -72,6 +74,8 @@ export interface TaskSettingsPatch {
   automatic?: TaskSettingsAutomaticPatch | null
   /** Global-only: set (full four-key object) or clear (null) routing weights. */
   routing_weights?: TaskSettingsRoutingWeights | null
+  /** Global-only health-avoidance threshold (percent, 1–100); null resets to default. */
+  health_error_rate_threshold?: number | null
 }
 
 /** An effective value plus the layer it came from. */
@@ -104,6 +108,7 @@ export interface TaskSettingsEffective {
   /** Global-only routing weights; sourced exclusively from the user_global
    *  layer; a null value means the scorer defaults apply. */
   routing_weights?: TaskSettingsSourcedValue<TaskSettingsRoutingWeights | null>
+  health_error_rate_threshold: TaskSettingsSourcedValue<number>
 }
 
 /** Wire-owned closed resolution-failure code. Mirrors the structurally

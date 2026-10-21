@@ -850,6 +850,7 @@ function instructionTemplate(): TaskSettingsInstructionTemplate {
 function effectiveSettings(): TaskSettingsEffective {
   return {
     routing_weights: { value: { price: 0.3, speed: 0.3, quota: 0.2, intelligence: 0.2 }, source: 'system' },
+    health_error_rate_threshold: { value: 50, source: 'system_global' },
     run_time_limit_minutes: { value: 30, source: 'system' },
     automatic: {
       expected_tps: { value: null, source: 'system' },

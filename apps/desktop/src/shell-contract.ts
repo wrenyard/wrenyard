@@ -1088,9 +1088,11 @@ export interface TaskSettingsRoutingWeights {
 }
 
 export interface TaskSettingsLayer
-  extends Omit<ProtocolTaskSettingsLayer, 'automatic' | 'routing_weights'> {
+  extends Omit<ProtocolTaskSettingsLayer, 'automatic' | 'routing_weights' | 'health_error_rate_threshold'> {
   /** Global-only automatic scoring weights; null clears them. */
   routing_weights?: TaskSettingsRoutingWeights | null;
+  /** Global-only health-avoidance threshold (percent, 1–100); null clears to default. */
+  health_error_rate_threshold?: number | null;
   /** Desktop's dispatch form edits the narrowed automatic dispatch shape. */
   automatic?: Partial<TaskSettingsAutomaticDispatch> | null;
 }
@@ -1099,6 +1101,7 @@ export interface TaskSettingsLayer
 export interface TaskSettingsPatch {
   run_time_limit_minutes?: number | null;
   routing_weights?: TaskSettingsRoutingWeights | null;
+  health_error_rate_threshold?: number | null;
   automatic?: TaskSettingsAutomaticPatch | null;
 }
 

@@ -33,6 +33,7 @@ export type CustomControlKey =
   | 'petShowHouse'
   | 'petShowTaskgraphs'
   | 'petShowWorkers'
+  | 'routingHealthErrorRate'
   | 'routingWeights'
   | 'service'
   | 'settingsFile'
@@ -256,6 +257,17 @@ const SUPPLY_CATEGORY: SettingDefinition[] = [
     description: '调整自动派发时四项因子的相对比重，四项之和须为 100。',
     keywords: ['路由权重', 'routing', 'weights', '价格', '速度', '额度', '智能', '派发测试'],
     control: custom('routingWeights'),
+    source: { kind: 'daemon' },
+  },
+  {
+    id: 'models.routingHealthErrorRate',
+    category: 'supply',
+    group: 'routing',
+    title: '健康错误率阈值（%）',
+    description:
+      '最近 1 小时请求 ≥100 且错误率不低于该值的路线将被自动选路避开；全部候选被避开时按错误率排序。',
+    keywords: ['健康', '错误率', '路由', 'health', 'error rate', 'routing', '自动选路'],
+    control: custom('routingHealthErrorRate'),
     source: { kind: 'daemon' },
   },
   {

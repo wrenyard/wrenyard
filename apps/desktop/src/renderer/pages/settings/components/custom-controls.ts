@@ -18,6 +18,7 @@ import {
   PetShowTaskgraphsControl,
   PetShowWorkersControl,
 } from './PetSettings.js';
+import { RoutingHealthErrorRateControl } from './RoutingHealthErrorRateSettings.js';
 import { RoutingWeightsControl } from './RoutingWeightsSettings.js';
 import {
   DaemonControl,
@@ -57,6 +58,7 @@ export const CUSTOM_CONTROLS: Readonly<Record<CustomControlKey, ComponentType>> 
   petShowHouse: PetShowHouseControl,
   petShowTaskgraphs: PetShowTaskgraphsControl,
   petShowWorkers: PetShowWorkersControl,
+  routingHealthErrorRate: RoutingHealthErrorRateControl,
   routingWeights: RoutingWeightsControl,
   service: ServiceControl,
   settingsFile: SettingsFileControl,

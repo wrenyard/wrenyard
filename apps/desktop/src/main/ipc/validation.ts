@@ -13,7 +13,12 @@ import type {
   TaskSettingsSaveRequest,
 } from '../../shell-contract.js';
 
-export const TASK_SETTINGS_PATCH_KEYS = new Set(['run_time_limit_minutes', 'automatic', 'routing_weights']);
+export const TASK_SETTINGS_PATCH_KEYS = new Set([
+  'run_time_limit_minutes',
+  'automatic',
+  'routing_weights',
+  'health_error_rate_threshold',
+]);
 export const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
   'expected_tps',
   'minimum_tps',
@@ -135,6 +140,18 @@ export function validateTaskSettingsSaveRequest(value: unknown): TaskSettingsSav
     }
   }
   validateAutomaticDispatch(patch.automatic, true);
+  const healthErrorRateThreshold = patch.health_error_rate_threshold;
+  if (healthErrorRateThreshold !== undefined && healthErrorRateThreshold !== null) {
+    if (scope !== 'global') throw new Error('健康错误率阈值仅可在全局设置中修改');
+    if (
+      typeof healthErrorRateThreshold !== 'number' ||
+      !Number.isSafeInteger(healthErrorRateThreshold) ||
+      healthErrorRateThreshold < 1 ||
+      healthErrorRateThreshold > 100
+    ) {
+      throw new Error('健康错误率阈值无效');
+    }
+  }
   const request: TaskSettingsSaveRequest = {
     scope,
     expected_revision: expectedRevision,
