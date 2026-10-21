@@ -1,95 +1,41 @@
 /**
  * Task results as plain text.
  *
- * A task returns structured JSON. The main model reads its result as prose, so
- * the JSON is laid out as compact Markdown: the status and the summary/answer
- * first, then every other field as nested bullets. Nothing is dropped except
- * empty values; values are never rephrased. Text that is not JSON passes
- * through unchanged.
+ * A finished run reports in prose and carries the facts the daemon collected
+ * itself. Both enter the model's context as text: the run's own report first,
+ * then the facts as a flat bullet list. Nothing is rephrased, nothing is
+ * invented and absent facts are omitted.
  */
 
-const LEAD_KEYS = ['status', 'summary', 'answer', 'result', 'message'] as const;
+import type { TaskRunFacts } from '@wrenyard/protocol/task';
 
-/** Render a task's output string for the model. */
-export function renderTaskResult(output: string): string {
-  const trimmed = output.trim();
-  if (trimmed === '' || (trimmed[0] !== '{' && trimmed[0] !== '[')) return output;
-  let value: unknown;
-  try {
-    value = JSON.parse(trimmed);
-  } catch {
-    return output;
-  }
-  const lines: string[] = [];
-  if (isRecord(value)) {
-    for (const key of LEAD_KEYS) {
-      if (key in value && !isEmpty(value[key])) writeField(lines, key, value[key], 0);
-    }
-    for (const [key, entry] of Object.entries(value)) {
-      if ((LEAD_KEYS as readonly string[]).includes(key) || isEmpty(entry)) continue;
-      writeField(lines, key, entry, 0);
-    }
-  } else {
-    writeItems(lines, value as unknown[], 0);
-  }
-  return lines.length === 0 ? output : lines.join('\n');
+/** One run's report followed by the facts the daemon collected, as plain text. */
+export function renderTaskRunResult(report: string, facts?: TaskRunFacts): string {
+  const rendered = facts === undefined ? '' : renderRunFacts(facts);
+  if (rendered === '') return report;
+  return report.trim() === '' ? rendered : `${report}\n\n${rendered}`;
 }
 
-function writeField(lines: string[], key: string, value: unknown, depth: number): void {
-  const pad = '  '.repeat(depth);
-  if (isScalar(value)) {
-    const text = String(value);
-    // A multi-line value keeps its own lines, indented under its key.
-    if (text.includes('\n')) {
-      lines.push(`${pad}- ${key}:`);
-      for (const line of text.split('\n')) lines.push(`${pad}  ${line}`);
-    } else {
-      lines.push(`${pad}- ${key}: ${text}`);
-    }
-    return;
-  }
-  lines.push(`${pad}- ${key}:`);
-  if (Array.isArray(value)) writeItems(lines, value, depth + 1);
-  else writeRecord(lines, value as Record<string, unknown>, depth + 1);
+/** The facts of one run as a flat bullet list. */
+function renderRunFacts(facts: TaskRunFacts): string {
+  const lines: string[] = [`- status: ${facts.status}`];
+  if (isFilled(facts.failure_category)) lines.push(`- failure: ${facts.failure_category}`);
+  if (facts.duration_ms !== null) lines.push(`- duration: ${facts.duration_ms} ms`);
+  lines.push(`- timed out: ${facts.timed_out ? 'yes' : 'no'}`);
+  if (isFilled(facts.worktree_id)) lines.push(`- worktree: ${facts.worktree_id}`);
+  else if (isFilled(facts.checkout_path)) lines.push(`- checkout: ${facts.checkout_path}`);
+  writeList(lines, 'changed files', facts.changed_files);
+  writeList(lines, 'commits', facts.commits.map((commit) => `${commit.sha} ${commit.subject}`.trim()));
+  writeList(lines, 'artifact files', facts.artifact_files.map((file) => `${file.path} (${file.bytes} bytes)`));
+  return lines.join('\n');
 }
 
-function writeRecord(lines: string[], value: Record<string, unknown>, depth: number): void {
-  for (const [key, entry] of Object.entries(value)) {
-    if (!isEmpty(entry)) writeField(lines, key, entry, depth);
-  }
+function writeList(lines: string[], label: string, entries: readonly string[]): void {
+  if (entries.length === 0) return;
+  lines.push(`- ${label}:`);
+  for (const entry of entries) lines.push(`  - ${entry}`);
 }
 
-function writeItems(lines: string[], items: readonly unknown[], depth: number): void {
-  const pad = '  '.repeat(depth);
-  for (const item of items) {
-    if (isEmpty(item)) continue;
-    if (isScalar(item)) {
-      lines.push(`${pad}- ${String(item)}`);
-    } else if (Array.isArray(item)) {
-      lines.push(`${pad}-`);
-      writeItems(lines, item, depth + 1);
-    } else {
-      // One record per bullet: its scalar fields share the bullet line.
-      const record = item as Record<string, unknown>;
-      const scalars = Object.entries(record).filter(([, entry]) => isScalar(entry) && !isEmpty(entry) && !String(entry).includes('\n'));
-      const rest = Object.entries(record).filter(([key, entry]) => !isEmpty(entry) && !scalars.some(([name]) => name === key));
-      lines.push(`${pad}- ${scalars.map(([key, entry]) => `${key}: ${String(entry)}`).join('; ')}`);
-      for (const [key, entry] of rest) writeField(lines, key, entry, depth + 1);
-    }
-  }
-}
-
-function isScalar(value: unknown): value is string | number | boolean {
-  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isEmpty(value: unknown): boolean {
-  if (value === null || value === undefined || value === '') return true;
-  if (Array.isArray(value)) return value.length === 0;
-  if (isRecord(value)) return Object.keys(value).length === 0;
-  return false;
+function isFilled(value: string | undefined): boolean {
+  return typeof value === 'string' && value !== '';
 }

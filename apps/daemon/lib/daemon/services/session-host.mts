@@ -1,6 +1,7 @@
 import { hostname } from 'node:os'
 import { readFileSync } from 'node:fs'
 import type { WrenyardGatewayConnection } from '@wrenyard/control'
+import type { TaskRunFacts } from '@wrenyard/protocol/task'
 import type { ProviderDefinition } from '@wrenyard/providers'
 import { getAuxiliaryDefinition } from '@wrenyard/agent-loop'
 import {
@@ -374,6 +375,7 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
         output: result.status === 'done'
           ? outputText(result.output) || outputText(result.error)
           : [outputText(result.error), outputText(result.output)].filter(text => text !== '').join('\n\n'),
+        ...(result.facts === undefined || result.facts === null ? {} : { facts: result.facts as TaskRunFacts }),
         ...(usage !== null && typeof usage === 'object' ? { usage: usage as Record<string, unknown> } : {}),
         ...(artifacts.length === 0 ? {} : { artifacts }),
         ...(artifactErrors.length === 0 ? {} : { artifactErrors }),

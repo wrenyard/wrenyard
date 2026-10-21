@@ -4,6 +4,7 @@
  */
 
 import type { WrenyardGatewayConnection } from '@wrenyard/control';
+import type { TaskRunFacts } from '@wrenyard/protocol/task';
 import type { ReasoningEffort } from '@wrenyard/models';
 import type { ProviderDefinition } from '@wrenyard/providers';
 import type {
@@ -136,6 +137,8 @@ export interface SessionHost {
   waitTaskRun(taskRunId: string, signal: AbortSignal): Promise<{
     status: string;
     output: string;
+    /** Facts the daemon collected for the run; absent when the run recorded none. */
+    facts?: TaskRunFacts;
     /** The task run's usage and reference cost as the task system reports them. */
     usage?: Record<string, unknown>;
     /** Sanitized structured artifacts, separate from the free-form output text. */

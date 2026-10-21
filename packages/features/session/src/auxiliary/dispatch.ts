@@ -32,7 +32,7 @@ import {
   type MethodInfo,
 } from '@wrenyard/agent-loop';
 
-import { renderTaskResult } from './dispatch-result.ts';
+import { renderTaskRunResult } from './dispatch-result.ts';
 import { fail, isObject, renderRunFiles } from './shared.ts';
 import { messageOf } from '../errors.ts';
 import {
@@ -694,7 +694,8 @@ export async function runDispatchAction(
     : mapTaskStatus(waited.status, aborted);
   const taskStatus = waited?.status ?? (aborted ? 'cancelled' : 'failed');
   const deferred: LedgerEventDraft[] = [];
-  let result = waited === undefined ? `waitTaskRun failed: ${messageOf(waitError)}` : renderTaskResult(waited.output);
+  // The report the run ended with, followed by the facts the daemon collected.
+  let result = waited === undefined ? `waitTaskRun failed: ${messageOf(waitError)}` : renderTaskRunResult(waited.output, waited.facts);
 
   // Close the task span: ok only when the task finished as done, aborted when
   // an interrupt cancelled it, failed otherwise.
