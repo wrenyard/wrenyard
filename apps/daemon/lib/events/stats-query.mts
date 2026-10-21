@@ -410,17 +410,18 @@ function emptySealDayTotals(): SealDayTotals {
   }
 }
 
-const SQL_LOAD_SEAL_USAGE = `SELECT created_at,
-            ${SQL_USAGE_U_INPUT_FROM_ALIASES} AS u_input,
-            ${SQL_USAGE_U_CACHED_FROM_ALIASES} AS u_cached,
-            ${SQL_USAGE_U_OUTPUT_FROM_ALIASES} AS u_output
-     FROM (
+const SQL_LOAD_SEAL_USAGE = `WITH usage AS MATERIALIZED (
        SELECT e.created_at,
               ${SQL_USAGE_JSON_ALIASES}
        FROM events e
        WHERE e.created_at >= ? AND e.created_at < ?
          AND e.type = 'turn_usage'
-     )`
+     )
+     SELECT created_at,
+            ${SQL_USAGE_U_INPUT_FROM_ALIASES} AS u_input,
+            ${SQL_USAGE_U_CACHED_FROM_ALIASES} AS u_cached,
+            ${SQL_USAGE_U_OUTPUT_FROM_ALIASES} AS u_output
+     FROM usage`
 
 const SQL_LOAD_SEAL_DISPATCH = `SELECT e.created_at
      FROM events e
@@ -674,18 +675,19 @@ function readStatsSummaryUncached(
   // fields are extracted in SQL under json_valid so the event `data` blob never
   // crosses to JS; executions wide profile columns are not selected.
   const allEventsRows = dbQuery<StatsEventRow>(
-    `SELECT ev.type, ev.created_at, COALESCE(t.template, ex_t.template) AS template,
-            tra.provider AS provider, tra.model AS model, tra.model_id AS model_id,
-            ${SQL_USAGE_U_INPUT_LIVE} AS u_input,
-            ${SQL_USAGE_U_CACHED_LIVE} AS u_cached,
-            ${SQL_USAGE_U_OUTPUT_LIVE} AS u_output
-     FROM (
+    `WITH ev AS MATERIALIZED (
        SELECT e.execution_id, e.task_id, e.type, e.created_at,
               ${SQL_USAGE_JSON_ALIASES}
        FROM events e
        WHERE e.type IN ('dispatch', 'turn_usage')
          AND e.created_at >= ? AND e.created_at < ?
-     ) ev
+     )
+     SELECT ev.type, ev.created_at, COALESCE(t.template, ex_t.template) AS template,
+            tra.provider AS provider, tra.model AS model, tra.model_id AS model_id,
+            ${SQL_USAGE_U_INPUT_LIVE} AS u_input,
+            ${SQL_USAGE_U_CACHED_LIVE} AS u_cached,
+            ${SQL_USAGE_U_OUTPUT_LIVE} AS u_output
+     FROM ev
      LEFT JOIN executions ex ON ev.execution_id = ex.id
      LEFT JOIN tasks t ON ev.task_id = t.id
      LEFT JOIN tasks ex_t ON ex.task_id = ex_t.id
