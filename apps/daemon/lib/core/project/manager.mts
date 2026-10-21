@@ -1827,7 +1827,7 @@ export class ProjectManager {
       }
     }
 
-    const yamlValue: Record<string, unknown> = { name: project }
+    const yamlValue: Record<string, unknown> = { name: project.slice(project.lastIndexOf('/') + 1) }
     const displayName = input.display_name?.trim()
     if (displayName) yamlValue.display_name = displayName
     yamlValue.description = description

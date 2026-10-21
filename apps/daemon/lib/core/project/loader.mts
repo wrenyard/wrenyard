@@ -145,13 +145,18 @@ function scanDirectory(
     if (!entry.name.endsWith(FMPROJ_EXT)) continue
 
     const filePath = join(dir, entry.name)
-    const project = loadProjectFromFile(
-      filePath,
-      parent,
-      workspaceRoot,
-      projects,
-      siblingNames,
-    )
+    let project: ProjectNode | null = null
+    try {
+      project = loadProjectFromFile(
+        filePath,
+        parent,
+        workspaceRoot,
+        projects,
+        siblingNames,
+      )
+    } catch (error) {
+      console.error(`Skipping invalid project ${filePath}: ${(error as Error).message}`)
+    }
     if (project) projectsInCurrentDir.push(project)
   }
 
