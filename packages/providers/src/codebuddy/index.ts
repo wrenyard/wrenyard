@@ -1,7 +1,7 @@
 import type { Provider } from '../base/index.ts';
 import { codeBuddyClient, createCodeBuddyModels } from './models.ts';
 import type { CodeBuddyProductModelEntry } from './product.ts';
-import { applyCodeBuddyNativeHeaders, createCodeBuddyRuntime, type CodeBuddyActiveSnapshot, type CodeBuddyClientIdentity, type CodeBuddyProviderProduct } from './runtime.ts';
+import { applyCodeBuddyNativeHeaders, createCodeBuddyRuntime, type CodeBuddyActiveSnapshot, type CodeBuddyClientIdentity, type CodeBuddyEnvironment, type CodeBuddyProviderProduct } from './runtime.ts';
 import { createCodeBuddyQuota } from './quota.ts';
 export { codeBuddyPoolsForModel } from './quota.ts';
 
@@ -15,12 +15,21 @@ export interface CodeBuddyOptions {
    * a rotated token is picked up without restarting. Absent means the product
    * snapshot account is used.
    */
-  account?: () => Promise<CodeBuddyProviderProduct['account'] | undefined>;
+  account?: (environment: CodeBuddyEnvironment) => Promise<CodeBuddyProviderProduct['account'] | undefined>;
+  /**
+   * Re-runs full installation/account/environment/model discovery; called by
+   * refreshModels(). Absent means discovery cannot be re-run.
+   */
+  discover?: () => Promise<CodeBuddyProviderProduct | undefined>;
 }
 
 export interface CodeBuddy extends Provider {
   snapshot(): Promise<CodeBuddyActiveSnapshot | undefined>;
   clientIdentity(): Promise<CodeBuddyClientIdentity | undefined>;
+  /** Re-run discovery and republish catalog/runtime state coherently. */
+  refreshModels(): Promise<void>;
+  /** Safe discovery status/reason, distinct from credential and route state. */
+  discovery(): { status: 'ready' | 'unavailable'; reason?: string };
 }
 
 /** Build a CodeBuddy provider from an injected snapshot. Does not search the machine. */
@@ -30,7 +39,7 @@ export function createCodeBuddy(options: CodeBuddyOptions = {}): CodeBuddy {
     : undefined);
   const entries = product?.status === 'ready' ? product.entries : [];
   const state = createCodeBuddyModels(entries);
-  const runtime = createCodeBuddyRuntime(product, state, options.account);
+  const runtime = createCodeBuddyRuntime(product, state, options.account, options.discover);
   // The supplier request/response hooks (client identity, per-turn round cache,
   // private-error correction) are part of the registered definition, so the
   // Gateway executes them generically without any CodeBuddy branch of its own.
@@ -51,6 +60,8 @@ export function createCodeBuddy(options: CodeBuddyOptions = {}): CodeBuddy {
     freeSupply: runtime.freeSupply,
     snapshot: runtime.snapshot,
     clientIdentity: runtime.clientIdentity,
+    refreshModels: runtime.refresh,
+    discovery: runtime.discovery,
   };
 }
 

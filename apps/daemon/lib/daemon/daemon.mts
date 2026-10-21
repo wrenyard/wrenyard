@@ -89,7 +89,7 @@ import {
   type ModelGateway,
   type RouteStatus,
 } from '@wrenyard/gateway'
-import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin, createOpenCodeZen, createWorkBuddyProviders, resolveHistoricalOfferedModelId, type WorkBuddyProvider } from '@wrenyard/providers'
+import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin, createOpenCodeZen, createWorkBuddyProviders, resolveHistoricalOfferedModelId, type WorkBuddyProvider, type CodeBuddy } from '@wrenyard/providers'
 import {
   defaultProviderContext,
   pollWorkBuddyBrowserToken,
@@ -821,7 +821,7 @@ async function createForemanDaemonResources(
   // are constructed once in bootstrap (see bootstrapForemanDaemonRuntime) and
   // reused here so the gateway, RPC surface, and the running daemon all share
   // the identical resolver instance.
-  const { catalog, providerRuntime, dispatchPlans, taskDispatchResolver, workBuddyProviders } = runtime
+  const { catalog, providerRuntime, dispatchPlans, taskDispatchResolver, workBuddyProviders, codeBuddyProvider } = runtime
   const workBuddyProvidersById = new Map<WorkBuddyBuildId, WorkBuddyProvider>(
     workBuddyProviders.map((provider) => [provider.id as WorkBuddyBuildId, provider]),
   )
@@ -1787,6 +1787,15 @@ async function createForemanDaemonResources(
     },
     providerQuota: async (params) => {
       if (params.forceRefresh === true) {
+        // An explicit refresh re-runs CodeBuddy discovery first so a recovered
+        // install republishes its catalog/runtime before readiness, list and
+        // quota views are rebuilt — the same explicit-refresh path WorkBuddy's
+        // refreshModels serves for its own catalog.
+        try {
+          await codeBuddyProvider.refreshModels()
+        } catch {
+          // A failed rediscovery keeps the safe unavailable reason; it never blocks quota.
+        }
         invalidateProviderReadiness()
         providerService.invalidateList()
       }
@@ -2645,6 +2654,8 @@ interface ForemanDaemonRuntime {
   catalog: import('@wrenyard/providers/catalog').Catalog
   providerRuntime: import('@wrenyard/providers').ProviderRuntime
   workBuddyProviders: readonly [WorkBuddyProvider, WorkBuddyProvider]
+  /** Live CodeBuddy provider instance shared by the catalog; refreshModels re-runs discovery. */
+  codeBuddyProvider: CodeBuddy
   /** Canonical task dispatch plans keyed by provider/model:client targets. */
   dispatchPlans: Readonly<Record<string, import('@wrenyard/providers/catalog').DispatchPlan>>
   taskDispatchResolver: TaskDispatchResolver
@@ -2684,15 +2695,35 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
   // picked up without restarting the daemon.
   const codeBuddyClient = new CodeBuddyClient()
   const install = await codeBuddyClient.readInstall()
-  const codeBuddy = createCodeBuddy({
+  const codeBuddyProvider = createCodeBuddy({
     product: {
       status: install.product.status,
+      // The safe discovery reason must reach the provider so a failed startup
+      // discovery explains itself instead of surfacing as a silent empty catalog.
+      ...(install.product.reason ? { reason: install.product.reason } : {}),
       environment: install.product.environment,
       entries: install.product.entries,
       ...(install.product.identity ? { identity: install.product.identity } : {}),
       ...(install.account ? { account: install.account } : {}),
     },
-    account: () => codeBuddyClient.readAccountContext(install.product.environment),
+    // The loader receives the provider's current environment so a refresh that
+    // discovered a new environment re-scopes the auth-file read instead of
+    // pinning the startup environment.
+    account: (environment) => codeBuddyClient.readAccountContext(environment),
+    // Explicit refresh re-runs the complete install read (forced, never the
+    // client cache) and republishes product, account, environment and models
+    // together, so a recovered install restores the catalog without a restart.
+    discover: async () => {
+      const next = await codeBuddyClient.readInstall({ refresh: true })
+      return {
+        status: next.product.status,
+        ...(next.product.reason ? { reason: next.product.reason } : {}),
+        environment: next.product.environment,
+        entries: next.product.entries,
+        ...(next.product.identity ? { identity: next.product.identity } : {}),
+        ...(next.account ? { account: next.account } : {}),
+      }
+    },
   })
   const devin = createDevin()
   try { await devin.refreshModels() } catch { /* Missing auth or discovery must not stop daemon startup. */ }
@@ -2710,9 +2741,9 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
   if (unregisteredFreeIds.length > 0) {
     writeDaemonLog('info', `opencode-zen: unregistered free catalog rows kept for diagnostics only: ${unregisteredFreeIds.join(', ')}`)
   }
-  const catalog = createBuiltinCatalog([codeBuddy, devin, workBuddy, workBuddyAi, opencodeZen])
+  const catalog = createBuiltinCatalog([codeBuddyProvider, devin, workBuddy, workBuddyAi, opencodeZen])
   const providerRuntime = createBuiltinProviderRuntime({
-    providers: [codeBuddy, devin, workBuddy, workBuddyAi, opencodeZen],
+    providers: [codeBuddyProvider, devin, workBuddy, workBuddyAi, opencodeZen],
     // The ChatGPT subscription gateway credential is read and refreshed through
     // the existing Codex native auth path (honoring the native CODEX_HOME or the
     // user home); the providers package authors no login of its own.
@@ -2788,7 +2819,7 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
     setAgentExecutionSupervisor(supervisor)
     setTaskWorkflowRunner(runner)
 
-    return { db, repoWriteLocks, supervisor, runner, execService, operationComponents, operationAdapter, catalog, providerRuntime, workBuddyProviders: [workBuddy, workBuddyAi], dispatchPlans, taskDispatchResolver }
+    return { db, repoWriteLocks, supervisor, runner, execService, operationComponents, operationAdapter, catalog, providerRuntime, workBuddyProviders: [workBuddy, workBuddyAi], codeBuddyProvider, dispatchPlans, taskDispatchResolver }
   } catch (error) {
     releaseDaemonDb()
     throw error

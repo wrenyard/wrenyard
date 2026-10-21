@@ -40,6 +40,12 @@ export interface CodeBuddyActiveSnapshot {
 /** Product and account facts supplied by the composition root. This module does not read the install. */
 export interface CodeBuddyProviderProduct {
   readonly status: 'ready' | 'unavailable';
+  /**
+   * Safe, actionable discovery reason from the install read (for example
+   * 'configuration request timed out'). Distinct from credential presence and
+   * route availability so an unavailable catalog still explains itself.
+   */
+  readonly reason?: string;
   readonly environment: CodeBuddyEnvironment;
   readonly entries: readonly CodeBuddyProductModelEntry[];
   readonly identity?: CodeBuddyClientIdentity;
@@ -206,11 +212,16 @@ type CodeBuddyProviderAccount = NonNullable<CodeBuddyProviderProduct['account']>
 export function createCodeBuddyRuntime(
   product: CodeBuddyProviderProduct | undefined,
   state: CodeBuddyModels,
-  loadAccount?: () => Promise<CodeBuddyProviderProduct['account'] | undefined>,
+  loadAccount?: (environment: CodeBuddyEnvironment) => Promise<CodeBuddyProviderProduct['account'] | undefined>,
+  discover?: () => Promise<CodeBuddyProviderProduct | undefined>,
 ) {
   const routing = createModelRouting(state);
-  const ready = product?.status === 'ready' ? product : undefined;
-  const environment = ready?.environment ?? 'unknown';
+  // Readiness is current state, re-evaluated by sync() on a fresh discovery
+  // rather than frozen at construction: a startup-unavailable product does not
+  // permanently lock this instance's catalog.
+  let ready = product?.status === 'ready' ? product : undefined;
+  let discoveryReason: string | undefined = ready ? undefined : product?.reason;
+  let environment = ready?.environment ?? 'unknown';
   const environments = new WeakMap<CodeBuddyCredential, CodeBuddyEnvironment>();
   // The last resolved credential/account pair. It starts from the product
   // snapshot account and is refreshed by the loader; a loader failure keeps the
@@ -222,6 +233,9 @@ export function createCodeBuddyRuntime(
     // reuses the exact frozen object (and its registered environment) while
     // still rebinding account.headers onto it, a rotated token mints a new one.
     if (last && last.credential.value === account.accessToken) {
+      // A reused credential still tracks the current environment so an
+      // environment switch under the same token rescopes free-supply/quota.
+      environments.set(last.credential, environment);
       if (account.headers) codeBuddyNativeHeaders.set(last.credential, account.headers);
       return { credential: last.credential, account };
     }
@@ -233,6 +247,29 @@ export function createCodeBuddyRuntime(
   const startupAccount = ready?.account;
   if (startupAccount?.accessToken) last = bind(startupAccount);
   /**
+   * Apply a freshly discovered product snapshot: readiness, the safe discovery
+   * reason, the environment and the snapshot account all move together so a
+   * recovered install republishes its catalog without recreating the runtime.
+   */
+  function sync(next: CodeBuddyProviderProduct | undefined): void {
+    ready = next?.status === 'ready' ? next : undefined;
+    discoveryReason = ready ? undefined : next?.reason;
+    environment = ready?.environment ?? 'unknown';
+    last = ready?.account?.accessToken ? bind(ready.account) : undefined;
+    state.publish(ready?.entries ?? []);
+  }
+  /**
+   * Run the injected discovery again and publish the result: install,
+   * account, environment and the `/v3/config` model list are re-read together,
+   * so a previously failed startup discovery recovers without a restart. The
+   * whole snapshot is applied at once, so an account/environment change never
+   * reuses the old model mappings or quota scope.
+   */
+  async function refresh(): Promise<void> {
+    if (!discover) return;
+    sync(await discover());
+  }
+  /**
    * Resolve the current account on every call. With no loader the startup
    * account is used; with a loader a rotated token is picked up immediately, a
    * loader error keeps the last resolved pair, and an undefined/empty result
@@ -240,11 +277,10 @@ export function createCodeBuddyRuntime(
    * signed-out account's old token.
    */
   async function current(): Promise<{ credential: CodeBuddyCredential; account: CodeBuddyProviderAccount } | undefined> {
-    if (!ready) return undefined;
     if (!loadAccount) return last;
     let account: CodeBuddyProviderProduct['account'];
     try {
-      account = await loadAccount();
+      account = await loadAccount(environment);
     } catch {
       return last;
     }
@@ -357,6 +393,16 @@ export function createCodeBuddyRuntime(
     },
     async clientIdentity(): Promise<CodeBuddyClientIdentity | undefined> {
       return ready?.identity;
+    },
+    refresh,
+    /**
+     * Current discovery state distinct from credential presence and route
+     * availability: an unavailable discovery still reports its safe,
+     * actionable reason even when zero models are offered, so a healthy
+     * credential is never reported as simply signed out.
+     */
+    discovery(): { status: 'ready' | 'unavailable'; reason?: string } {
+      return ready ? { status: 'ready' } : { status: 'unavailable', ...(discoveryReason ? { reason: discoveryReason } : {}) };
     },
   };
 }

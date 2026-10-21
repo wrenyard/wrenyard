@@ -285,13 +285,14 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
 }
 
 export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEntry[]) {
-  const built = buildCodeBuddyOfferings(entries);
-  const upstreamModels: Readonly<Record<string, string>> = Object.freeze(built.upstreamByCanonical);
-  // The declared ladder of each offering that has one, keyed by the offering's
-  // own id. A route with no ladder has no level to materialize.
-  const effortLadders: Readonly<Record<string, readonly ReasoningEffort[]>> = Object.fromEntries(
-    built.models.flatMap((entry) => entry.reasoningEfforts.length === 0 ? [] : [[entry.id, entry.reasoningEfforts] as const]),
-  );
+  // Mutable bindings swapped in place by publish(): routing reads state through
+  // this same object, so a fresh discovery replaces every dependent view
+  // (offerings, aliases, wire map, effort ladders) atomically without
+  // rebuilding the provider.
+  const state = {
+    upstreamModels: Object.freeze({}) as Readonly<Record<string, string>>,
+    effortLadders: Object.freeze({}) as Readonly<Record<string, readonly ReasoningEffort[]>>,
+  };
   const definition: Omit<ProviderDefinition, 'models'> & { models: readonly ModelDefinition[] } = {
     id: 'codebuddy',
     displayName: 'CodeBuddy',
@@ -306,23 +307,10 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     // Measured 2026-10-19: no event for about 9 s, then the whole response in
     // about 2.5 s (visible text near 640 tok/s).
     replayedStreamModels: ['gpt-6-luna'],
-    models: built.models,
-    // Aliases only target currently offered models, and only where they do not
-    // collide with an exact offered endpoint id. Outbound wire ids are the
-    // endpoint row ids themselves.
-    modelAliases: historicalAliasesFor(built.models),
-    reasoningEffortMappings: reasoningEffortMappingsFor(built.models),
-    protocols: [{
-      protocol: 'openai_chat',
-      endpoint: 'https://copilot.tencent.com/v2/chat/completions',
-      authScheme: 'bearer',
-      // Registered identity -> exact endpoint wire id. The mapping is derived
-      // from the same private bindings the native and gateway transports use.
-      upstreamModels,
-    }],
+    models: [],
     convertReasoningEffort: (modelId, effort, protocol) => {
       if (effort === 'none') {
-        const ladder = effortLadders[modelId];
+        const ladder = state.effortLadders[modelId];
         if (ladder === undefined || !ladder.includes('none')) {
           throw new Error(`CodeBuddy model ${modelId} cannot disable thinking`);
         }
@@ -334,8 +322,33 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     },
   };
 
+  const publish = (next: readonly CodeBuddyProductModelEntry[]): void => {
+    const built = buildCodeBuddyOfferings(next);
+    state.upstreamModels = Object.freeze(built.upstreamByCanonical);
+    // The declared ladder of each offering that has one, keyed by the
+    // offering's own id. A route with no ladder has no level to materialize.
+    state.effortLadders = Object.fromEntries(
+      built.models.flatMap((entry) => entry.reasoningEfforts.length === 0 ? [] : [[entry.id, entry.reasoningEfforts] as const]),
+    );
+    definition.models = built.models;
+    // Aliases only target currently offered models, and only where they do not
+    // collide with an exact offered endpoint id. Outbound wire ids are the
+    // endpoint row ids themselves.
+    definition.modelAliases = historicalAliasesFor(built.models);
+    definition.reasoningEffortMappings = reasoningEffortMappingsFor(built.models);
+    // Registered identity -> exact endpoint wire id. The mapping is derived
+    // from the same private bindings the native and gateway transports use.
+    definition.protocols = [{
+      protocol: 'openai_chat',
+      endpoint: 'https://copilot.tencent.com/v2/chat/completions',
+      authScheme: 'bearer',
+      upstreamModels: state.upstreamModels,
+    }];
+  };
+  publish(entries);
 
-  return { definition, upstreamModels };
+
+  return { definition, publish, get upstreamModels() { return state.upstreamModels; } };
 }
 
 export type CodeBuddyModels = ReturnType<typeof createCodeBuddyModels>;
