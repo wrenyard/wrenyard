@@ -45,6 +45,8 @@ function emptyDefinition(build: WorkBuddyBuild): ProviderDefinition {
     description: `${build.displayName} 模型供应。`,
     setupHint: build.setupHint,
     credentialResolver: 'workbuddy',
+    // The CN endpoint can return prose even when the requested tool is required.
+    ignoresForcedToolChoice: build.id === 'workbuddy',
     models: [],
     protocols: [{
       protocol: 'openai_chat',
