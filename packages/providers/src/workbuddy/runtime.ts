@@ -12,12 +12,16 @@ import { codeBuddyProtocolError } from '../codebuddy/route-errors.ts';
 import { productCreditsAreFree } from '../codebuddy/product.ts';
 import type { WorkBuddyBuild } from './definition.ts';
 import {
+  classifyWorkBuddyAccountIdentity,
   meterAuthHeaders,
   nativeHeadersForSession,
   readPersistedAuth,
   refreshWorkBuddyAuth,
+  resetWorkBuddyAuthCaches,
   resolveWorkBuddySession,
   sessionFromAuth,
+  type WorkBuddyAccountIdentity,
+  type WorkBuddyAccountKind,
   type WorkBuddyCredentialStore,
   type WorkBuddySession,
   type WorkBuddyStoredAuth,
@@ -50,6 +54,14 @@ interface WorkBuddyRound {
 
 const nativeHeaders = new WeakMap<WorkBuddyProviderCredential, Readonly<Record<string, string>>>();
 const sessionByCredential = new WeakMap<WorkBuddyProviderCredential, WorkBuddySession>();
+
+/** Sanitized account identity exposed to daemon/routing; no tokens or ids. */
+export interface WorkBuddyAccountSummary {
+  readonly kind: WorkBuddyAccountKind;
+  readonly domain?: string;
+}
+
+const accountByCredential = new WeakMap<WorkBuddyProviderCredential, WorkBuddyAccountSummary>();
 
 const ROUND_TTL_MS = 30 * 60 * 1000;
 const ROUND_CACHE_LIMIT = 512;
@@ -102,6 +114,30 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
   let catalogExpires = 0;
   let catalogRetryAt = 0;
   let pendingCatalog: Promise<void> | undefined;
+  let lastAccount: WorkBuddyAccountIdentity | undefined;
+
+  /**
+   * Binds the login type observed on the newest read and returns it. A changed
+   * login type drops every cache derived from the previous one (catalog,
+   * conversation rounds, renewal dedupe) so the new type's quota source and
+   * validation path are used instead of the old type's retained state.
+   */
+  function observeAccount(session: WorkBuddySession): WorkBuddyAccountIdentity {
+    const identity = classifyWorkBuddyAccountIdentity(session);
+    if (lastAccount !== undefined && lastAccount.kind !== identity.kind) resetAccountState();
+    lastAccount = identity;
+    return identity;
+  }
+
+  /** Clears every per-login cache; the next read rebinds the current login. */
+  function resetAccountState(): void {
+    rounds.clear();
+    catalogExpires = 0;
+    catalogRetryAt = 0;
+    pendingCatalog = undefined;
+    lastAccount = undefined;
+    resetWorkBuddyAuthCaches();
+  }
 
   const round = (key: string, continues: boolean, nowMs: number): WorkBuddyRound => {
     for (const [entryKey, entry] of rounds) {
@@ -129,7 +165,13 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
     const credential = Object.freeze({ value: session.accessToken }) as WorkBuddyProviderCredential;
     nativeHeaders.set(credential, nativeHeadersForSession(session));
     sessionByCredential.set(credential, session);
+    accountByCredential.set(credential, Object.freeze(accountSummaryOf(session)));
     return credential;
+  }
+
+  function accountSummaryOf(session: WorkBuddySession): WorkBuddyAccountSummary {
+    const kind = classifyWorkBuddyAccountIdentity(session).kind;
+    return session.domain ? { kind, domain: session.domain } : { kind };
   }
 
   async function fetchCatalog(session: WorkBuddySession, signal?: AbortSignal): Promise<void> {
@@ -181,6 +223,8 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
     if (Array.isArray(summaryRoot.CreditGroups)) return summaryPayload;
     const packages = summaryRoot.Packages;
     if (Array.isArray(packages) && packages.length > 0) return summaryPayload;
+    // iOA reports no authoritative enterprise usage; never call its endpoint.
+    if (classifyWorkBuddyAccountIdentity(session).kind === 'ioa') return summaryPayload;
     if (!session.enterpriseId?.trim()) return summaryPayload;
     const usageResponse = await fetchImpl(enterpriseUserUsageUrl(store.build), {
       method: 'POST',
@@ -259,6 +303,7 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
     async credential(signal?: AbortSignal): Promise<WorkBuddyProviderCredential | undefined> {
       const session = await resolveWorkBuddySession(store, signal ?? AbortSignal.timeout(30_000), fetchImpl);
       if (!session) return undefined;
+      observeAccount(session);
       const credential = bindCredential(session);
       await ensureCatalog(session, signal);
       return credential;
@@ -269,6 +314,7 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
       if (!stored) throw new Error('WorkBuddy credential is not refreshable');
       const refreshed = await refreshWorkBuddyAuth(store, stored, signal, fetchImpl);
       if (!refreshed) throw new Error('WorkBuddy credential refresh failed');
+      observeAccount(sessionFromAuth(refreshed));
       return bindCredential(sessionFromAuth(refreshed));
     },
     resolveUpstreamModel(model: string): string {
@@ -310,12 +356,26 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
       const bounded = signal ?? AbortSignal.timeout(30_000);
       const session = await resolveWorkBuddySession(store, bounded, fetchImpl);
       if (!session) return undefined;
+      observeAccount(session);
       const data = await fetchQuotaSnapshot(session, bounded);
       return {
         source: `${store.build.id}.meter`,
         fetched_at: new Date().toISOString(),
         data,
       };
+    },
+    accountKind(): WorkBuddyAccountKind | undefined {
+      return lastAccount?.kind;
+    },
+    accountIdentity(): WorkBuddyAccountIdentity | undefined {
+      return lastAccount;
+    },
+    accountForCredential(credential: ProviderCredential): WorkBuddyAccountSummary | undefined {
+      return accountByCredential.get(credential as WorkBuddyProviderCredential);
+    },
+    /** Explicit account switch: every per-login cache is rebuilt on next read. */
+    resetAccount(): void {
+      resetAccountState();
     },
     async persistBrowserAuth(auth: WorkBuddyStoredAuth): Promise<void> {
       await writePersistedAuth(store, auth);

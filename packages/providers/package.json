@@ -9,6 +9,7 @@
     "./base": "./src/base/index.ts",
     "./catalog": "./src/base/catalog.ts",
     "./codebuddy": "./src/codebuddy/index.ts",
+    "./workbuddy": "./src/workbuddy/index.ts",
     "./chatgpt": "./src/chatgpt/index.ts"
   },
   "scripts": {

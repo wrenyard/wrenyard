@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { resolveWrenyardStateRoot } from '@wrenyard/paths';
@@ -25,12 +25,73 @@ export interface WorkBuddyStoredAuth {
   readonly tokenType?: string;
   readonly uid?: string;
   readonly enterpriseId?: string;
+  readonly accountType?: string;
+  readonly idp?: string;
   readonly plan?: string;
 }
 
 export interface WorkBuddySession extends WorkBuddyStoredAuth {
   readonly fingerprint: string;
 }
+
+export type WorkBuddyAccountKind = 'ioa' | 'personal' | 'enterprise' | 'unknown';
+
+/**
+ * Classifies the signed-in WorkBuddy account from verified auth metadata only.
+ * iOA requires an explicit signal: idp === 'ioa_auth', or the auth domain
+ * matching this build's known iOA domain reference. enterpriseId alone is
+ * enterprise, not iOA; missing metadata is 'unknown', never 'personal'.
+ */
+export function classifyWorkBuddyAccount(source: {
+  readonly uid?: string;
+  readonly enterpriseId?: string;
+  readonly domain?: string;
+  readonly accountType?: string;
+  readonly idp?: string;
+}): WorkBuddyAccountKind {
+  const enterpriseId = source.enterpriseId?.trim();
+  const domain = source.domain?.trim();
+  const idp = source.idp?.trim();
+  if (idp === 'ioa_auth' || (domain !== undefined && WORKBUDDY_IOA_DOMAINS.includes(domain))) return 'ioa';
+  if (enterpriseId) return 'enterprise';
+  if (source.uid?.trim()) return 'personal';
+  return 'unknown';
+}
+
+/**
+ * The verified account identity of one login: the classified kind plus the raw
+ * metadata that produced it. `accountType`/`idp` stay optional and verbatim —
+ * they are routing and display facts, never credentials — so a login whose
+ * account block reports neither keeps them absent instead of defaulting them.
+ */
+export interface WorkBuddyAccountIdentity {
+  readonly kind: WorkBuddyAccountKind;
+  readonly accountType?: string;
+  readonly idp?: string;
+}
+
+export function classifyWorkBuddyAccountIdentity(source: {
+  readonly uid?: string;
+  readonly enterpriseId?: string;
+  readonly domain?: string;
+  readonly accountType?: string;
+  readonly idp?: string;
+}): WorkBuddyAccountIdentity {
+  const accountType = source.accountType?.trim();
+  const idp = source.idp?.trim();
+  return {
+    kind: classifyWorkBuddyAccount(source),
+    ...(accountType ? { accountType } : {}),
+    ...(idp ? { idp } : {}),
+  };
+}
+
+/**
+ * iOA login domains known to this build. WorkBuddy ships no product.json-style
+ * authentication attributes; the reference is the CN build root's host, which
+ * the iOA SSO account block reports as its domain.
+ */
+const WORKBUDDY_IOA_DOMAINS: readonly string[] = ['copilot.tencent.com'];
 
 export interface WorkBuddyCredentialStore {
   readonly context: ProviderContext;
@@ -83,6 +144,8 @@ function parseStoredAuth(raw: unknown): WorkBuddyStoredAuth | undefined {
     ...(typeof raw.tokenType === 'string' && raw.tokenType.trim() ? { tokenType: raw.tokenType.trim() } : {}),
     ...(typeof raw.uid === 'string' && raw.uid.trim() ? { uid: raw.uid.trim() } : {}),
     ...(typeof raw.enterpriseId === 'string' && raw.enterpriseId.trim() ? { enterpriseId: raw.enterpriseId.trim() } : {}),
+    ...(typeof raw.accountType === 'string' && raw.accountType.trim() ? { accountType: raw.accountType.trim() } : {}),
+    ...(typeof raw.idp === 'string' && raw.idp.trim() ? { idp: raw.idp.trim() } : {}),
     ...(typeof raw.plan === 'string' && raw.plan.trim() ? { plan: raw.plan.trim() } : {}),
   };
 }
@@ -100,6 +163,25 @@ function accessExpired(auth: WorkBuddyStoredAuth, nowMs: number): boolean {
 function refreshExpired(auth: WorkBuddyStoredAuth, nowMs: number): boolean {
   if (auth.refreshExpiresAt === undefined) return false;
   return auth.refreshExpiresAt <= nowMs;
+}
+
+/**
+ * Drops the in-process token-renewal caches. An explicit account switch hands
+ * the next read a different login, so a renewal result or an in-flight renewal
+ * of the previous login can never be reused for the new one.
+ */
+export function resetWorkBuddyAuthCaches(): void {
+  renewingByRefreshToken.clear();
+  renewedByRefreshToken.clear();
+}
+
+export async function deletePersistedAuth(store: WorkBuddyCredentialStore): Promise<void> {
+  try {
+    await unlink(persistencePath(store.context, store.build.id));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
 }
 
 export async function readPersistedAuth(store: WorkBuddyCredentialStore): Promise<WorkBuddyStoredAuth | undefined> {
@@ -156,6 +238,8 @@ export async function readDesktopAuth(store: WorkBuddyCredentialStore): Promise<
   const tokenType = typeof authBlock.tokenType === 'string' ? authBlock.tokenType.trim() : undefined;
   const uid = account && typeof account.uid === 'string' ? account.uid.trim() : undefined;
   const enterpriseId = account && typeof account.enterpriseId === 'string' ? account.enterpriseId.trim() : undefined;
+  const accountType = account && typeof account.accountType === 'string' ? account.accountType.trim() : undefined;
+  const idp = account && typeof account.idp === 'string' ? account.idp.trim() : undefined;
   const auth: WorkBuddyStoredAuth = {
     accessToken,
     ...(refreshToken ? { refreshToken } : {}),
@@ -165,6 +249,8 @@ export async function readDesktopAuth(store: WorkBuddyCredentialStore): Promise<
     ...(tokenType ? { tokenType } : {}),
     ...(uid ? { uid } : {}),
     ...(enterpriseId ? { enterpriseId } : {}),
+    ...(accountType ? { accountType } : {}),
+    ...(idp ? { idp } : {}),
   };
   if (accessExpired(auth, Date.now()) && !refreshToken) return { kind: 'missing' };
   return { kind: 'ok', auth };
@@ -222,6 +308,8 @@ function mergeRefreshedTokens(previous: WorkBuddyStoredAuth, next: WorkBuddyStor
     ...(next.tokenType ? { tokenType: next.tokenType } : previous.tokenType ? { tokenType: previous.tokenType } : {}),
     ...(previous.uid ? { uid: previous.uid } : {}),
     ...(previous.enterpriseId ? { enterpriseId: previous.enterpriseId } : {}),
+    ...(next.accountType ? { accountType: next.accountType } : previous.accountType ? { accountType: previous.accountType } : {}),
+    ...(next.idp ? { idp: next.idp } : previous.idp ? { idp: previous.idp } : {}),
     ...(previous.plan ? { plan: previous.plan } : {}),
   };
 }
@@ -301,6 +389,10 @@ function parseRefreshPayload(data: Record<string, unknown>, previous: WorkBuddyS
   const tokenType = typeof data.tokenType === 'string' && data.tokenType.trim() ? data.tokenType.trim() : previous.tokenType;
   const expiresAt = coerceExpiry(data.expiresAt, data.expiresIn) ?? previous.expiresAt;
   const refreshExpiresAt = coerceExpiry(data.refreshExpiresAt, data.refreshExpiresIn) ?? previous.refreshExpiresAt;
+  const accountType = typeof data.accountType === 'string' && data.accountType.trim()
+    ? data.accountType.trim()
+    : previous.accountType;
+  const idp = typeof data.idp === 'string' && data.idp.trim() ? data.idp.trim() : previous.idp;
   return {
     accessToken,
     ...(refreshToken ? { refreshToken } : {}),
@@ -310,6 +402,8 @@ function parseRefreshPayload(data: Record<string, unknown>, previous: WorkBuddyS
     ...(tokenType ? { tokenType } : {}),
     ...(previous.uid ? { uid: previous.uid } : {}),
     ...(previous.enterpriseId ? { enterpriseId: previous.enterpriseId } : {}),
+    ...(accountType ? { accountType } : {}),
+    ...(idp ? { idp } : {}),
     ...(previous.plan ? { plan: previous.plan } : {}),
   };
 }
@@ -483,10 +577,14 @@ async function finalizeWorkBuddyLoginAccount(
     const uid = typeof data.uid === 'string' ? data.uid.trim() : undefined;
     const enterpriseId = typeof data.enterpriseId === 'string' ? data.enterpriseId.trim() : undefined;
     const domain = typeof data.domain === 'string' ? data.domain.trim() : auth.domain;
+    const accountType = typeof data.accountType === 'string' ? data.accountType.trim() : undefined;
+    const idp = typeof data.idp === 'string' ? data.idp.trim() : undefined;
     return {
       ...auth,
       ...(uid ? { uid } : {}),
       ...(enterpriseId ? { enterpriseId } : {}),
+      ...(accountType ? { accountType } : {}),
+      ...(idp ? { idp } : {}),
       ...(domain ? { domain } : {}),
     };
   }

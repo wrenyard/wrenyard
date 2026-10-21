@@ -23,4 +23,13 @@ export interface QuotaSnapshot {
     readonly resets_at?: string;
   }[];
   readonly not_applicable_windows?: readonly string[];
+  /**
+   * Verified login type of the account this observation was read from, carried
+   * verbatim from the provider's own account block. Absent when the provider
+   * reports none; never derived from quota amounts.
+   */
+  readonly accountType?: string;
+  /** Verified identity provider of that login (e.g. `ioa_auth`). Absent when
+   * the provider reports none. */
+  readonly idp?: string;
 }
