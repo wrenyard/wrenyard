@@ -95,13 +95,24 @@ function pathsFromPorcelain(output: string): string[] {
 }
 
 async function collectChangedFilesWithBaseline(cwd: string, head: string): Promise<string[]> {
+  const lines: string[] = []
   try {
-    const result = await runGit(cwd, ['diff', '--name-only', head])
-    if (result.code !== 0) return []
-    return uniqueSortedPaths(result.stdout.split('\n'))
+    const diffResult = await runGit(cwd, ['diff', '--name-only', head])
+    if (diffResult.code === 0) {
+      lines.push(...diffResult.stdout.split('\n'))
+    }
   } catch {
-    return []
+    // diff failure contributes no paths
   }
+  try {
+    const untrackedResult = await runGit(cwd, ['ls-files', '--others', '--exclude-standard'])
+    if (untrackedResult.code === 0) {
+      lines.push(...untrackedResult.stdout.split('\n'))
+    }
+  } catch {
+    // untracked listing failure contributes no paths
+  }
+  return uniqueSortedPaths(lines)
 }
 
 async function collectCommitsWithBaseline(cwd: string, head: string): Promise<Array<{ sha: string; subject: string }>> {
