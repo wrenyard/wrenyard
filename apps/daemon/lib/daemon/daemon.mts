@@ -45,7 +45,7 @@ import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
 import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/agent-supervisor.mts'
 import { TaskWorkflowRunner } from './execution/task-workflow-runner.mts'
-import type { TaskRouteFaultState, TaskRouteStateHooks } from '../types.mts'
+import type { TaskRouteStateHooks } from '../types.mts'
 import { RepoWriteLocks } from './execution/repo-write-locks.mts'
 import { acquireInstanceLock, releaseInstanceLock } from './instance-lock.mts'
 import { createTaskGraphService } from './services/taskgraph-service.mts'
@@ -1080,8 +1080,12 @@ async function createForemanDaemonResources(
       } catch {
         return undefined
       }
+      const routeKey = `${provider}/${bareModel}`
       // A structured-output delivery failure is already classified.
-      if ('state' in fault) return gateway.reportNativeRouteFault(provider, bareModel, fault, guard)
+      if ('state' in fault) {
+        gateway.reportNativeRouteFault(provider, bareModel, fault, guard)
+        return gateway.routeStatus(routeKey)
+      }
       const providerDefinition = catalog.provider(provider)
       if (providerDefinition === undefined) return undefined
       // The provider hook reads the error identity exactly as it would from a
@@ -1097,9 +1101,9 @@ async function createForemanDaemonResources(
           }
       const failure = classifyRouteFailure(providerDefinition, bareModel, fault.status, new Headers(), body, Date.now())
       if (failure === undefined) return undefined
-      return gateway.reportNativeRouteFault(provider, bareModel, failure, guard)
+      gateway.reportNativeRouteFault(provider, bareModel, failure, guard)
+      return gateway.routeStatus(routeKey)
     },
-    faultState: (provider, model) => sharedRouteFaultState(gateway, provider, model),
   }
 
   /**
@@ -2430,30 +2434,6 @@ function blockedSharedTaskRoute(
   }
   const shared = gateway.routeStatus(`${provider}/${parsed.model}`)
   return shared?.phase === 'open' ? shared : undefined
-}
-
-/**
- * Read-only projection of the shared route circuit's currently open fault for
- * one exact route/pool: the two pool states an automatic submission may retry
- * on, `other` for every other open state, and undefined when the route is
- * healthy. It never admits, probes or mutates route health; it only reads the
- * fault the failed attempt already left in the one shared circuit.
- */
-function sharedRouteFaultState(
-  gateway: ModelGateway,
-  provider: string,
-  model: string,
-): TaskRouteFaultState | undefined {
-  let parsed: ReturnType<typeof parseRunSyntax>
-  try {
-    parsed = parseRunSyntax(`${provider}/${model}`)
-  } catch {
-    return undefined
-  }
-  const shared = gateway.routeStatus(`${provider}/${parsed.model}`)
-  if (shared === undefined || shared.phase === 'closed') return undefined
-  if (shared.state === 'quota_exhausted' || shared.state === 'rate_limited' || shared.state === 'model_unavailable' || shared.state === 'access_denied') return shared.state
-  return 'other'
 }
 
 type DaemonGatewayConnection = import('@wrenyard/gateway').GatewayConnection & { token: string }

@@ -36,7 +36,7 @@ import {
 import { collectStructuredOutput, firstPrompt, type StructuredOutputAgent } from '@wrenyard/task'
 import { requireClient } from '@wrenyard/clients'
 import { parseRunSyntax } from '@wrenyard/providers/catalog'
-import type { RouteGuard } from '@wrenyard/gateway'
+import type { RouteGuard, RouteStatus } from '@wrenyard/gateway'
 import {
   createTaskArtifactDirectory,
   outputSchemaDeclaresArtifacts,
@@ -475,7 +475,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       }
     }
 
-    // Resolve task settings once per route attempt. The daemon TaskSettingsService
+    // Resolve task settings once per task run. The daemon TaskSettingsService
     // owns field merging and readiness; its result is authoritative: the
     // canonical exact target chosen by automatic selection is the only launched
     // runtime, the dispatch snapshot feeds telemetry, and the effective timeout
@@ -483,12 +483,8 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     // on the resolution contract; a null target terminates the run with no
     // fallback runtime or stale agentRuntime pin.
     //
-    // Automatic submissions may retry the next eligible route when the selected
-    // route is still circuit-open with a quota/rate-limit fault before any
-    // structured output: the shared circuit already refuses that route, so a
-    // fresh resolution ranks the next eligible one. Explicit pins, every other
-    // fault state and every other failure keep the single-launch behavior, and
-    // each launch produces its own dispatch row.
+    // Each task run resolves at most one route and launches at most one attempt;
+    // the caller decides whether to dispatch again.
     const taskConfig = config
     let resolution: TaskRunSettingsResolution | undefined
     const resolveRunSettings = async (): Promise<void> => {
@@ -532,6 +528,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     assertTaskStillActive(taskId)
     let structuredSummary: string | undefined
     let truncatedByTimeLimit = false
+    let routeFaultSnapshot: RouteStatus | undefined
 
     const launchAttempt = async (): Promise<void> => {
       // ── Native-task route state ──
@@ -615,7 +612,12 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
             // Cancellation, time budget and functional task failures never
             // reach this hook.
             routeSettled = true
-            options.taskRouteState.fault(routeIdentity.provider, routeIdentity.model, routeGuard, fault)
+            routeFaultSnapshot = options.taskRouteState.fault(
+              routeIdentity.provider,
+              routeIdentity.model,
+              routeGuard,
+              fault,
+            )
           }
         },
         beforeAttempt: () => assertTaskStillActive(taskId),
@@ -704,48 +706,15 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       }
     }
 
-    // Bounded route retry: an automatic submission whose just-used route/pool is
-    // still circuit-open with a quota/rate-limit fault and which produced no
-    // structured output advances to the next eligible route, up to the cap.
-    // A timeout never advances: the route did work, and the failed run returns
-    // that work to the caller, who decides how to continue.
-    // Every other outcome — any other fault state, cancellation,
-    // an unresolvable or unchanged re-resolution, an exhausted budget — keeps
-    // today's terminal behavior and surfaces the attempt's own error.
-    const MAX_ROUTE_ATTEMPTS = 3
-    let routeAttempt = 0
-    let attemptError: unknown = undefined
-    for (;;) {
-      routeAttempt += 1
-      // Cancellation/deadline check between attempts: a stop observed after one
-      // route's failure refuses the next launch instead of retrying it.
-      assertTaskStillActive(taskId)
-      if (options.taskSettingsResolver) {
-        const previousTarget = exactAgentRuntime
-        await resolveRunSettings()
-        // A re-resolution that cannot leave the failed route makes no progress;
-        // surface the attempt's own error instead of relaunching that route.
-        if (routeAttempt > 1 && exactAgentRuntime === previousTarget) throw attemptError
-      } else if (routeAttempt > 1) {
-        // An isolated/legacy launch never resolves a second route.
-        throw attemptError
-      }
-      try {
-        await launchAttempt()
-        break
-      } catch (error) {
-        const identity = exactAgentRuntime !== undefined ? routeIdentityOf(exactAgentRuntime) : undefined
-        const faultKind = identity !== undefined
-          ? options.taskRouteState?.faultState(identity.provider, identity.model)
-          : undefined
-        const retryable = options.taskSettingsResolver !== undefined
-          && identity !== undefined
-          && structuredSummary === undefined
-          && (faultKind === 'quota_exhausted' || faultKind === 'rate_limited' || faultKind === 'model_unavailable' || faultKind === 'access_denied')
-          && routeAttempt < MAX_ROUTE_ATTEMPTS
-        if (!retryable) throw error
-        attemptError = error
-      }
+    assertTaskStillActive(taskId)
+    if (options.taskSettingsResolver) {
+      await resolveRunSettings()
+    }
+    try {
+      await launchAttempt()
+    } catch (error) {
+      const identity = exactAgentRuntime !== undefined ? routeIdentityOf(exactAgentRuntime) : undefined
+      throw enrichTaskLaunchFailure(error, identity, routeFaultSnapshot)
     }
 
     // `truncatedByTimeLimit` marks a result produced by the time-limit warning
@@ -841,12 +810,47 @@ function createKernelTaskRunId(): string {
   return `task_${randomBytes(4).toString('hex')}`
 }
 
+function enrichTaskLaunchFailure(
+  error: unknown,
+  route: { provider: string; model: string } | undefined,
+  snapshot: RouteStatus | undefined,
+): unknown {
+  if (!(error instanceof Error) || route === undefined || snapshot === undefined || snapshot.phase !== 'open') {
+    return error
+  }
+  let bareModel = route.model
+  try {
+    bareModel = parseRunSyntax(`${route.provider}/${route.model}`).model
+  } catch {}
+  const until = snapshot.until
+  const routeKey = `${route.provider}/${bareModel}`
+  const enriched = error as Error & { error_message?: string }
+  enriched.message = `${error.message}; failed route ${routeKey} (${snapshot.state})${
+    until !== undefined && until !== '' ? `; retry after ${until}` : ''
+  }`
+  if (typeof enriched.error_message !== 'string') return enriched
+  try {
+    const parsed: unknown = JSON.parse(enriched.error_message)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return enriched
+    enriched.error_message = JSON.stringify({
+      ...(parsed as Record<string, unknown>),
+      route_provider: route.provider,
+      route_model: bareModel,
+      route_state: snapshot.state,
+      ...(until !== undefined && until !== '' ? { route_until: until } : {}),
+      ...(snapshot.faultKind !== undefined ? { route_fault_kind: snapshot.faultKind } : {}),
+    })
+  } catch {}
+  return enriched
+}
+
 /**
  * Resolve the shared route identity of a canonical `provider/model:client`
  * execution target with the canonical run-syntax helper: the provider on its
  * own, plus the route's model key explicitly client-qualified
- * (`deepseek-v4.1-flash:cb`). The `:client` suffix scopes health to that exact
- * route and is never treated as an upstream model id.
+ * (`deepseek-v4.1-flash:cb`). Each task run resolves one route; provider and
+ * model share the gateway route state and the `:client` suffix is never treated
+ * as an upstream model id.
  */
 function routeIdentityOf(exactAgentRuntime: string): { provider: string; model: string } | undefined {
   let provider: string

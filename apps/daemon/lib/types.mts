@@ -3,15 +3,8 @@ import type { TaskSettingsLayer } from './protocol/methods/task.mts'
 import type {
   Admission as GatewayRouteAdmission,
   RouteGuard as GatewayRouteGuard,
+  RouteStatus,
 } from '@wrenyard/gateway'
-
-/**
- * The read-only shared-circuit fault state of a just-used route/pool: the two
- * pool states an automatic submission may retry on, plus a catch-all for every
- * other open circuit state. `other` covers auth/model/delivery faults, which
- * must not trigger a retry.
- */
-export type TaskRouteFaultState = 'quota_exhausted' | 'rate_limited' | 'model_unavailable' | 'access_denied' | 'other'
 
 /**
  * Optional daemon-owned native-task route-state port. The daemon binds it to
@@ -30,14 +23,12 @@ export interface TaskRouteStateHooks {
    *  either the structured-output delivery failure or the upstream error the
    *  failed execution reported; an upstream error without a status records no
    *  fault. */
-  fault: (provider: string, model: string, guard: GatewayRouteGuard | undefined, fault: TaskRouteFault) => void
-  /** Read-only reduction of the shared circuit's currently open fault for one
-   *  exact route/pool: the two retryable pool states, or `other` for every
-   *  other open state, and undefined when the route is healthy. Never admits,
-   *  probes or mutates route health; the kernel uses it to retry an
-   *  automatically routed attempt on the next eligible route without any
-   *  error-text matching. */
-  faultState: (provider: string, model: string) => TaskRouteFaultState | undefined
+  fault: (
+    provider: string,
+    model: string,
+    guard: GatewayRouteGuard | undefined,
+    fault: TaskRouteFault,
+  ) => RouteStatus | undefined
 }
 
 export type JsonSchema = boolean | Record<string, unknown>
