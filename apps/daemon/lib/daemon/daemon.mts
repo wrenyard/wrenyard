@@ -53,6 +53,7 @@ import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
 import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/agent-supervisor.mts'
 import { TaskWorkflowRunner } from './execution/task-workflow-runner.mts'
 import { createTaskOutputModelCallPort, type TaskOutputModelCallPort } from './execution/task-output-model-call.mts'
+import { createTaskRunOutputCompiler, type TaskRunOutputCompiler } from '../core/task/output-compile.mts'
 import type { TaskRouteStateHooks } from '../types.mts'
 import { RepoWriteLocks } from './execution/repo-write-locks.mts'
 import { acquireInstanceLock, releaseInstanceLock } from './instance-lock.mts'
@@ -262,6 +263,8 @@ interface WorkspaceScopedResources {
   /** Bot agent kernel for this workspace; replaced whole on a hot switch. */
   botAgents: BotAgentKernel
   taskOutputModelCall: TaskOutputModelCallPort
+  /** Runs the task-output compile step for one existing run of this workspace. */
+  taskOutputCompile: TaskRunOutputCompiler
 }
 
 /**
@@ -1358,6 +1361,14 @@ async function createForemanDaemonResources(
       resolveInferenceProvider: id => catalog.provider(id),
       routeStatus: model => gateway.routeStatus(model),
     })
+    // The task-output compile runs one auxiliary model call per finished run on
+    // demand, outside any session, through this workspace's own routes. It
+    // reuses the same model-call port as the execution kernel's compile step.
+    const taskOutputCompile: TaskRunOutputCompiler = createTaskRunOutputCompiler({
+      workspaceRoot,
+      taskService,
+      modelCall: taskOutputModelCall,
+    })
     const daemonSessionHost = createDaemonSessionHost({
       workspaceRoot,
       stateRoot: sessionStateRoot,
@@ -1449,6 +1460,7 @@ async function createForemanDaemonResources(
       scheduler,
       botAgents,
       taskOutputModelCall,
+      taskOutputCompile,
     }
   }
 
@@ -1460,6 +1472,7 @@ async function createForemanDaemonResources(
     coreOptions.taskSettings = bindings.taskSettingsService
     coreOptions.workspaceDocService = bindings.workspaceDocService
     coreOptions.workspaceTodoService = bindings.workspaceTodoService
+    coreOptions.taskOutputCompile = bindings.taskOutputCompile
   }
 
   /**

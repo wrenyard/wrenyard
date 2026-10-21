@@ -286,6 +286,8 @@ import {
   taskRunEventsResultSchema,
   taskRunListParamsSchema,
   taskRunListResultSchema,
+  taskRunCompileParamsSchema,
+  taskRunCompileResultSchema,
   taskRunOutputParamsSchema,
   taskRunOutputResultSchema,
   taskRunStatusParamsSchema,
@@ -298,6 +300,8 @@ import {
   type TaskDefinitionListResult,
   type TaskRunCancelParams,
   type TaskRunCancelResult,
+  type TaskRunCompileParams,
+  type TaskRunCompileResult,
   type TaskRunCreateParams,
   type TaskRunCreateResult,
   type TaskRunEventsParams,
@@ -657,6 +661,8 @@ export type {
   TaskDefinitionListResult,
   TaskRunCancelParams,
   TaskRunCancelResult,
+  TaskRunCompileParams,
+  TaskRunCompileResult,
   TaskRunCreateParams,
   TaskRunCreateResult,
   TaskRunEventsParams,
@@ -866,6 +872,7 @@ export interface ForemanMethodParams {
   'task.run.list': TaskRunListParams
   'task.run.status': TaskRunStatusParams
   'task.run.output': TaskRunOutputParams
+  'task.run.compile': TaskRunCompileParams
   'task.run.wait': TaskRunWaitParams
   'task.run.cancel': TaskRunCancelParams
   'task.run.events': TaskRunEventsParams
@@ -980,6 +987,7 @@ export interface ForemanMethodResults {
   'task.run.list': TaskRunListResult
   'task.run.status': TaskRunStatusResult
   'task.run.output': TaskRunOutputResult
+  'task.run.compile': TaskRunCompileResult
   'task.run.wait': TaskRunWaitResult
   'task.run.cancel': TaskRunCancelResult
   'task.run.events': TaskRunEventsResult
@@ -1189,6 +1197,10 @@ export const methodRegistry: {
   'task.run.output': {
     params: taskRunOutputParamsSchema,
     result: taskRunOutputResultSchema,
+  },
+  'task.run.compile': {
+    params: taskRunCompileParamsSchema,
+    result: taskRunCompileResultSchema,
   },
   'task.run.wait': {
     params: taskRunWaitParamsSchema,

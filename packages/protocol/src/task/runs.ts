@@ -156,6 +156,26 @@ export interface TaskRunWaitParams {
 /** Reuses the authoritative complete task run output returned by task.run.output. */
 export type TaskRunWaitResult = TaskRunOutputResult
 
+export interface TaskRunCompileParams {
+  task_run_id: string
+}
+
+/**
+ * The result of running the task-output compile step for one existing run.
+ * `ok` means `output` is schema-valid; otherwise `compile_error` carries why
+ * the compile failed and `report`/`facts` repeat what the run recorded.
+ */
+export interface TaskRunCompileResult {
+  task_run_id: string
+  ok: boolean
+  /** The schema-valid compiled output; only present when `ok` is true. */
+  output?: unknown
+  /** Why the compile failed; only present when `ok` is false. */
+  compile_error?: string
+  report: string
+  facts?: TaskRunFacts
+}
+
 export interface TaskRunCancelParams {
   task_run_id: string
 }

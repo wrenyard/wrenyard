@@ -29,6 +29,8 @@ export type {
   TaskRunAccepted,
   TaskRunCancelParams,
   TaskRunCancelResult,
+  TaskRunCompileParams,
+  TaskRunCompileResult,
   TaskRunCreateParams,
   TaskRunCreateResult,
   TaskRunEventItem,
@@ -347,6 +349,22 @@ export const taskRunOutputResultSchema = {
     facts: { type: 'object' },
     pid: { type: 'number' },
     _meta: recordSchema,
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const taskRunCompileParamsSchema = taskRunStatusParamsSchema
+
+export const taskRunCompileResultSchema = {
+  type: 'object',
+  required: ['task_run_id', 'ok', 'report'],
+  properties: {
+    task_run_id: { type: 'string', minLength: 1 },
+    ok: { type: 'boolean' },
+    output: {},
+    compile_error: { type: 'string' },
+    report: { type: 'string' },
+    facts: { type: 'object' },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

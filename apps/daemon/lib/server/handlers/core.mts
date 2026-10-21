@@ -30,6 +30,7 @@ import type {
   EventListResult,
   StatsTodayResult,
   TaskRunCancelResult,
+  TaskRunCompileResult,
   TaskRunCreateResult,
   TaskRunEventsResult,
   TaskRunListResult,
@@ -196,6 +197,13 @@ export interface CoreRpcHandlerOptions {
    * private instance is created for this router only.
    */
   taskService?: TaskService
+  /**
+   * Daemon-owned task-output compile step. Runs one auxiliary model call for an
+   * existing run and returns the schema-valid output, or the compile error with
+   * the report and the facts. Optional so a context without a live daemon
+   * reports the method as unavailable instead of silently compiling nothing.
+   */
+  taskOutputCompile?: import('../../core/task/output-compile.mts').TaskRunOutputCompiler
   /**
    * Daemon-owned exact current-Catalog display-name lookup used to label recent
    * stats.summary task-run rows. Optional: contexts without it emit rows
@@ -849,6 +857,21 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       taskService.output(params.task_run_id),
       () => taskRunNotFound(params.task_run_id),
     )
+  })
+  router.register('task.run.compile', async (params) => {
+    const compile = options.taskOutputCompile
+    if (compile === undefined) {
+      throw new ProtocolError(
+        { code: INTERNAL_ERROR.code, message: 'Task output compilation is unavailable' },
+        { service: 'task', code: 'task_output_compile_unavailable', task_run_id: params.task_run_id },
+      )
+    }
+    try {
+      return toJsonShape(await compile(params.task_run_id)) as TaskRunCompileResult
+    } catch (error) {
+      if (isTaskRunNotFoundError(error, params.task_run_id)) throw taskRunNotFound(params.task_run_id)
+      throw error
+    }
   })
   router.register('task.run.cancel', async (params) => {
     try {

@@ -17,6 +17,7 @@ import {
   errorMessage,
 } from '../shared.mts'
 import type {
+  TaskRunCompileResult,
   TaskSettingsLayer,
 } from '@wrenyard/daemon/protocol/methods/task'
 import { ensureDiscovered, getLoadErrors, type DuplicateDefinitionLoadError } from '@wrenyard/daemon/workspace/task-loader'
@@ -103,9 +104,18 @@ export async function handleTaskDescribe(args: string[]): Promise<number> {
 
 const TASK_RUN_USAGE = 'Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--fast | --no-fast] [--settings-json json] [--json | --structured] <json-input>'
 
+const TASK_RUN_FLAGS_HELP = [
+  'Output flags:',
+  '  (none)         the run report followed by the facts the daemon collected',
+  '  --json         the report and the facts as one {report, facts} object',
+  '  --structured   run the compile step and print the schema-valid output, or',
+  '                 the compile error together with the report and the facts',
+].join('\n')
+
 export async function handleTaskRun(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
     console.log(TASK_RUN_USAGE)
+    console.log(TASK_RUN_FLAGS_HELP)
     return 0
   }
 
@@ -162,8 +172,13 @@ export async function handleTaskRun(args: string[]): Promise<number> {
     }
 
     const result = servicePayload(await client.task.run.wait({ task_run_id: taskRunId }))
+    const succeeded = isTaskRunSuccess(result.value)
+    if (outputMode === 'structured') {
+      writeTaskRunCompile(await client.task.run.compile({ task_run_id: taskRunId }))
+      return succeeded ? 0 : 1
+    }
     writeTaskRunResult(result.value, outputMode)
-    return isTaskRunSuccess(result.value) ? 0 : 1
+    return succeeded ? 0 : 1
   } finally {
     client.close()
   }
@@ -230,6 +245,7 @@ const TASK_OUTPUT_USAGE = 'Usage: wrenyard task output <task_run_id> [--config p
 export async function handleTaskOutput(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
     console.log(TASK_OUTPUT_USAGE)
+    console.log(TASK_RUN_FLAGS_HELP)
     return 0
   }
 
@@ -254,7 +270,12 @@ export async function handleTaskOutput(args: string[]): Promise<number> {
   }
   const client = await connectConfiguredForemanClient(values.config)
   try {
-    writeTaskRunResult(await client.task.run.output({ task_run_id: positionals[0] }), outputMode)
+    const taskRunId = positionals[0]
+    if (outputMode === 'structured') {
+      writeTaskRunCompile(await client.task.run.compile({ task_run_id: taskRunId }))
+      return 0
+    }
+    writeTaskRunResult(await client.task.run.output({ task_run_id: taskRunId }), outputMode)
   } finally {
     client.close()
   }
@@ -264,9 +285,10 @@ export async function handleTaskOutput(args: string[]): Promise<number> {
 /**
  * How one finished run is printed. `text` is the default: the run's report
  * followed by the facts the daemon collected, as plain text. `json` prints the
- * same two values as one `{report, facts}` object. `structured` prints the
- * schema output the compile step produced, or, when the compile failed, the
- * compile error together with the report and the facts.
+ * same two values as one `{report, facts}` object. `structured` runs the
+ * task-output compile step and prints the schema-valid output it produced, or,
+ * when the compile failed, the compile error together with the report and the
+ * facts.
  */
 type TaskOutputMode = 'text' | 'json' | 'structured'
 
@@ -278,11 +300,7 @@ function taskOutputMode(json: boolean, structured: boolean): TaskOutputMode | 'r
   return 'text'
 }
 
-function writeTaskRunResult(value: unknown, mode: TaskOutputMode): void {
-  if (mode === 'structured') {
-    writeServicePayload(servicePayload(structuredTaskRunOutput(value)))
-    return
-  }
+function writeTaskRunResult(value: unknown, mode: Exclude<TaskOutputMode, 'structured'>): void {
   const report = taskRunReport(value)
   const facts = taskRunFacts(value)
   if (mode === 'json') {
@@ -319,15 +337,20 @@ function taskRunFacts(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * The schema output the run recorded. A compile failure records
- * `{report, facts, compileError}` instead of a schema value, and that record is
- * passed through unchanged so the operator sees the compile error with the
- * report and the facts.
+ * The result of the task-output compile step: the schema-valid output, or, when
+ * the compile failed, the compile error together with the report and the facts
+ * it could not compile.
  */
-function structuredTaskRunOutput(value: unknown): unknown {
-  const record = asRecord(value)
-  if (!record) return value
-  return record['output'] ?? null
+function writeTaskRunCompile(compiled: TaskRunCompileResult): void {
+  if (compiled.ok) {
+    writeServicePayload(servicePayload(compiled.output ?? null))
+    return
+  }
+  writeServicePayload(servicePayload({
+    compileError: compiled.compile_error ?? '',
+    report: compiled.report,
+    facts: compiled.facts ?? null,
+  }))
 }
 
 /** One run's report followed by its facts, as plain text. */

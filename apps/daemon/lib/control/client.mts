@@ -50,6 +50,8 @@ import type {
   TaskDefinitionListResult,
   TaskRunCancelParams,
   TaskRunCancelResult,
+  TaskRunCompileParams,
+  TaskRunCompileResult,
   TaskRunCreateParams,
   TaskRunCreateResult,
   TaskRunEventsParams,
@@ -294,6 +296,11 @@ export class ForemanClient {
       },
       output: (params: TaskRunOutputParams): Promise<TaskRunOutputResult> => {
         return this.rpc.request<TaskRunOutputResult>('task.run.output', params)
+      },
+      compile: (params: TaskRunCompileParams): Promise<TaskRunCompileResult> => {
+        // The compile step runs a bounded auxiliary model loop, so it outlives
+        // the ordinary RPC deadline without a transport timeout of its own.
+        return this.rpc.request<TaskRunCompileResult>('task.run.compile', params, { timeoutMs: 180_000 })
       },
       cancel: (params: TaskRunCancelParams): Promise<TaskRunCancelResult> => {
         return this.rpc.request<TaskRunCancelResult>('task.run.cancel', params)

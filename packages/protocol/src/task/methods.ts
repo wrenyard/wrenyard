@@ -8,6 +8,8 @@ import type {
 import type {
   TaskRunCancelParams,
   TaskRunCancelResult,
+  TaskRunCompileParams,
+  TaskRunCompileResult,
   TaskRunCreateParams,
   TaskRunCreateResult,
   TaskRunEventsParams,
@@ -43,6 +45,7 @@ export interface TaskMethods {
   'task.run.list': RpcMethod<TaskRunListParams, TaskRunListResult>
   'task.run.status': RpcMethod<TaskRunStatusParams, TaskRunStatusResult>
   'task.run.output': RpcMethod<TaskRunOutputParams, TaskRunOutputResult>
+  'task.run.compile': RpcMethod<TaskRunCompileParams, TaskRunCompileResult>
   'task.run.wait': RpcMethod<TaskRunWaitParams, TaskRunWaitResult>
   'task.run.cancel': RpcMethod<TaskRunCancelParams, TaskRunCancelResult>
   'task.run.events': RpcMethod<TaskRunEventsParams, TaskRunEventsResult>
