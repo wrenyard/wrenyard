@@ -114,12 +114,12 @@ Usage:
   wrenyard clients list [--json]
   wrenyard clients prune [--dry-run | --apply] [--older-than-days N] [--json]
   wrenyard gateway health [--config path] [--json]
-  wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--json] <json-input>
+  wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--json | --structured] <json-input>
   wrenyard task cancel <task_run_id> [--config path] [--json]
   wrenyard task list [project_id] [--config path] [--json]
   wrenyard task describe <task_id> [--config path] [-p project] [--json]
   wrenyard task status <task_run_id> [--config path] [--json]
-  wrenyard task output <task_run_id> [--config path] [--json]
+  wrenyard task output <task_run_id> [--config path] [--json | --structured]
   wrenyard task doctor [--config path] [--json]
   wrenyard session list [--config path] [--json]
   wrenyard session create [--config path] [--json]

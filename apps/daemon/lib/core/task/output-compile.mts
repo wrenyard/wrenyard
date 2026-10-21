@@ -1,4 +1,9 @@
 import { runTaskOutputCompile } from '@wrenyard/agent-loop'
+import {
+  createTaskArtifactDirectory,
+  outputSchemaDeclaresArtifacts,
+  validateTaskArtifacts,
+} from '@wrenyard/task'
 import type { TaskRunCompileResult, TaskRunFacts } from '@wrenyard/protocol/task'
 import { findTaskDefinition, resolveTaskTarget } from '../../workspace/definition-registry.mts'
 import type { TaskOutputModelCallPort } from '../../daemon/execution/task-output-model-call.mts'
@@ -93,8 +98,17 @@ export function createTaskRunOutputCompiler(options: {
       ...(outputFacts === undefined ? {} : { outputFacts }),
       call: options.modelCall,
     })
-    return compiled.ok
-      ? { task_run_id: taskRunId, ok: true, output: compiled.output, report, facts }
-      : { task_run_id: taskRunId, ok: false, compile_error: compiled.compileError, report, facts }
+    if (!compiled.ok) {
+      return { task_run_id: taskRunId, ok: false, compile_error: compiled.compileError, report, facts }
+    }
+    // A schema that declares artifacts keeps the validation the run used to
+    // apply to its compiled output: entries are checked against the run's
+    // artifact directory and only the valid ones survive.
+    if (!outputSchemaDeclaresArtifacts(outputSchema)) {
+      return { task_run_id: taskRunId, ok: true, output: compiled.output, report, facts }
+    }
+    const artifactDirectory = await createTaskArtifactDirectory(taskRunId)
+    const validation = await validateTaskArtifacts(compiled.output, artifactDirectory)
+    return { task_run_id: taskRunId, ok: true, output: validation.output, report, facts }
   }
 }

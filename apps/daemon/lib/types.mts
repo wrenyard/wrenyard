@@ -142,8 +142,6 @@ export interface ExecutionOptions {
   /** Non-persistent invocation-layer settings carried to execution-time
    *  settings resolution. Never persisted by the daemon. */
   invocationSettings?: TaskSettingsLayer
-  /** In-process auxiliary model-call port for one task-output compile per run. */
-  taskOutputModelCall?: import('./daemon/execution/task-output-model-call.mts').TaskOutputModelCallPort
 }
 
 /**

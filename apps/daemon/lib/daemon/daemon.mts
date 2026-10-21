@@ -52,7 +52,7 @@ import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
 import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/agent-supervisor.mts'
 import { TaskWorkflowRunner } from './execution/task-workflow-runner.mts'
-import { createTaskOutputModelCallPort, type TaskOutputModelCallPort } from './execution/task-output-model-call.mts'
+import { createTaskOutputModelCallPort } from './execution/task-output-model-call.mts'
 import { createTaskRunOutputCompiler, type TaskRunOutputCompiler } from '../core/task/output-compile.mts'
 import type { TaskRouteStateHooks } from '../types.mts'
 import { RepoWriteLocks } from './execution/repo-write-locks.mts'
@@ -262,7 +262,6 @@ interface WorkspaceScopedResources {
   scheduler: Scheduler
   /** Bot agent kernel for this workspace; replaced whole on a hot switch. */
   botAgents: BotAgentKernel
-  taskOutputModelCall: TaskOutputModelCallPort
   /** Runs the task-output compile step for one existing run of this workspace. */
   taskOutputCompile: TaskRunOutputCompiler
 }
@@ -1241,12 +1240,6 @@ async function createForemanDaemonResources(
       // run so `task status` reports the 1-based `queue_position` while queued.
       lanePosition: (taskRunId) => desktopLane.positionOf(taskRunId),
     })
-    // Single shared TaskGraphService used by all RPC transports.
-    const taskgraphService = createTaskGraphService({
-      workspaceRoot,
-      operations,
-      eventSink: projectTaskGraphForemanEvent,
-    })
     const taskSettingsService = new TaskSettingsService({
       workspaceRoot,
       configPath: authoritativeConfigPath,
@@ -1350,24 +1343,33 @@ async function createForemanDaemonResources(
       const excludedModels = settings?.exclude?.models ?? []
       return excludedModelIdsFor(catalog.provider(provider), excludedModels).has(modelId)
     }
-    const taskOutputModelCall = createTaskOutputModelCallPort({
-      gateway: gatewayConnectionSnapshot,
-      selectAuxiliary: (role, input) => selectRoutesByRequirement(
-        auxiliaryRoutingOptions,
-        ROLE_ROUTE_REQUIREMENTS[role],
-        role,
-        input,
-      ),
-      resolveInferenceProvider: id => catalog.provider(id),
-      routeStatus: model => gateway.routeStatus(model),
-    })
     // The task-output compile runs one auxiliary model call per finished run on
-    // demand, outside any session, through this workspace's own routes. It
-    // reuses the same model-call port as the execution kernel's compile step.
+    // demand, outside any session, through this workspace's own routes. It is
+    // the single compile entry point shared by the `task.run.compile` RPC and
+    // TaskGraph nodes with an output schema.
     const taskOutputCompile: TaskRunOutputCompiler = createTaskRunOutputCompiler({
       workspaceRoot,
       taskService,
-      modelCall: taskOutputModelCall,
+      modelCall: createTaskOutputModelCallPort({
+        gateway: gatewayConnectionSnapshot,
+        selectAuxiliary: (role, input) => selectRoutesByRequirement(
+          auxiliaryRoutingOptions,
+          ROLE_ROUTE_REQUIREMENTS[role],
+          role,
+          input,
+        ),
+        resolveInferenceProvider: id => catalog.provider(id),
+        routeStatus: model => gateway.routeStatus(model),
+      }),
+    })
+    // Single shared TaskGraphService used by all RPC transports. Task nodes
+    // with an output schema compile their run's report through the same
+    // task-output compile step the RPC surface exposes.
+    const taskgraphService = createTaskGraphService({
+      workspaceRoot,
+      operations,
+      eventSink: projectTaskGraphForemanEvent,
+      taskOutputCompile,
     })
     const daemonSessionHost = createDaemonSessionHost({
       workspaceRoot,
@@ -1459,7 +1461,6 @@ async function createForemanDaemonResources(
       session,
       scheduler,
       botAgents,
-      taskOutputModelCall,
       taskOutputCompile,
     }
   }
@@ -1969,7 +1970,6 @@ async function createForemanDaemonResources(
   registerWorkspaceRoutes(workspaceScoped)
   runtime.runner.setTaskSettingsResolver((params) => workspaceScoped.taskSettingsService.resolveForRun(params))
   runtime.runner.setTaskRouteState(taskRouteState)
-  runtime.runner.setTaskOutputModelCall(workspaceScoped.taskOutputModelCall)
   options.onScheduler?.(workspaceScoped.scheduler)
   options.onBotAgents?.(workspaceScoped.botAgents)
 
@@ -2236,7 +2236,6 @@ async function createForemanDaemonResources(
     // current task settings service, exactly like bootstrap wires it.
     runtime.runner.setTaskSettingsResolver((params) => staged.taskSettingsService.resolveForRun(params))
     runtime.runner.setTaskRouteState(taskRouteState)
-    runtime.runner.setTaskOutputModelCall(staged.taskOutputModelCall)
     resources.session = staged.session
     resources.scheduler = staged.scheduler
     resources.botAgents = staged.botAgents

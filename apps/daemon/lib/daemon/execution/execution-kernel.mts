@@ -39,7 +39,6 @@ import {
   taskTimeoutCapturedOutput,
   type StructuredOutputAgent,
 } from '@wrenyard/task'
-import { runTaskOutputCompile } from '@wrenyard/agent-loop'
 import type { TaskRunFacts } from '@wrenyard/protocol/task'
 import { parseRunSyntax } from '@wrenyard/providers/catalog'
 import type { RouteGuard, RouteStatus } from '@wrenyard/gateway'
@@ -47,7 +46,6 @@ import {
   createTaskArtifactDirectory,
   outputSchemaDeclaresArtifacts,
   taskArtifactPromptParagraph,
-  validateTaskArtifacts,
 } from '@wrenyard/task'
 import { resolveFeatures } from '@wrenyard/task'
 import { buildTaskPrompt } from '@wrenyard/task'
@@ -649,37 +647,11 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         worktreeId: executionOptions.worktreeId ?? factsContext.worktree,
       })
       const factsJson = JSON.stringify(facts)
-      const outputSchemaJson = normalizeSchema(outputSchema as ZodType)
-      if (!outputSchemaJson) {
-        throw new Error(`Task '${target.name}' must declare a valid output schema`)
-      }
-      const modelCall = options.taskOutputModelCall
-      if (!modelCall) {
-        throw new Error('Task output compile requires taskOutputModelCall on execution options')
-      }
-      const compileResult = await runTaskOutputCompile({
-        outputSchema: outputSchemaJson,
-        report,
-        facts,
-        outputFacts: definition.config.outputFacts,
-        call: (request) => modelCall(request),
-      })
-      let output: unknown
-      if (compileResult.ok) {
-        output = compileResult.output
-      } else {
-        output = {
-          report: compileResult.report,
-          facts: compileResult.facts,
-          compileError: compileResult.compileError,
-        }
-      }
-      const artifactSchema = outputSchemaDeclaresArtifacts(outputSchema)
-      if (compileResult.ok) {
-        const artifactValidation = await validateTaskArtifacts(output, artifactDirectory)
-        output = artifactValidation.output
-        assertTaskStillActive(taskId)
-      }
+      // The run's deliverable is the report itself. Consumers that need the
+      // task's output schema filled run the task-output compile step on demand
+      // (`task.run.compile`, TaskGraph nodes with an output schema); no
+      // consumer compiles inside the run.
+      const output: unknown = report
 
       // ── Post-gates ──
       const postGates = definition.config.gates?.post

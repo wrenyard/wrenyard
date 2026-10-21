@@ -35,6 +35,7 @@ import { TaskGraphStore, type TaskGraphRunProjection } from './store.mts'
 import {
   TaskServiceTaskBridge,
   type TaskGraphTaskBridge,
+  type TaskServiceTaskBridgeOptions,
 } from './task-bridge.mts'
 import type { TaskGraphAutoSchemaResolver } from './materialize.mts'
 import { WorkspaceTaskContractResolver, type TaskGraphTaskContractResolver } from './task-contract-resolver.mts'
@@ -75,6 +76,10 @@ export interface TaskGraphServiceOptions {
   contractResolver?: TaskGraphTaskContractResolver
   eventSink?: (event: TaskGraphEvent) => void | Promise<void>
   now?: () => string
+  /** Compiles one finished task run's report and facts into its output schema,
+   *  so task nodes with an output schema receive schema-valid JSON. Optional;
+   *  without it the bridge keeps whatever the run recorded. */
+  taskOutputCompile?: TaskServiceTaskBridgeOptions['compile']
 }
 
 export class TaskGraphService {
@@ -91,6 +96,7 @@ export class TaskGraphService {
     this.taskBridge = options.taskBridge ?? new TaskServiceTaskBridge({
       workspaceRoot: options.workspaceRoot,
       operations: options.operations,
+      ...(options.taskOutputCompile === undefined ? {} : { compile: options.taskOutputCompile }),
     })
     this.contractResolver = options.contractResolver ?? workspaceContractResolver(options.workspaceRoot)
     this.schemaResolver = options.schemaResolver ?? contractSchemaResolver(this.contractResolver)
