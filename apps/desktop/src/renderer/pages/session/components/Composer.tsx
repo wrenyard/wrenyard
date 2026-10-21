@@ -70,7 +70,7 @@ const ROUTE_GATED_PROVIDERS = new Set(['openrouter', 'opencode-zen', 'opencode-g
 const RETRY_MARKER = '（可重试，待确认恢复）';
 
 /**
- * The session request runner's `isCallableNow` rule for one picker row: unknown,
+ * `isRouteCallable` for one picker row: unknown,
  * healthy and non-gated routes are callable; an open route is not until its
  * `routeUntil` passes. This predicate is independent of the
  * model-list/mainstream filter and composes with it by simple conjunction. It

@@ -77,8 +77,6 @@ export interface DaemonSessionHostOptions {
   reportRouteFault?: SessionHost['reportRouteFault']
   completeRouteAttempt?: SessionHost['completeRouteAttempt']
   selectAuxiliary: SessionHost['selectAuxiliary']
-  /** Automatic ladder for bot-originated reasoning turns. */
-  selectBotRoutes?: SessionHost['selectBotRoutes']
   /** Current routing.exclude check for an open route wait. */
   isRouteExcluded?: SessionHost['isRouteExcluded']
   taskService: TaskService
@@ -232,7 +230,6 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     gateway: options.gateway,
     resolveInferenceProvider: options.resolveInferenceProvider,
     selectAuxiliary: (role, input) => options.selectAuxiliary(role, input),
-    ...(options.selectBotRoutes === undefined ? {} : { selectBotRoutes: () => options.selectBotRoutes!() }),
     ...(options.isRouteExcluded === undefined ? {} : { isRouteExcluded: (model: string) => options.isRouteExcluded!(model) }),
     routeStatus: options.routeStatus,
     beginRouteAttempt: options.beginRouteAttempt,

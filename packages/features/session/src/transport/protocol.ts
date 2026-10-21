@@ -182,12 +182,6 @@ export interface ModelRequest {
   /** Attribution metadata for the Gateway event; never sent upstream. */
   attribution?: ModelAttribution;
   /**
-   * When true the transport never runs its same-route retry loop. A caller that
-   * owns its own bounded cross-route failover sets it so a failover can never
-   * multiply attempts on one route.
-   */
-  noRetry?: boolean;
-  /**
    * First-response timeout in whole seconds (1–600) for streaming Gateway
    * requests. Omitted values use the Gateway default (120 s).
    */
@@ -199,19 +193,11 @@ export interface ModelRequest {
    */
   attemptId?: string;
   /**
-   * Optional main-reasoning route-health pre-check. When supplied, the
-   * transport runs it inside its own bounded retry loop, before the first
-   * attempt: it returns the absolute instant (epoch ms) the route may next be
-   * probed, or `undefined` when the route is callable now. This keeps a
-   * route-health wait in the one retry loop instead of a second nested one, so
-   * a route known to be cooling down is not probed early.
+   * Optional route-health pre-check before the single upstream attempt: a
+   * `final` message ends without sending; a future `notBeforeMs` is waited out
+   * (honouring abort) before the one send.
    */
   preflight?: () => ModelPreflightResult | undefined;
-  /**
-   * True when the caller can replace the route within the same turn, so an
-   * exhausted quota or an exclusion is surfaced instead of waited for.
-   */
-  reselect?: boolean;
   signal: AbortSignal;
   /** Called for every event of the call, in arrival order. */
   onEvent?: (event: ModelEvent) => void;

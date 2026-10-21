@@ -4,9 +4,8 @@
  *
  * It hides the three Gateway protocols (Chat Completions, Responses, Messages)
  * behind {@link ModelTransport}, picks the adapter from the Gateway model list's
- * per-model protocols (precedence Chat → Responses → Messages), and owns the
- * sole same-route retry. The application never sees an endpoint, a wire shape or
- * a retry decision.
+ * per-model protocols (precedence Chat → Responses → Messages), and issues one
+ * upstream request per call. The application never sees an endpoint or a wire shape.
  */
 import { TpsGenerationCollector } from '@wrenyard/agent-client/statistics';
 import type { WrenyardGatewayConnection } from '@wrenyard/control';
@@ -29,7 +28,7 @@ import {
   type Usage,
 } from './protocol.ts';
 import { ModelError, abortError, httpError, networkError, normalizeStreamError } from './errors.ts';
-import { runWithRetry } from './retry.ts';
+import type { ModelEvent, ModelPreflightResult } from './protocol.ts';
 import { chatAdapter, CHAT_REQUEST_MAX_BYTES } from './adapters/chat.ts';
 import { responsesAdapter, RESPONSES_REQUEST_MAX_BYTES } from './adapters/responses.ts';
 import { messagesAdapter, MESSAGES_REQUEST_MAX_BYTES } from './adapters/messages.ts';
@@ -81,7 +80,59 @@ export {
   retryAfterMsFromHeaders,
   shouldRetryFromHeaders,
 } from './errors.ts';
-export { MAX_RETRIES, BASE_DELAY_MS, MIN_RECOVERY_DELAY_MS, isRetryable, retryDelayMs, runWithRetry, RouteReselectError, type RetryDecision, type RetryContext, type RouteReselectReason } from './retry.ts';
+
+const RECOVERY_RECHECK_MS = 1_000;
+const MAX_TIMER_MS = 2_147_483_647;
+
+/** Wait until a route preflight says the route may be probed, honouring abort. */
+async function waitForRouteAdmission(
+  preflight: () => ModelPreflightResult | undefined,
+  signal: AbortSignal,
+  onEvent?: (event: ModelEvent) => void,
+): Promise<void> {
+  const now = () => Date.now();
+  let lastPublishedUntil: number | undefined;
+  for (;;) {
+    if (signal.aborted) throw abortError();
+    const current = preflight();
+    if (current?.excluded === true) {
+      throw new ModelError('Route is excluded from automatic selection', { kind: 'model_unavailable' });
+    }
+    if (current?.final !== undefined) {
+      throw new ModelError(current.final, {
+        kind: 'quota_exhausted',
+        source: 'admission',
+        retryAt: new Date(current.notBeforeMs).toISOString(),
+      });
+    }
+    const untilMs = current?.notBeforeMs;
+    if (untilMs === undefined || untilMs <= now()) return;
+    if (lastPublishedUntil !== untilMs) {
+      const reason = current?.faultState === 'quota_exhausted' ? 'quota_exhausted' : 'admission';
+      onEvent?.({
+        type: 'wait',
+        attempt: 1,
+        kind: 'server',
+        delayMs: Math.max(0, untilMs - now()),
+        reason,
+        retryAt: new Date(untilMs).toISOString(),
+      });
+      lastPublishedUntil = untilMs;
+    }
+    const remaining = untilMs - now();
+    if (remaining <= 0) return;
+    await sleep(Math.min(remaining, RECOVERY_RECHECK_MS), signal);
+  }
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => { clearTimeout(timer); reject(abortError()); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, Math.min(ms, MAX_TIMER_MS));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 const ADAPTERS: Readonly<Record<SessionProtocol, ProtocolAdapter>> = {
   openai_chat: chatAdapter,
@@ -189,19 +240,10 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
 
       // Every request actually issued, in order, with its own duration and wait.
       const attempts: ModelAttempt[] = [];
-      /** The wait an `onRetry` decided for the next request, consumed by it. */
-      let pendingWait: { waitedMs?: number; retryAfter?: RetryAfterHint } = {};
       const startedMs = Date.now();
       const attempt = async (): Promise<{ completion: Completion; sample?: { outputTokens: number; windowMs: number } }> => {
         if (request.signal.aborted) throw abortError();
         const attemptStartMs = Date.now();
-        const wait = pendingWait;
-        pendingWait = {};
-        // The wait (a backoff retry or a recovery wait) is over and a real
-        // upstream request is about to start. Reporting it as `activity` lets a
-        // caller clear live waiting state right before the attempt. The
-        // auxiliary noRetry path never sets `pendingWait`, so it is unchanged.
-        if (wait.waitedMs !== undefined) request.onEvent?.({ type: 'activity' });
         tps = new TpsGenerationCollector();
         try {
           let response: Response;
@@ -223,7 +265,7 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
           } catch (error) {
             throw normalizeStreamError(error, request.signal, outputStarted);
           }
-          attempts.push({ status: 200, ms: Date.now() - attemptStartMs, model: request.model, ...wait });
+          attempts.push({ status: 200, ms: Date.now() - attemptStartMs, model: request.model });
           // Only a successfully completed stream yields a sample; the sampler
           // produces nothing for a failed, cancelled or truncated attempt.
           const sample = tps.sample();
@@ -239,7 +281,6 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
             error: error.kind,
             ms: Date.now() - attemptStartMs,
             model: request.model,
-            ...wait,
             ...(error.retryAfterMs === undefined ? {} : { routeUntil: new Date(Date.now() + error.retryAfterMs).toISOString() }),
           };
           attempts.push(record);
@@ -247,50 +288,11 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
         }
       };
 
-      // An auxiliary call disables the same-route retry loop so a failover
-      // cannot multiply attempts on one route; every other call keeps it.
-      const noSameRouteRetry = request.noRetry === true;
       try {
-        const { completion, sample } = noSameRouteRetry ? await attempt() : await runWithRetry(attempt, {
-          signal: request.signal,
-          outputStarted: () => outputStarted,
-          // A main-reasoning route-health wait is owned by this same loop, so a
-          // blocked route is waited out here rather than probed early.
-          ...(request.preflight === undefined ? {} : { preflight: request.preflight }),
-          ...(request.reselect === true ? { reselect: true } : {}),
-          onRetry: (decision) => {
-            pendingWait = {
-              waitedMs: decision.delayMs,
-              ...(decision.retryAfter === undefined ? {} : { retryAfter: decision.retryAfter }),
-            };
-            // A recovery wait is its own event: it says whether the call is
-            // waiting for permission to probe or for a guaranteed recovery, and
-            // carries the absolute instant the next attempt is due whenever a
-            // real instant is known. A wait with no known instant carries no
-            // `retryAt`, so its recovery time stays observably unknown.
-            if (decision.wait !== undefined) {
-              request.onEvent?.({
-                type: 'wait',
-                attempt: decision.attempt,
-                kind: decision.kind,
-                ...(decision.status === undefined ? {} : { status: decision.status }),
-                delayMs: decision.delayMs,
-                reason: decision.wait.reason,
-                ...(decision.wait.retryAt === undefined ? {} : { retryAt: decision.wait.retryAt }),
-                ...(decision.retryAfter === undefined ? {} : { retryAfter: decision.retryAfter }),
-              });
-              return;
-            }
-            request.onEvent?.({
-              type: 'retry',
-              attempt: decision.attempt,
-              kind: decision.kind,
-              ...(decision.status === undefined ? {} : { status: decision.status }),
-              delayMs: decision.delayMs,
-              ...(decision.retryAfter === undefined ? {} : { retryAfter: decision.retryAfter }),
-            });
-          },
-        });
+        if (request.preflight !== undefined) {
+          await waitForRouteAdmission(request.preflight, request.signal, request.onEvent);
+        }
+        const { completion, sample } = await attempt();
         // Only the final successful attempt returns a completion; a failed
         // attempt throws above and its samples are never exposed.
         return {

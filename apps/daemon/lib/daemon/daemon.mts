@@ -1327,10 +1327,6 @@ async function createForemanDaemonResources(
           input,
         )
       },
-      // A bot-originated turn may move down the same ranked ladder the bot
-      // selects from, and an open wait must observe routing.exclude even when
-      // the Gateway has no fault state for the route.
-      selectBotRoutes: async () => selectModels(),
       isRouteExcluded,
       // The session's main inference validates against the same product-wired
       // catalog already injected into the gateway/provider.list surface, so a

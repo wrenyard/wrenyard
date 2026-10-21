@@ -126,10 +126,8 @@ export type {
   Usage,
 } from './transport/index.ts';
 export {
-  BASE_DELAY_MS,
   CHAT_REQUEST_MAX_BYTES,
   GATEWAY_REQUEST_MAX_BYTES,
-  MAX_RETRIES,
   MESSAGES_REQUEST_MAX_BYTES,
   ModelError,
   RESPONSES_REQUEST_MAX_BYTES,
@@ -141,9 +139,7 @@ export {
   isContextOverflowError,
   isModelError,
   isQuotaCode,
-  isRetryable,
   normalizeStreamError,
-  retryDelayMs,
   type GatewayConnectionSource,
   type ModelTransportOptions,
   type SessionProtocol,
@@ -243,11 +239,6 @@ export function createSession(host: SessionHost): Session {
       const executor = createCallRunner({
         transport: createModelTransport({ gateway: () => host.gateway() }),
         selectAuxiliary: (role, input) => host.selectAuxiliary(role, input),
-        // Bot-originated turns may replace an exhausted or excluded route with
-        // the next ranked automatic route within the same turn.
-        ...(host.selectBotRoutes === undefined ? {} : {
-          selectAutomaticRoutes: () => host.selectBotRoutes!(),
-        }),
         ...(host.isRouteExcluded === undefined ? {} : {
           isRouteExcluded: (model: string) => host.isRouteExcluded!(model),
         }),
