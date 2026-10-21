@@ -1,6 +1,6 @@
 /** Auxiliary role identifiers; no IO or selection logic. */
 import type { SessionRoutesPreviewRole } from '@wrenyard/protocol';
-export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch' | 'document' | 'todo' | 'vcs' | 'project' | 'reply' | 'status' | 'suggestion';
+export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch' | 'document' | 'todo' | 'vcs' | 'project' | 'reply' | 'status' | 'suggestion' | 'task-output';
 /** Auxiliary roles in the fixed order the route preview lists them. */
 export const AUXILIARY_ROLE_ORDER: readonly AuxiliaryCallRole[] = [
   'reply',

@@ -33,8 +33,14 @@ import {
   V2SchemaValidationError,
   validateAgainstSchema,
 } from '@wrenyard/task'
-import { collectStructuredOutput, firstPrompt, type StructuredOutputAgent } from '@wrenyard/task'
-import { requireClient } from '@wrenyard/clients'
+import {
+  collectStructuredOutput,
+  firstPrompt,
+  taskTimeoutCapturedOutput,
+  type StructuredOutputAgent,
+} from '@wrenyard/task'
+import { runTaskOutputCompile } from '@wrenyard/agent-loop'
+import type { TaskRunFacts } from '@wrenyard/protocol/task'
 import { parseRunSyntax } from '@wrenyard/providers/catalog'
 import type { RouteGuard, RouteStatus } from '@wrenyard/gateway'
 import {
@@ -49,6 +55,7 @@ import { splitTaskInputContext } from '@wrenyard/task'
 import { resolveTaskWritePaths } from '@wrenyard/task'
 import {
   captureRunBaseline,
+  collectRunFacts,
   collectTerminalRunFactsJson,
   isTaskRunTimedOut,
   readTaskRowFactsContext,
@@ -139,16 +146,34 @@ function executionEvents(): ExecutionEventStore {
   return new ExecutionEventStore(getDb())
 }
 
-function taskSummaryFromOutput(output: unknown): string | undefined {
-  if (typeof output === 'object' && output !== null && !Array.isArray(output)) {
-    const summary = (output as Record<string, unknown>).summary
-    return typeof summary === 'string' && summary.trim() ? summary.trim() : undefined
+function firstNonEmptyLine(text: string): string | undefined {
+  for (const line of text.split(/\r?\n/u)) {
+    const trimmed = line.trim()
+    if (trimmed) return trimmed
   }
-  if (typeof output !== 'string') return undefined
-  const trimmed = output.trim()
-  if (!trimmed.startsWith('{')) return undefined
+  return undefined
+}
+
+function taskSummaryFromReport(report: string): string | undefined {
+  return firstNonEmptyLine(report.trim())
+}
+
+function taskSummaryFromOutput(output: unknown): string | undefined {
+  if (typeof output === 'string') return taskSummaryFromReport(output)
+  if (typeof output === 'object' && output !== null && !Array.isArray(output)) {
+    const record = output as Record<string, unknown>
+    const report = record.report
+    if (typeof report === 'string' && report.trim()) return taskSummaryFromReport(report)
+    const summary = record.summary
+    if (typeof summary === 'string' && summary.trim()) return summary.trim()
+  }
+  return undefined
+}
+
+function parseTaskRunFactsJson(factsJson: string | null): TaskRunFacts | undefined {
+  if (!factsJson) return undefined
   try {
-    return taskSummaryFromOutput(JSON.parse(trimmed) as unknown)
+    return JSON.parse(factsJson) as TaskRunFacts
   } catch {
     return undefined
   }
@@ -438,7 +463,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     if (outputSchemaDeclaresArtifacts(outputSchema)) {
       prompt = `${prompt}\n\n${taskArtifactPromptParagraph(artifactDirectory)}`
     }
-    const inputTokens = estimateTokens(firstPrompt(prompt, compileSchema(outputSchema)))
+    const inputTokens = estimateTokens(firstPrompt(prompt))
 
     if (!options.taskSettingsResolver) {
       // Pin-free legacy recovery boundary: a scheduling:'legacy' definition is
@@ -526,18 +551,13 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     }
 
     assertTaskStillActive(taskId)
-    let structuredSummary: string | undefined
-    let truncatedByTimeLimit = false
     let routeFaultSnapshot: RouteStatus | undefined
 
     const launchAttempt = async (): Promise<void> => {
       // ── Native-task route state ──
-      // Only a launched attempt is accounted, and only once per collected run:
-      // the first real launch acquires the shared circuit handle and every
-      // in-session correction (plus the time-limit warning resume) reuses that
-      // same guard. The handle is settled at most once for the whole collector:
-      // success on a schema-validated delivery, failure on the terminal
-      // delivery failure, never after the post-gates, which can never change route health.
+      // Only a launched attempt is accounted. The handle is settled at most once:
+      // success on a terminal agent completion, failure on the terminal delivery
+      // failure, never after the post-gates.
       let routeIdentity: { provider: string; model: string } | undefined
       let routeGuard: RouteGuard | undefined
       let routeSettled = false
@@ -582,21 +602,12 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         taskName: target.name,
         taskId,
         repoWriteLock,
-        // Default correction budget: every task — including edit/commit — keeps
-        // the same bounded in-session output correction (three corrections after
-        // the initial attempt). A correction continues the original native
-        // session on the resolved model/profile and never replays the task.
         runTimeLimitMs: runTimeLimitMs ?? 60 * 60_000,
         features: selectedFeatures,
         writePaths,
         requestedAgentRuntime: requestedAgentRuntime,
         dispatchSnapshot,
         codeBuddyExecution,
-        canResumeNativeSession: canResumeNativeSessionForDispatch(dispatchSnapshot),
-        onDelivery: (delivery) => {
-          structuredSummary = delivery.summary
-          if (delivery.truncatedByTimeLimit) truncatedByTimeLimit = true
-        },
         onRouteSuccess: () => {
           if (!routeSettled && routeIdentity !== undefined && options.taskRouteState) {
             routeSettled = true
@@ -622,28 +633,49 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         },
         beforeAttempt: () => assertTaskStillActive(taskId),
       }
-      const artifactSchema = outputSchemaDeclaresArtifacts(outputSchema)
-      // The hook persists diagnostics from each sanitization pass; the final
-      // sidecar corresponds to the successful collection attempt.
-      if (artifactSchema) {
-        // Artifact validation runs once per collected attempt, before strict
-        // schema validation. Malformed metadata (missing fields, unsupported
-        // kind, >128 entries, non-array) is stripped and a diagnostics sidecar
-        // persisted, so it cannot alone fail the strict collection schema or
-        // trigger a structured retry. Unrelated schema errors still retry.
-        structuredOptions.preSchemaTransform = async (data) => {
-          const validation = await validateTaskArtifacts(data, artifactDirectory)
-          return validation.output
+      const report = await collectStructuredOutput(structuredOptions)
+      assertTaskStillActive(taskId)
+      const summary = taskSummaryFromReport(report) ?? null
+      const factsContext = readTaskRowFactsContext(taskId)
+      const finishedAt = new Date().toISOString()
+      const facts = await collectRunFacts({
+        taskRunId: taskId,
+        status: 'done',
+        failureCategory: null,
+        startedAt: factsContext.startedAt,
+        endedAt: finishedAt,
+        timedOut: false,
+        checkoutPath: runCheckoutPath,
+        worktreeId: executionOptions.worktreeId ?? factsContext.worktree,
+      })
+      const factsJson = JSON.stringify(facts)
+      const outputSchemaJson = normalizeSchema(outputSchema as ZodType)
+      if (!outputSchemaJson) {
+        throw new Error(`Task '${target.name}' must declare a valid output schema`)
+      }
+      const modelCall = options.taskOutputModelCall
+      if (!modelCall) {
+        throw new Error('Task output compile requires taskOutputModelCall on execution options')
+      }
+      const compileResult = await runTaskOutputCompile({
+        outputSchema: outputSchemaJson,
+        report,
+        facts,
+        outputFacts: definition.config.outputFacts,
+        call: (request) => modelCall(request),
+      })
+      let output: unknown
+      if (compileResult.ok) {
+        output = compileResult.output
+      } else {
+        output = {
+          report: compileResult.report,
+          facts: compileResult.facts,
+          compileError: compileResult.compileError,
         }
       }
-      let output = await collectStructuredOutput(structuredOptions)
-      assertTaskStillActive(taskId)
-
-      if (!artifactSchema) {
-        // Non-artifact schemas keep the exact collection path. This is a no-op
-        // for outputs that declare no artifacts, and it is deliberately skipped
-        // for artifact schemas so the successful attempt's diagnostics sidecar
-        // is not overwritten with an empty error list.
+      const artifactSchema = outputSchemaDeclaresArtifacts(outputSchema)
+      if (compileResult.ok) {
         const artifactValidation = await validateTaskArtifacts(output, artifactDirectory)
         output = artifactValidation.output
         assertTaskStillActive(taskId)
@@ -671,21 +703,8 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       assertTaskStillActive(taskId)
       record.status = 'done'
       record.output = output
-      record.summary = structuredSummary ?? taskSummaryFromOutput(output) ?? null
-      record.finishedAt = new Date().toISOString()
-      const factsContext = readTaskRowFactsContext(taskId)
-      const factsJson = await collectTerminalRunFactsJson({
-        taskRunId: taskId,
-        status: 'done',
-        failureCategory: null,
-        startedAt: factsContext.startedAt,
-        endedAt: record.finishedAt,
-        // Time-limit warning resume saves a truncated run as done; tasks.execution_id
-        // points at the resume attempt, so the local truncatedByTimeLimit flag is reliable.
-        timedOut: isTaskRunTimedOut(factsContext) || truncatedByTimeLimit,
-        checkoutPath: runCheckoutPath,
-        worktreeId: executionOptions.worktreeId ?? factsContext.worktree,
-      })
+      record.summary = summary
+      record.finishedAt = finishedAt
       const terminalUpdated = updateTaskRowTerminal(
         taskId,
         'done',
@@ -717,10 +736,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       throw enrichTaskLaunchFailure(error, identity, routeFaultSnapshot)
     }
 
-    // `truncatedByTimeLimit` marks a result produced by the time-limit warning
-    // resume: the work phase was stopped before the limit and the summary
-    // carries the `[truncated by time limit]` marker.
-    const result: TaskExecutionResult & { truncatedByTimeLimit?: boolean } = {
+    const result: TaskExecutionResult = {
       task_id: taskId,
       name: target.name,
       project: record.project,
@@ -729,7 +745,6 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       summary: record.summary,
       structured: true,
       agentRuntime: requestedAgentRuntime,
-      ...(truncatedByTimeLimit ? { truncatedByTimeLimit: true } : {}),
     }
     return result
   } catch (error) {
@@ -744,6 +759,10 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       record.validation_errors = error.details
     }
     record.finishedAt = new Date().toISOString()
+    const capturedReport = taskTimeoutCapturedOutput(error)
+    if (capturedReport) {
+      record.summary = taskSummaryFromReport(capturedReport) ?? record.summary ?? null
+    }
     if (taskRowPersisted) {
       const factsContext = readTaskRowFactsContext(record.task_id)
       const factsJson = await collectTerminalRunFactsJson({
@@ -759,6 +778,12 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         checkoutPath: options.workingDirectory ?? process.cwd(),
         worktreeId: options.worktreeId ?? factsContext.worktree,
       })
+      if (capturedReport) {
+        const facts = parseTaskRunFactsJson(factsJson)
+        record.output = facts
+          ? { report: capturedReport, facts }
+          : { report: capturedReport }
+      }
       const terminalUpdated = updateTaskRowTerminal(
         record.task_id,
         record.status,
@@ -861,23 +886,6 @@ function routeIdentityOf(exactAgentRuntime: string): { provider: string; model: 
   }
   const model = exactAgentRuntime.slice(provider.length + 1)
   return model.length > 0 ? { provider, model } : undefined
-}
-
-/**
- * `capabilities.resume` of the client in the resolved dispatch snapshot, used
- * to gate the time-limit warning resume. A missing/unresolvable client leaves
- * this undefined so the structured-output default applies.
- */
-function canResumeNativeSessionForDispatch(
-  snapshot: import('@wrenyard/protocol').TaskResolvedDispatch | null,
-): boolean | undefined {
-  const clientId = snapshot?.client
-  if (!clientId) return undefined
-  try {
-    return requireClient(clientId).capabilities.resume
-  } catch {
-    return undefined
-  }
 }
 
 function mergePrimitives(overrides: Partial<PrimitiveSet> | undefined): PrimitiveSet {

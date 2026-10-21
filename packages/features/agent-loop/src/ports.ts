@@ -27,7 +27,8 @@ export type AuxiliaryCallRole =
   | 'project'
   | 'reply'
   | 'status'
-  | 'suggestion';
+  | 'suggestion'
+  | 'task-output';
 
 /** Every role a model call may carry. */
 export type CallRole =
@@ -42,7 +43,8 @@ export type CallRole =
   | 'vcs'
   | 'project'
   | 'status'
-  | 'suggestion';
+  | 'suggestion'
+  | 'task-output';
 
 /** One OpenAI-compatible content part. */
 export type ModelContentPart =

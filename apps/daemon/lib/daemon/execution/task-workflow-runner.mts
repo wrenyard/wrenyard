@@ -23,6 +23,7 @@ import {
   releaseTaskWriteTargets,
 } from './task-write-targets.mts'
 import { minimalRunFactsForTaskRun, minimalRunFactsJson } from './run-facts.mts'
+import type { TaskOutputModelCallPort } from './task-output-model-call.mts'
 
 type StartTaskRunOptionsWithWriteTargets = StartTaskRunOptions & {
   writeTargets?: readonly string[]
@@ -42,6 +43,7 @@ export interface TaskWorkflowRunnerOptions {
   /** Optional daemon-owned native-task route-state port bound to the shared
    *  Gateway circuit. Optional so existing runner constructions stay valid. */
   taskRouteState?: TaskRouteStateHooks
+  taskOutputModelCall?: TaskOutputModelCallPort
 }
 
 export class TaskWorkflowRunner implements TaskWorkflowRunHost {
@@ -52,6 +54,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
   private readonly taskDispatchResolver?: TaskDispatchResolver
   private taskSettingsResolver?: TaskRunSettingsResolver
   private taskRouteState?: TaskRouteStateHooks
+  private taskOutputModelCall?: TaskOutputModelCallPort
 
   constructor(options: TaskWorkflowRunnerOptions) {
     this.db = options.db
@@ -60,6 +63,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
     this.taskDispatchResolver = options.taskDispatchResolver
     this.taskSettingsResolver = options.taskSettingsResolver
     this.taskRouteState = options.taskRouteState
+    this.taskOutputModelCall = options.taskOutputModelCall
     this.taskRunner = new DaemonTaskRunner()
   }
 
@@ -77,6 +81,10 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
    *  same runner at the current gateway instance. */
   setTaskRouteState(hooks: TaskRouteStateHooks): void {
     this.taskRouteState = hooks
+  }
+
+  setTaskOutputModelCall(port: TaskOutputModelCallPort): void {
+    this.taskOutputModelCall = port
   }
 
   async startTaskRun(opts: StartTaskRunOptions): Promise<TaskRunAcceptedHandle> {
@@ -113,6 +121,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
       taskDispatchResolver: this.taskDispatchResolver,
       taskSettingsResolver: this.taskSettingsResolver,
       ...(this.taskRouteState !== undefined ? { taskRouteState: this.taskRouteState } : {}),
+      ...(this.taskOutputModelCall !== undefined ? { taskOutputModelCall: this.taskOutputModelCall } : {}),
       ...(opts.invocationSettings !== undefined ? { invocationSettings: opts.invocationSettings } : {}),
     }).catch(async (error: unknown) => {
       const message = errorMessage(error)

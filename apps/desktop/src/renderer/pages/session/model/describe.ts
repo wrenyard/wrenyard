@@ -57,6 +57,7 @@ export const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
   schedule: '定时任务',
   status: '状态',
   suggestion: '输入建议',
+  'task-output': '任务输出编译',
 };
 
 /**
@@ -64,6 +65,7 @@ export const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
  * and say nothing about the work. Their spans stay in the ledger and the trace.
  */
 export const HIDDEN_CALL_ROLES: ReadonlySet<CallModel['role']> = new Set([
+  'task-output',
   'status',
   'title',
   'suggestion',

@@ -147,7 +147,7 @@ export interface ActionModel {
   cycle: number;
 }
 
-export type CallRoleModel = 'reason' | 'memory-search' | 'search' | 'dispatch' | 'reply' | 'title' | 'document' | 'todo' | 'vcs' | 'project' | 'schedule' | 'status' | 'suggestion';
+export type CallRoleModel = 'reason' | 'memory-search' | 'search' | 'dispatch' | 'reply' | 'title' | 'document' | 'todo' | 'vcs' | 'project' | 'schedule' | 'status' | 'suggestion' | 'task-output';
 
 /**
  * One per-request context snapshot folded from a `span.context` event: the

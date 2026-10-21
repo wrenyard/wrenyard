@@ -13,7 +13,6 @@ import type {
   TaskDispatchRequirements,
   TaskInheritedDeclaration,
 } from '../types.mts'
-import { STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS } from '@wrenyard/task'
 import { installRuntimeGlobals } from '../daemon/execution/runtime-globals.mts'
 import { generateInputExample, normalizeSchema } from '@wrenyard/task'
 import { getTaskPromptTemplates, withTaskPromptTemplates } from '@wrenyard/task'
@@ -121,7 +120,6 @@ export interface ListedDefinition {
     pre?: Array<{ id: string; description?: string }>
     post?: Array<{ id: string; description?: string }>
   }
-  structuredRetryTimeoutMs?: number
   /** Available Wrenyard capability pack ids declared by the task config.
    *  Present only when the task declares execution features. */
   features?: readonly string[]
@@ -162,10 +160,6 @@ function warnLegacyTaskTimeout(absolutePath: string): void {
   console.warn(
     `definition-registry: ignoring legacy timeoutMs declared in ${absolutePath}; task runs use the global task run time limit`,
   )
-}
-
-function structuredRetryMetadata(): Pick<ListedDefinition, 'structuredRetryTimeoutMs'> {
-  return { structuredRetryTimeoutMs: STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS }
 }
 
 function recordHasOwnLegacyTimeout(record: Record<string, unknown>): boolean {
@@ -1047,7 +1041,6 @@ export function listTaskDefinitions(workspaceRoot: string, currentProject?: stri
     id: string
     displayLabel: string
   }
-  structuredRetryTimeoutMs?: number
   scheduling?: 'active' | 'legacy'
   dispatch?: TaskDispatchRequirements
   inheritanceChain?: InheritanceChainEntry[]
@@ -1068,7 +1061,6 @@ export function listTaskDefinitions(workspaceRoot: string, currentProject?: stri
       ...(entry.definition.config.scheduling
         ? { scheduling: entry.definition.config.scheduling }
         : {}),
-      ...structuredRetryMetadata(),
       ...(entry.definition.config.dispatch ? { dispatch: entry.definition.config.dispatch } : {}),
       ...(entry.inheritanceChain ? { inheritanceChain: entry.inheritanceChain } : {}),
     }
@@ -1299,7 +1291,6 @@ function taskToListed(entry: RegisteredTask): ListedDefinition {
     structured: true,
     ...(normalizedInput ? { input_example: generateInputExample(normalizedInput as any) } : {}),
     ...(extractGateMetadata(config) ? { gates: extractGateMetadata(config) } : {}),
-    ...structuredRetryMetadata(),
     ...featuresMetadata(config),
     ...(config.scheduling
       ? { scheduling: config.scheduling }

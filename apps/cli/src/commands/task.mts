@@ -322,11 +322,8 @@ export function taskListEffectiveId(task: Record<string, unknown>): string {
 
 function formatTaskTimeout(task: Record<string, unknown>): string {
   const initial = numberField(task.effectiveTimeoutMs)
-  const retry = numberField(task.structuredRetryTimeoutMs)
-  if (initial === undefined && retry === undefined) return ''
-  if (initial !== undefined && retry !== undefined) return `${formatDuration(initial)} / retry ${formatDuration(retry)}`
-  if (initial !== undefined) return formatDuration(initial)
-  return `retry ${formatDuration(retry ?? 0)}`
+  if (initial === undefined) return ''
+  return formatDuration(initial)
 }
 
 function numberField(value: unknown): number | undefined {

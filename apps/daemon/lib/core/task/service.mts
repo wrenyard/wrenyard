@@ -176,7 +176,6 @@ export class TaskService {
     }
     timeoutMs?: number
     effectiveTimeoutMs?: number
-    structuredRetryTimeoutMs?: number
     timeoutScope?: 'task_execution'
     scheduling?: 'active' | 'legacy'
     dispatch?: ListedDefinition['dispatch']

@@ -13,10 +13,18 @@ import { TaskRunStore } from '../../db/stores/task-run-store.mts'
 import { assertValidTimeoutMs } from '@wrenyard/task'
 import { killProcessTree } from '../../adapters/shell/process.mts'
 import { redactDiagnosticText, redactEvent, redactJsonString } from './redaction.mts'
-import { extractForemanTaskOutputSummary } from '@wrenyard/task'
 import { RepoWriteLocks } from './repo-write-locks.mts'
 import { minimalRunFactsForTaskRun } from './run-facts.mts'
 import { desktopLane, DesktopLaneClosedError, toOperationIds, OperationAdapter, type PreparedOperations } from './operation-adapter.mts'
+
+function summaryFromTerminalOutput(output: string | null | undefined): string | undefined {
+  if (!output) return undefined
+  for (const line of output.split(/\r?\n/u)) {
+    const trimmed = line.trim()
+    if (trimmed) return trimmed
+  }
+  return undefined
+}
 import { parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { createBuiltinCatalog } from '@wrenyard/providers'
 import type {
@@ -1206,7 +1214,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     let result: ExecutionResult | undefined
 
     try {
-      const terminalSummary = extractForemanTaskOutputSummary(terminal.output)
+      const terminalSummary = summaryFromTerminalOutput(terminal.output)
       this.tx(() => {
         const updateResult = this.run(
           `UPDATE executions

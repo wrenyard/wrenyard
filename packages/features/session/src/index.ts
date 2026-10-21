@@ -96,7 +96,9 @@ export {
   isReasoningEffortSupported,
   resolveModelMetadata,
   sanitizeMessagesForRole,
+  createCallRunner,
 } from './model/request.ts';
+export type { CallRunner } from './model/request.ts';
 export type { AuxiliaryCallRole } from './model/roles.ts';
 export { AUXILIARY_ROLE_ORDER } from './model/roles.ts';
 export { ROLE_ROUTE_REQUIREMENTS, AUXILIARY_LADDER, AUXILIARY_SCORE_WEIGHTS } from './model/route-requirements.ts';

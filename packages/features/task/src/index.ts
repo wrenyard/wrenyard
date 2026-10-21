@@ -1,7 +1,6 @@
 export * from './types.ts';
 export * from './concepts.ts';
 export * from './context.ts';
-export * from './delivery-protocol.ts';
 export * from './dispatch-resolver.ts';
 export * from './failure.ts';
 export * from './features.ts';

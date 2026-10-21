@@ -45,7 +45,6 @@ export interface TaskDefinitionSummary {
     id: string
     displayLabel: string
   }
-  structuredRetryTimeoutMs?: number
   scheduling?: 'active' | 'legacy'
   dispatch?: TaskDispatchRequirements
   /** Base→effective inheritance chain; present only when this effective

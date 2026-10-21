@@ -52,6 +52,7 @@ import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
 import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/agent-supervisor.mts'
 import { TaskWorkflowRunner } from './execution/task-workflow-runner.mts'
+import { createTaskOutputModelCallPort, type TaskOutputModelCallPort } from './execution/task-output-model-call.mts'
 import type { TaskRouteStateHooks } from '../types.mts'
 import { RepoWriteLocks } from './execution/repo-write-locks.mts'
 import { acquireInstanceLock, releaseInstanceLock } from './instance-lock.mts'
@@ -260,6 +261,7 @@ interface WorkspaceScopedResources {
   scheduler: Scheduler
   /** Bot agent kernel for this workspace; replaced whole on a hot switch. */
   botAgents: BotAgentKernel
+  taskOutputModelCall: TaskOutputModelCallPort
 }
 
 /**
@@ -1350,6 +1352,20 @@ async function createForemanDaemonResources(
       const excludedModels = settings?.exclude?.models ?? []
       return excludedModelIdsFor(catalog.provider(provider), excludedModels).has(modelId)
     }
+    const taskOutputModelCall = createTaskOutputModelCallPort({
+      gateway: gatewayConnectionSnapshot,
+      selectAuxiliary: (role, input) => selectRoutesByRequirement(
+        auxiliaryRoutingOptions,
+        ROLE_ROUTE_REQUIREMENTS[role],
+        role,
+        input,
+      ),
+      resolveInferenceProvider: id => catalog.provider(id),
+      routeStatus: model => gateway.routeStatus(model),
+      beginRouteAttempt: (publicModel, attemptId) => gateway.beginRouteAttempt(publicModel, attemptId),
+      reportRouteFault: (publicModel, attemptId, kind) => gateway.reportRouteFault(publicModel, attemptId, kind),
+      completeRouteAttempt: (publicModel, attemptId) => gateway.completeRouteAttempt(publicModel, attemptId),
+    })
     const daemonSessionHost = createDaemonSessionHost({
       workspaceRoot,
       stateRoot: sessionStateRoot,
@@ -1440,6 +1456,7 @@ async function createForemanDaemonResources(
       session,
       scheduler,
       botAgents,
+      taskOutputModelCall,
     }
   }
 
@@ -1947,6 +1964,7 @@ async function createForemanDaemonResources(
   registerWorkspaceRoutes(workspaceScoped)
   runtime.runner.setTaskSettingsResolver((params) => workspaceScoped.taskSettingsService.resolveForRun(params))
   runtime.runner.setTaskRouteState(taskRouteState)
+  runtime.runner.setTaskOutputModelCall(workspaceScoped.taskOutputModelCall)
   options.onScheduler?.(workspaceScoped.scheduler)
   options.onBotAgents?.(workspaceScoped.botAgents)
 
@@ -2213,6 +2231,7 @@ async function createForemanDaemonResources(
     // current task settings service, exactly like bootstrap wires it.
     runtime.runner.setTaskSettingsResolver((params) => staged.taskSettingsService.resolveForRun(params))
     runtime.runner.setTaskRouteState(taskRouteState)
+    runtime.runner.setTaskOutputModelCall(staged.taskOutputModelCall)
     resources.session = staged.session
     resources.scheduler = staged.scheduler
     resources.botAgents = staged.botAgents
