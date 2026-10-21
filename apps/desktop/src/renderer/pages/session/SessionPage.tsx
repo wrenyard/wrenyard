@@ -352,8 +352,11 @@ export function SessionPage() {
           tasks={state.tasks}
           setTasks={setTasks}
         />
-        <div className="relative flex min-h-0 flex-1">
-          <div className="relative flex min-h-0 flex-1 flex-col">
+        <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          {/* min-w-0: a flex item defaults to min-width:auto, so wide inline
+              content would otherwise push the fixed-width inspector past the
+              viewport edge instead of narrowing the transcript. */}
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             {empty ? (
               <EmptySession>
                 {errorAlert}

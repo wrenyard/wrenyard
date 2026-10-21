@@ -134,8 +134,11 @@ export function SessionInspector({ draft, usageHydrating = false }: { draft: boo
       <aside
         ref={asideRef}
         className={cn(
-          'flex w-80 min-h-0 shrink-0 flex-col border-l bg-background',
-          overlay && 'absolute inset-y-0 right-0 z-40 shadow-lg',
+          'flex w-80 min-h-0 shrink-0 flex-col bg-background',
+          // The border belongs to the floating panel only: in flow the cards
+          // already separate the panel, and the line sat against the
+          // transcript's own scrollbar gutter.
+          overlay && 'absolute inset-y-0 right-0 z-40 border-l shadow-lg',
         )}
         data-slot="session-inspector"
       >

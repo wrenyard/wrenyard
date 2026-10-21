@@ -835,6 +835,9 @@ html[data-platform="win32"] {
     }
   body {
     @apply bg-background text-foreground;
+    /* The shell fills #root (100svh) and scrolls only inside its own areas;
+       letting inner overflow escape here would scroll the whole window. */
+    overflow: hidden;
     }
   #root {
     display: flex;
@@ -843,6 +846,7 @@ html[data-platform="win32"] {
     }
   html {
     @apply font-sans;
+    overflow: hidden;
     }
 }
 
