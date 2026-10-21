@@ -115,6 +115,8 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
   let catalogRetryAt = 0;
   let pendingCatalog: Promise<void> | undefined;
   let lastAccount: WorkBuddyAccountIdentity | undefined;
+  let accountGeneration = 0;
+  const credentialGenerations = new WeakMap<ProviderCredential, number>();
 
   /**
    * Binds the login type observed on the newest read and returns it. A changed
@@ -131,12 +133,13 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
 
   /** Clears every per-login cache; the next read rebinds the current login. */
   function resetAccountState(): void {
+    accountGeneration += 1;
     rounds.clear();
     catalogExpires = 0;
     catalogRetryAt = 0;
     pendingCatalog = undefined;
     lastAccount = undefined;
-    resetWorkBuddyAuthCaches();
+    resetWorkBuddyAuthCaches(store.build.id);
   }
 
   const round = (key: string, continues: boolean, nowMs: number): WorkBuddyRound => {
@@ -163,6 +166,7 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
 
   function bindCredential(session: WorkBuddySession): WorkBuddyProviderCredential {
     const credential = Object.freeze({ value: session.accessToken }) as WorkBuddyProviderCredential;
+    credentialGenerations.set(credential, accountGeneration);
     nativeHeaders.set(credential, nativeHeadersForSession(session));
     sessionByCredential.set(credential, session);
     accountByCredential.set(credential, Object.freeze(accountSummaryOf(session)));
@@ -175,6 +179,7 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
   }
 
   async function fetchCatalog(session: WorkBuddySession, signal?: AbortSignal): Promise<void> {
+    const generation = accountGeneration;
     const headers = meterAuthHeaders(session, WORKBUDDY_CONFIG_USER_AGENT);
     const response = await fetchImpl(configUrl(store.build), { method: 'GET', headers, signal });
     if (!response.ok) {
@@ -185,6 +190,7 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
     const entries = configModelEntries(payload);
     if (!entries) throw new Error('WorkBuddy configuration response was rejected');
     // modelPromotions parsing is intentionally not implemented.
+    if (generation !== accountGeneration) return;
     state.publish(entries);
     catalogExpires = Date.now() + CATALOG_TTL_MS;
   }
@@ -194,11 +200,13 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
     if (state.definition.models.length > 0 && catalogExpires > now) return;
     if (now < catalogRetryAt) return;
     if (!pendingCatalog) {
-      pendingCatalog = fetchCatalog(session, signal).catch(() => {
-        catalogRetryAt = Date.now() + 30_000;
+      const generation = accountGeneration;
+      const request = fetchCatalog(session, signal).catch(() => {
+        if (generation === accountGeneration) catalogRetryAt = Date.now() + 30_000;
       }).finally(() => {
-        pendingCatalog = undefined;
+        if (pendingCatalog === request) pendingCatalog = undefined;
       });
+      pendingCatalog = request;
     }
     await pendingCatalog;
   }
@@ -301,19 +309,23 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
       return mapped === undefined ? undefined : { status: mapped.status, errorBody: mapped.body };
     },
     async credential(signal?: AbortSignal): Promise<WorkBuddyProviderCredential | undefined> {
+      const generation = accountGeneration;
       const session = await resolveWorkBuddySession(store, signal ?? AbortSignal.timeout(30_000), fetchImpl);
-      if (!session) return undefined;
+      if (!session || generation !== accountGeneration) return undefined;
       observeAccount(session);
+      const observedGeneration = accountGeneration;
       const credential = bindCredential(session);
       await ensureCatalog(session, signal);
-      return credential;
+      return observedGeneration === accountGeneration ? credential : undefined;
     },
     async refreshCredential(credential: ProviderCredential, signal: AbortSignal): Promise<ProviderCredential> {
+      const generation = accountGeneration;
+      if (credentialGenerations.get(credential) !== generation) throw new Error('WorkBuddy credential belongs to a previous login');
       const session = sessionByCredential.get(credential as WorkBuddyProviderCredential);
       const stored = session ?? await readPersistedAuth(store);
       if (!stored) throw new Error('WorkBuddy credential is not refreshable');
       const refreshed = await refreshWorkBuddyAuth(store, stored, signal, fetchImpl);
-      if (!refreshed) throw new Error('WorkBuddy credential refresh failed');
+      if (!refreshed || generation !== accountGeneration) throw new Error('WorkBuddy credential refresh failed');
       observeAccount(sessionFromAuth(refreshed));
       return bindCredential(sessionFromAuth(refreshed));
     },
@@ -345,19 +357,23 @@ export function createWorkBuddyRuntime(options: WorkBuddyRuntimeOptions) {
       };
     },
     async refreshModels(signal?: AbortSignal): Promise<void> {
+      const generation = accountGeneration;
       const session = await resolveWorkBuddySession(store, signal ?? AbortSignal.timeout(30_000), fetchImpl);
-      if (!session) return;
+      if (!session || generation !== accountGeneration) return;
       catalogExpires = 0;
       catalogRetryAt = 0;
       await fetchCatalog(session, signal);
     },
     fetchQuotaSnapshot,
     async readQuotaObservation(signal?: AbortSignal): Promise<{ source: string; fetched_at: string; data: unknown } | undefined> {
+      const generation = accountGeneration;
       const bounded = signal ?? AbortSignal.timeout(30_000);
       const session = await resolveWorkBuddySession(store, bounded, fetchImpl);
-      if (!session) return undefined;
+      if (!session || generation !== accountGeneration) return undefined;
       observeAccount(session);
+      const observedGeneration = accountGeneration;
       const data = await fetchQuotaSnapshot(session, bounded);
+      if (observedGeneration !== accountGeneration) return undefined;
       return {
         source: `${store.build.id}.meter`,
         fetched_at: new Date().toISOString(),

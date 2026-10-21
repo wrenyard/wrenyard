@@ -99,6 +99,8 @@ export interface WorkBuddyCredentialStore {
 }
 
 const KEEP_RENEWED_MS = 60_000;
+const authGenerations = new Map<WorkBuddyBuildId, number>();
+const authWrites = new Map<string, Promise<void>>();
 const renewingByRefreshToken = new Map<string, Promise<WorkBuddyStoredAuth | undefined>>();
 const renewedByRefreshToken = new Map<string, { at: number; next: WorkBuddyStoredAuth }>();
 
@@ -170,9 +172,11 @@ function refreshExpired(auth: WorkBuddyStoredAuth, nowMs: number): boolean {
  * the next read a different login, so a renewal result or an in-flight renewal
  * of the previous login can never be reused for the new one.
  */
-export function resetWorkBuddyAuthCaches(): void {
-  renewingByRefreshToken.clear();
-  renewedByRefreshToken.clear();
+export function resetWorkBuddyAuthCaches(buildId: WorkBuddyBuildId): void {
+  authGenerations.set(buildId, (authGenerations.get(buildId) ?? 0) + 1);
+  for (const cache of [renewingByRefreshToken, renewedByRefreshToken]) {
+    for (const key of cache.keys()) if (key.startsWith(`${buildId}\n`)) cache.delete(key);
+  }
 }
 
 export async function readPersistedAuth(store: WorkBuddyCredentialStore): Promise<WorkBuddyStoredAuth | undefined> {
@@ -186,12 +190,20 @@ export async function readPersistedAuth(store: WorkBuddyCredentialStore): Promis
   }
 }
 
-export async function writePersistedAuth(store: WorkBuddyCredentialStore, auth: WorkBuddyStoredAuth): Promise<void> {
+export async function writePersistedAuth(store: WorkBuddyCredentialStore, auth: WorkBuddyStoredAuth, generation?: number): Promise<void> {
   const path = persistencePath(store.context, store.build.id);
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(auth, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  await rename(temporary, path);
+  if (generation === undefined) resetWorkBuddyAuthCaches(store.build.id);
+  // Serialize replacements so an already-started refresh always precedes a newer login.
+  const previous = authWrites.get(path) ?? Promise.resolve();
+  const write = previous.catch(() => {}).then(async () => {
+    if (generation !== undefined && generation !== (authGenerations.get(store.build.id) ?? 0)) return;
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    const temporary = `${path}.${process.pid}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(auth, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    await rename(temporary, path);
+  });
+  authWrites.set(path, write);
+  try { await write; } finally { if (authWrites.get(path) === write) authWrites.delete(path); }
 }
 
 export async function readDesktopAuth(store: WorkBuddyCredentialStore): Promise<
@@ -314,6 +326,7 @@ async function renewWorkBuddyAuth(
   const refreshToken = auth.refreshToken;
   if (!refreshToken) return undefined;
   const key = refreshDedupeKey(store, refreshToken);
+  const generation = authGenerations.get(store.build.id) ?? 0;
   const cached = renewedByRefreshToken.get(key);
   if (cached && Date.now() - cached.at < KEEP_RENEWED_MS) {
     return mergeRefreshedTokens(auth, cached.next);
@@ -356,16 +369,17 @@ async function renewWorkBuddyAuth(
         return undefined;
       }
       const next = parseRefreshPayload(data, auth);
+      await writePersistedAuth(store, next, generation);
+      if (generation !== (authGenerations.get(store.build.id) ?? 0)) return undefined;
       renewedByRefreshToken.set(key, { next, at: Date.now() });
-      await writePersistedAuth(store, next);
       return next;
     })().finally(() => {
-      renewingByRefreshToken.delete(key);
+      if (renewingByRefreshToken.get(key) === pending) renewingByRefreshToken.delete(key);
     });
     renewingByRefreshToken.set(key, pending);
   }
   const renewed = await pending;
-  if (!renewed) return undefined;
+  if (!renewed || generation !== (authGenerations.get(store.build.id) ?? 0)) return undefined;
   return mergeRefreshedTokens(auth, renewed);
 }
 
