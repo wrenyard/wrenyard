@@ -12,6 +12,7 @@ import {
   taskListRows,
   taskRunIdFromPayload,
   writeServicePayload,
+  writeText,
   workspaceRootForRuntime,
   errorMessage,
 } from '../shared.mts'
@@ -100,9 +101,11 @@ export async function handleTaskDescribe(args: string[]): Promise<number> {
   }
 }
 
+const TASK_RUN_USAGE = 'Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--fast | --no-fast] [--settings-json json] [--json | --structured] <json-input>'
+
 export async function handleTaskRun(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--fast | --no-fast] [--settings-json json] [--json] <json-input>')
+    console.log(TASK_RUN_USAGE)
     return 0
   }
 
@@ -116,6 +119,7 @@ export async function handleTaskRun(args: string[]): Promise<number> {
       'no-fast': { type: 'boolean' },
       'settings-json': { type: 'string' },
       json: { type: 'boolean' },
+      structured: { type: 'boolean' },
     },
     allowPositionals: true,
     strict: true,
@@ -124,13 +128,18 @@ export async function handleTaskRun(args: string[]): Promise<number> {
   const project = typeof values.project === 'string' ? values.project : undefined
   const worktree = typeof values.worktree === 'string' ? values.worktree : undefined
   if (!taskId || !project || positionals.length !== 2) {
-    console.error('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--fast | --no-fast] [--settings-json json] [--json] <json-input>')
+    console.error(TASK_RUN_USAGE)
     if (taskId && project && positionals.length < 2) await printTaskInputRequiredHint(taskId, project, values.config)
     return 1
   }
 
   if (values.fast === true && values['no-fast'] === true) {
     console.error('--fast and --no-fast cannot be used together')
+    return 1
+  }
+  const outputMode = taskOutputMode(values.json === true, values.structured === true)
+  if (outputMode === 'rejected') {
+    console.error('--json and --structured cannot be used together')
     return 1
   }
   const fast = values.fast === true ? true : values['no-fast'] === true ? false : undefined
@@ -153,7 +162,7 @@ export async function handleTaskRun(args: string[]): Promise<number> {
     }
 
     const result = servicePayload(await client.task.run.wait({ task_run_id: taskRunId }))
-    writeServicePayload(result)
+    writeTaskRunResult(result.value, outputMode)
     return isTaskRunSuccess(result.value) ? 0 : 1
   } finally {
     client.close()
@@ -216,9 +225,11 @@ export async function handleTaskStatus(args: string[]): Promise<number> {
   return 0
 }
 
+const TASK_OUTPUT_USAGE = 'Usage: wrenyard task output <task_run_id> [--config path] [--json | --structured]'
+
 export async function handleTaskOutput(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard task output <task_run_id> [--config path] [--json]')
+    console.log(TASK_OUTPUT_USAGE)
     return 0
   }
 
@@ -227,21 +238,158 @@ export async function handleTaskOutput(args: string[]): Promise<number> {
     options: {
       config: { type: 'string' },
       json: { type: 'boolean' },
+      structured: { type: 'boolean' },
     },
     allowPositionals: true,
     strict: true,
   })
   if (positionals.length !== 1) {
-    console.error('Usage: wrenyard task output <task_run_id> [--config path] [--json]')
+    console.error(TASK_OUTPUT_USAGE)
+    return 1
+  }
+  const outputMode = taskOutputMode(values.json === true, values.structured === true)
+  if (outputMode === 'rejected') {
+    console.error('--json and --structured cannot be used together')
     return 1
   }
   const client = await connectConfiguredForemanClient(values.config)
   try {
-    writeServicePayload(servicePayload(await client.task.run.output({ task_run_id: positionals[0] })))
+    writeTaskRunResult(await client.task.run.output({ task_run_id: positionals[0] }), outputMode)
   } finally {
     client.close()
   }
   return 0
+}
+
+/**
+ * How one finished run is printed. `text` is the default: the run's report
+ * followed by the facts the daemon collected, as plain text. `json` prints the
+ * same two values as one `{report, facts}` object. `structured` prints the
+ * schema output the compile step produced, or, when the compile failed, the
+ * compile error together with the report and the facts.
+ */
+type TaskOutputMode = 'text' | 'json' | 'structured'
+
+/** Rejects the mutually exclusive flag combination before any daemon call. */
+function taskOutputMode(json: boolean, structured: boolean): TaskOutputMode | 'rejected' {
+  if (json && structured) return 'rejected'
+  if (structured) return 'structured'
+  if (json) return 'json'
+  return 'text'
+}
+
+function writeTaskRunResult(value: unknown, mode: TaskOutputMode): void {
+  if (mode === 'structured') {
+    writeServicePayload(servicePayload(structuredTaskRunOutput(value)))
+    return
+  }
+  const report = taskRunReport(value)
+  const facts = taskRunFacts(value)
+  if (mode === 'json') {
+    writeServicePayload(servicePayload({ report, facts: facts ?? null }))
+    return
+  }
+  writeText(renderTaskRunResult(report, facts))
+}
+
+/**
+ * The run's own report: a plain output string, the `report` the run recorded
+ * next to a failed compile, or, when a run recorded only a compiled value, the
+ * summary (the report's first line). Nothing is rephrased or invented.
+ */
+function taskRunReport(value: unknown): string {
+  const record = asRecord(value)
+  if (!record) return ''
+  const output = record['output']
+  if (typeof output === 'string') return output
+  const outputRecord = asRecord(output)
+  const report = outputRecord === undefined ? '' : field(outputRecord, ['report'])
+  if (report) return report
+  return typeof record['summary'] === 'string' ? record['summary'] : ''
+}
+
+/** The facts of the run, from the run record or from a recorded compile result. */
+function taskRunFacts(value: unknown): Record<string, unknown> | undefined {
+  const record = asRecord(value)
+  if (!record) return undefined
+  const facts = asRecord(record['facts'])
+  if (facts) return facts
+  const output = asRecord(record['output'])
+  return output === undefined ? undefined : asRecord(output['facts'])
+}
+
+/**
+ * The schema output the run recorded. A compile failure records
+ * `{report, facts, compileError}` instead of a schema value, and that record is
+ * passed through unchanged so the operator sees the compile error with the
+ * report and the facts.
+ */
+function structuredTaskRunOutput(value: unknown): unknown {
+  const record = asRecord(value)
+  if (!record) return value
+  return record['output'] ?? null
+}
+
+/** One run's report followed by its facts, as plain text. */
+function renderTaskRunResult(report: string, facts?: Record<string, unknown>): string {
+  const rendered = facts === undefined ? '' : renderRunFacts(facts)
+  if (rendered === '') return report
+  return report.trim() === '' ? rendered : `${report}\n\n${rendered}`
+}
+
+/** The facts of one run as a flat bullet list; absent facts are omitted. */
+function renderRunFacts(facts: Record<string, unknown>): string {
+  const lines: string[] = [`- status: ${field(facts, ['status'])}`]
+  const failure = field(facts, ['failure_category'])
+  if (failure) lines.push(`- failure: ${failure}`)
+  const duration = numberField(facts['duration_ms'])
+  if (duration !== undefined) lines.push(`- duration: ${duration} ms`)
+  lines.push(`- timed out: ${facts['timed_out'] === true ? 'yes' : 'no'}`)
+  const worktree = field(facts, ['worktree_id'])
+  const checkout = field(facts, ['checkout_path'])
+  if (worktree) lines.push(`- worktree: ${worktree}`)
+  else if (checkout) lines.push(`- checkout: ${checkout}`)
+  writeFactList(lines, 'changed files', stringList(facts['changed_files']))
+  writeFactList(lines, 'commits', commitList(facts['commits']))
+  writeFactList(lines, 'artifact files', artifactList(facts['artifact_files']))
+  return lines.join('\n')
+}
+
+function writeFactList(lines: string[], label: string, entries: string[]): void {
+  if (entries.length === 0) return
+  lines.push(`- ${label}:`)
+  for (const entry of entries) lines.push(`  - ${entry}`)
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is string => typeof entry === 'string')
+}
+
+function commitList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    const commit = asRecord(entry)
+    if (!commit) return []
+    return [`${field(commit, ['sha'])} ${field(commit, ['subject'])}`.trim()]
+  })
+}
+
+function artifactList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    const file = asRecord(entry)
+    if (!file) return []
+    const path = field(file, ['path'])
+    const bytes = numberField(file['bytes'])
+    return [bytes === undefined ? path : `${path} (${bytes} bytes)`]
+  })
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
 }
 
 export async function handleTaskDoctor(args: string[]): Promise<number> {
