@@ -1,5 +1,13 @@
 import type { UpstreamRouteErrorInput, UpstreamRouteFailure } from '../base/contracts.ts';
 import { object, first, time } from '../base/quota-parsing.ts';
+
+/** A reset instant stated in the message, e.g. `将在 2026-01-02 03:04:05 UTC+8 重置`. */
+const MESSAGE_RESET_PATTERN = /(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s*UTC([+-])(\d{1,2})(?::?(\d{2}))?[^\r\n]*?(?:重置|reset)/iu;
+
+function messageReset(message: unknown): string | undefined {
+  const reset = typeof message === 'string' ? MESSAGE_RESET_PATTERN.exec(message) : null;
+  return reset === null ? undefined : time(`${reset[1]}T${reset[2]}${reset[3]}${reset[4]!.padStart(2, '0')}:${reset[5] ?? '00'}`);
+}
 /** Only explicit exhaustion/model codes establish a route defect; a bare per-model 429 stays route-scoped; no credit guesses. */
 export function codeBuddyRouteFailure(input: UpstreamRouteErrorInput): UpstreamRouteFailure | undefined {
   const root = object(input.body);
@@ -7,7 +15,7 @@ export function codeBuddyRouteFailure(input: UpstreamRouteErrorInput): UpstreamR
   const row = Object.keys(error).length ? error : root;
   const message = first(row, 'message', 'msg', 'error_message');
   const code = first(row, 'reason_code', 'code', 'type');
-  const until = time(first(row, 'resets_at', 'reset_at', 'reset_time'));
+  const until = time(first(row, 'resets_at', 'reset_at', 'reset_time')) ?? messageReset(message);
   const quotaPoolId = first(row, 'quota_pool_id', 'quotaPoolId');
   if (typeof message === 'string' && (
     /service info not found/i.test(message)
