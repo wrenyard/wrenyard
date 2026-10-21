@@ -15,8 +15,6 @@ import { formatTokenCount } from '@/renderer/lib/format';
 import {
   DISPATCH_TERMINAL_LABEL,
   dispatchTerminal,
-  isHiddenCallRole,
-  isHiddenContextSource,
   runningStepName,
   thinkingVerb,
   turnTokenTotal,
@@ -24,12 +22,13 @@ import {
   waitingStatusText,
 } from '../../model/describe.js';
 import type { TurnWaitingState } from '../../model/describe.js';
-import type { ActionModel, ActivityItem, CallModel, ContextItem, ErrorItem, ModelEntry, ReplyModel, TurnModel } from '../../model/types.js';
+import type { ActionModel, ContextItem, ErrorItem, ModelEntry, ReplyModel, TurnModel } from '../../model/types.js';
 import { MediaAttachments, fromSessionFile } from '../MediaAttachments.js';
 import { splitReplyQuote } from '../conversation/UserMessage.js';
 import { Ellipsis, WorkingDots } from '../live-indicators.js';
 import { MorphText } from '../morph-text.js';
 import { ActivityGroup, groupId, type GroupActivityItem } from './ActivityGroup.js';
+import { transcriptEntries } from './transcript-timeline.js';
 
 export interface TranscriptTurnProps {
   /** The folded turn to render. */
@@ -44,16 +43,6 @@ export interface TranscriptTurnProps {
   onCancelTask: (taskRunId: string) => Promise<void>;
   /** Live recovery waiting state of this turn, when it has one. */
   waiting?: TurnWaitingState;
-}
-
-function parseStamp(value: string): number {
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-/** A call belongs to an action when its parent or id prefix names that action. */
-function attachedToAction(call: CallModel, actions: readonly ActionModel[]): boolean {
-  return actions.some((action) => call.parent === action.id || call.id.startsWith(`${action.id}.`));
 }
 
 /** The public id of the turn's reasoning model: the configured model, else the latest finished reason call's serving model. */
@@ -126,109 +115,6 @@ type BodyBlock =
   | { kind: 'reply'; reply: ReplyModel }
   | { kind: 'error'; error: ErrorItem };
 
-type TranscriptEntry =
-  | { kind: 'activity'; item: GroupActivityItem }
-  | { kind: 'reply'; reply: ReplyModel }
-  | { kind: 'error'; error: ErrorItem };
-
-function visibleActivityItem(item: ActivityItem): GroupActivityItem | undefined {
-  switch (item.kind) {
-    case 'call':
-      if (isHiddenCallRole(item.call.role)) return undefined;
-      break;
-    case 'context':
-      if (isHiddenContextSource(item.item.source)) return undefined;
-      break;
-    default:
-      break;
-  }
-  return item;
-}
-
-/** Cycle errors that only reflect failed engine auxiliaries stay in the trace view. */
-function omitTranscriptError(turn: TurnModel, error: ErrorItem): boolean {
-  const cycle = error.cycle;
-  if (cycle === undefined) return false;
-  const failedCalls = turn.calls.filter((call) => call.cycle === cycle && call.status === 'failed');
-  if (failedCalls.length === 0) return false;
-  return failedCalls.every((call) => isHiddenCallRole(call.role));
-}
-
-/** Chronological entries of a turn: activity items, prose replies and errors. */
-function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
-  const entries: TranscriptEntry[] = [];
-  const turnCalls = turn.calls.filter(
-    (call) => (call.cycle === undefined || call.cycle === 0)
-      && call.role !== 'reason'
-      && !isHiddenCallRole(call.role)
-      && !attachedToAction(call, turn.actions),
-  );
-  const firstCycleStart = turn.cycles[0]?.startedAt;
-  const beforeFirstCycle = (call: CallModel): boolean => firstCycleStart === undefined
-    || parseStamp(call.startedAt) < parseStamp(firstCycleStart);
-  for (const call of turnCalls.filter(beforeFirstCycle)) {
-    const item = visibleActivityItem({ kind: 'call', call });
-    if (item !== undefined) entries.push({ kind: 'activity', item });
-  }
-
-  for (const cycle of turn.cycles) {
-    for (const item of cycle.context.filter((context) => context.actionId === undefined)) {
-      const activity = visibleActivityItem({ kind: 'context', item });
-      if (activity !== undefined) entries.push({ kind: 'activity', item: activity });
-    }
-    const inCycle: { at: string; item: ActivityItem }[] = [];
-    const reasoning = turn.calls.find((call) => call.role === 'reason' && call.cycle === cycle.index);
-    if (reasoning !== undefined) {
-      inCycle.push({
-        at: reasoning.startedAt,
-        item: { kind: 'reason', call: reasoning, reasoning: cycle.reasoning },
-      });
-    }
-    const standalone = turn.calls.filter(
-      (call) => call.cycle === cycle.index
-        && call.role !== 'reason'
-        && !isHiddenCallRole(call.role)
-        && !attachedToAction(call, turn.actions),
-    );
-    for (const call of standalone) {
-      inCycle.push({ at: call.startedAt, item: { kind: 'call', call } });
-    }
-    const actions = cycle.actionIds
-      .map((id) => turn.actions.find((action) => action.id === id))
-      .filter((action): action is ActionModel => action !== undefined);
-    for (const action of actions) {
-      const calls = turn.calls.filter(
-        (call) => (call.parent === action.id || call.id.startsWith(`${action.id}.`))
-          && !isHiddenCallRole(call.role),
-      );
-      inCycle.push({ at: action.startedAt, item: { kind: 'action', action, calls } });
-    }
-    inCycle.sort((a, b) => parseStamp(a.at) - parseStamp(b.at));
-    for (const entry of inCycle) {
-      const item = visibleActivityItem(entry.item);
-      if (item !== undefined) entries.push({ kind: 'activity', item });
-    }
-    for (const error of cycle.errors) {
-      if (!omitTranscriptError(turn, error)) entries.push({ kind: 'error', error });
-    }
-    for (const reply of turn.replies.filter((reply) => reply.cycle === cycle.index)) {
-      entries.push({ kind: 'reply', reply });
-    }
-  }
-
-  for (const call of turnCalls.filter((call) => !beforeFirstCycle(call))) {
-    const item = visibleActivityItem({ kind: 'call', call });
-    if (item !== undefined) entries.push({ kind: 'activity', item });
-  }
-  const cycleIndices = new Set(turn.cycles.map((cycle) => cycle.index));
-  for (const reply of turn.replies.filter((reply) => reply.cycle === undefined || !cycleIndices.has(reply.cycle))) {
-    entries.push({ kind: 'reply', reply });
-  }
-  for (const error of turn.errors.filter((error) => error.cycle === undefined)) {
-    entries.push({ kind: 'error', error });
-  }
-  return entries;
-}
 
 /** Dispatched task runs of the turn that are still running. */
 function runningTasks(turn: TurnModel): ActionModel[] {
