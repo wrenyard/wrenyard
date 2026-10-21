@@ -98,6 +98,16 @@ export const todoListResultSchema = {
       description: 'The matching todos (compact or full per params.fields).',
       items: { oneOf: [todoCompactSchema, todoSchema] },
     },
+    skipped: {
+      type: 'array',
+      description: 'Todo files the last scan skipped because they could not be parsed.',
+      items: {
+        type: 'object',
+        required: ['file', 'reason'],
+        properties: { file: { type: 'string' }, reason: { type: 'string' } },
+        additionalProperties: false,
+      },
+    },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
