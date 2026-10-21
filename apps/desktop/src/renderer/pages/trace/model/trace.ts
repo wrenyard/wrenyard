@@ -1,4 +1,6 @@
 import type { LedgerEvent } from '@wrenyard/session';
+import { isHiddenCallRole } from '../../session/model/describe.js';
+import type { CallModel } from '../../session/model/types.js';
 
 export type TraceKind = 'turn' | 'step' | 'reasoning' | 'auxiliary' | 'task' | 'action' | 'content' | 'notice' | 'session';
 export interface TraceNode {
@@ -79,6 +81,7 @@ export function buildTrace(input: readonly LedgerEvent[]): TraceModel {
   const nodes = new Map<string, MutableNode>([['session', root]]);
   const byId = new Map<string, MutableNode>();
   const parentByKey = new Map<string, string>();
+  const hiddenSpanIds = new Set<string>();
   const latestTurn = [...events].reverse().find((event) => event.type === 'turn.started')?.turn;
   const sessionRunning = latestTurn !== undefined && !events.some((event) => (event.type === 'turn.finished' || event.type === 'turn.interrupted') && event.turn === latestTurn);
   root.running = sessionRunning;
@@ -118,6 +121,11 @@ export function buildTrace(input: readonly LedgerEvent[]): TraceModel {
     if (event.type === 'action.started' || event.type === 'action.finished' || event.type === 'action.titled' || event.type === 'span.started' || event.type === 'span.finished') {
       const id = stringField(event, 'id');
       if (!id) continue;
+      if (event.type === 'span.started' && event.kind === 'auxiliary' && isHiddenCallRole(event.request.role as CallModel['role'])) {
+        hiddenSpanIds.add(id);
+        continue;
+      }
+      if (event.type === 'span.finished' && hiddenSpanIds.has(id)) continue;
       const start = event.type === 'action.started' || event.type === 'span.started';
       const kind: TraceKind = event.type.startsWith('action.') ? 'action' : event.type === 'span.started' ? event.kind : (byId.get(id)?.kind ?? 'auxiliary');
       const parentId = start ? stringField(event, 'parent') : undefined;
@@ -166,8 +174,15 @@ export function buildTrace(input: readonly LedgerEvent[]): TraceModel {
     warnings: events.filter((event) => event.type === 'system.warning').length,
     usage: usageZero(), startedAt: events[0]?.at, endedAt: events.at(-1)?.at, running: sessionRunning,
   };
-  for (const event of events) if (event.type === 'span.finished') {
-    const usage = usageFor(event); summary.usage.input += usage.input; summary.usage.cached += usage.cached; summary.usage.output += usage.output; summary.usage.reasoning += usage.reasoning;
+  for (const event of events) {
+    if (event.type !== 'span.finished') continue;
+    const id = stringField(event, 'id');
+    if (id !== undefined && hiddenSpanIds.has(id)) continue;
+    const usage = usageFor(event);
+    summary.usage.input += usage.input;
+    summary.usage.cached += usage.cached;
+    summary.usage.output += usage.output;
+    summary.usage.reasoning += usage.reasoning;
   }
   return { root, summary, events };
 }

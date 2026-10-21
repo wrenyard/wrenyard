@@ -1,6 +1,8 @@
 import { formatCount, formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
 import { classifyFamily, familyBrand, providerBrand } from '@/renderer/lib/model-brand';
 import type { StatsPeriod, StatsSnapshot, StatsWindowSnapshot, TaskRunSnapshot } from '@/shell-contract';
+import { isHiddenCallRole } from '../../session/model/describe.js';
+import type { CallModel } from '../../session/model/types.js';
 import { PERIOD_LABEL } from './describe.js';
 import { taskDisplayLabel, taskInvestmentLabel, type TaskNameTables } from './task-names.js';
 
@@ -156,7 +158,10 @@ export function taskRows(
 
 /** Up to fifty recent runs with terminal-only numeric fields. */
 export function taskRunRows(runs: TaskRunSnapshot[], names: TaskNameTables): TaskRunRow[] {
-  return runs.slice(0, MAX_TASK_RUN_ROWS).map((run) => {
+  return runs.slice(0, MAX_TASK_RUN_ROWS).filter((run) => {
+    if (run.kind !== 'auxiliary' || run.role === undefined) return true;
+    return !isHiddenCallRole(run.role as CallModel['role']);
+  }).map((run) => {
     const status = run.status;
     const active = status === 'queued' || status === 'running';
     const terminal = status !== undefined && TERMINAL_STATUSES.has(status);

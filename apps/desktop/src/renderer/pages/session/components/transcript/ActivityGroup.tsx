@@ -32,8 +32,6 @@ import {
 import {
   ACTION_KIND_LABEL,
   CALL_ROLE_LABEL,
-  HIDDEN_CALL_ROLES,
-  HIDDEN_CONTEXT_SOURCES,
   materialTitle,
   stepName,
 } from '../../model/describe.js';
@@ -47,28 +45,8 @@ import { ContextItemBody } from './ToolCard.js';
 export type { ActivityItem } from '../../model/types.js';
 import type { ActivityItem } from '../../model/types.js';
 
-/** One transcript step, including engine-triggered steps folded under 系统步骤. */
-export type GroupActivityItem = ActivityItem & { system?: boolean };
-
-function isSystemItem(item: GroupActivityItem): boolean {
-  if (item.system === true) return true;
-  switch (item.kind) {
-    case 'call':
-      return HIDDEN_CALL_ROLES.has(item.call.role);
-    case 'context':
-      return HIDDEN_CONTEXT_SOURCES.has(item.item.source);
-    default:
-      return false;
-  }
-}
-
-function modelChosenItems(items: readonly GroupActivityItem[]): GroupActivityItem[] {
-  return items.filter((item) => !isSystemItem(item));
-}
-
-function systemItems(items: readonly GroupActivityItem[]): GroupActivityItem[] {
-  return items.filter(isSystemItem);
-}
+/** One transcript step in a folded activity group. */
+export type GroupActivityItem = ActivityItem;
 
 /** Stable key of one item within its group. */
 export function groupId(item: GroupActivityItem): string {
@@ -210,54 +188,6 @@ function ActivityItemRow({
   }
 }
 
-/** Muted disclosure of engine-triggered steps at the end of an expanded group. */
-function SystemStepsDisclosure({
-  items,
-  contextItems,
-  sessionId,
-  onCancelTask,
-  naming,
-}: {
-  items: readonly GroupActivityItem[];
-  contextItems?: readonly ContextItem[];
-  sessionId?: string;
-  onCancelTask: (taskRunId: string) => Promise<void>;
-  naming: { contextItems?: readonly ContextItem[]; actionTitle: (id: string) => string | undefined };
-}) {
-  const [open, setOpen] = useState(false);
-  const nameOf = (item: GroupActivityItem): string => stepName(item, naming);
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger
-        render={(
-          <button
-            type="button"
-            className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
-          />
-        )}
-      >
-        <ChevronRight className={cn('size-3.5 shrink-0 transition-transform', open && 'rotate-90')} />
-        <span>系统步骤 {items.length}</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-fast data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0">
-        <div className="divide-y divide-border/60 border-t border-border/60">
-          {items.map((item) => (
-            <div key={groupId(item)}>
-              <ActivityItemRow
-                item={item}
-                contextItems={contextItems}
-                sessionId={sessionId}
-                onCancelTask={onCancelTask}
-                name={nameOf(item)}
-              />
-            </div>
-          ))}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  );
-}
-
 export interface ActivityGroupProps {
   /** The group's items in time order. */
   items: readonly GroupActivityItem[];
@@ -272,26 +202,24 @@ export interface ActivityGroupProps {
 /** One collapsed stretch of agent work. */
 export function ActivityGroup({ items, contextItems, sessionId, onCancelTask }: ActivityGroupProps) {
   const [open, setOpen] = useState(false);
-  const chosen = modelChosenItems(items);
-  const system = systemItems(items);
-  const running = runningLabel(chosen);
-  const failed = failedCount(chosen);
-  const actionTitleById = new Map(chosen.flatMap((item) => {
+  const running = runningLabel(items);
+  const failed = failedCount(items);
+  const actionTitleById = new Map(items.flatMap((item) => {
     if (item.kind !== 'action' || item.action.title.trim() === '') return [];
     return [[item.action.id, item.action.title] as const];
   }));
   const naming = { contextItems, actionTitle: (id: string) => actionTitleById.get(id) };
   const nameOf = (item: GroupActivityItem): string => stepName(item, naming);
   // A reasoning step joins the summary once it settled.
-  const settled = chosen.filter((item) => !(item.kind === 'reason' && item.call.status === 'running'));
+  const settled = items.filter((item) => !(item.kind === 'reason' && item.call.status === 'running'));
   if (running === undefined && settled.length === 0) return null;
-  const HeaderIcon = chosen.length === 1 ? itemIcon(chosen[0]!) : List;
+  const HeaderIcon = items.length === 1 ? itemIcon(items[0]!) : List;
   // A group holding one settled step names that step; a multi-step group keeps
   // its kind-count summary.
-  const settledLabel = settled.length === 1 && chosen.length === 1
+  const settledLabel = settled.length === 1 && items.length === 1
     ? nameOf(settled[0]!)
     : `${summary(settled)}${failed > 0 ? `（${failed} 项失败）` : ''}`;
-  const runningStep = chosen.find((item) =>
+  const runningStep = items.find((item) =>
     (item.kind === 'reason' || item.kind === 'call') && item.call.status === 'running'
     || item.kind === 'action' && item.action.status === 'running');
   const runningText = runningStep === undefined ? running : nameOf(runningStep);
@@ -319,7 +247,7 @@ export function ActivityGroup({ items, contextItems, sessionId, onCancelTask }: 
       <CollapsibleContent className="h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-fast data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0">
         <div className="mt-1.5 overflow-hidden rounded-xl border bg-card/40">
           <div className="divide-y divide-border/60">
-            {chosen.map((item) => (
+            {items.map((item) => (
               <ActivityItemRow
                 key={groupId(item)}
                 item={item}
@@ -329,15 +257,6 @@ export function ActivityGroup({ items, contextItems, sessionId, onCancelTask }: 
                 name={nameOf(item)}
               />
             ))}
-            {system.length > 0 && (
-              <SystemStepsDisclosure
-                items={system}
-                contextItems={contextItems}
-                sessionId={sessionId}
-                onCancelTask={onCancelTask}
-                naming={naming}
-              />
-            )}
           </div>
         </div>
       </CollapsibleContent>

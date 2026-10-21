@@ -4,7 +4,7 @@ import type { ContextInspection, ContextItem, ContextItemKind, ContextLayerId, Q
 import type { SessionRoutesPreviewRole } from '@wrenyard/protocol';
 import { boundedOutputReservation } from '@wrenyard/models';
 import type { CallContextSnapshot, CallModel } from './types.js';
-import { CALL_ROLE_LABEL } from './describe.js';
+import { CALL_ROLE_LABEL, isHiddenCallRole } from './describe.js';
 
 /**
  * Pure usage projections for the session page. No React, DOM, bridge or window
@@ -306,6 +306,7 @@ export interface ConsumptionView {
 
 /** One role's row, or undefined when the role has no calls at all. */
 function roleConsumptionRow(role: CallModel['role'], calls: readonly CallModel[]): ConsumptionRow | undefined {
+  if (isHiddenCallRole(role)) return undefined;
   const roleCalls = calls.filter((call) => call.role === role);
   // Every role that actually occurs keeps a row (and its call count) even when
   // its calls reported neither usage nor a TPS sample.
@@ -829,6 +830,7 @@ export function roleContexts(calls: readonly CallModel[], options: RoleContextOp
   const reasonModel = options.reasonModel === '' ? undefined : options.reasonModel;
   const entries: RoleContextEntry[] = [];
   for (const role of ROLE_CONTEXT_ORDER) {
+    if (isHiddenCallRole(role)) continue;
     const isReason = role === 'reason';
     const preview = previewByRole.get(role);
     const roleCalls = calls.filter((call) => call.role === role);

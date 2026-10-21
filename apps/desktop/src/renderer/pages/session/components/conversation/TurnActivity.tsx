@@ -3,12 +3,12 @@ import { Button } from '@/renderer/components/ui/button';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { Spinner } from '@/renderer/components/ui/spinner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import { CALL_ROLE_LABEL, TASK_RUN_PHASE_LABEL, runningTaskAction, turnStatusText, waitingStatusText, type TurnWaitingState } from '../../model/describe.js';
+import { CALL_ROLE_LABEL, TASK_RUN_PHASE_LABEL, isHiddenCallRole, runningTaskAction, turnStatusText, waitingStatusText, type TurnWaitingState } from '../../model/describe.js';
 import type { CallModel, TurnModel } from '../../model/types.js';
 
 /** Returns the currently running auxiliary calls for a turn. */
 export function runningAuxCalls(turn: TurnModel): CallModel[] {
-  return turn.calls.filter((call) => call.status === 'running' && call.role !== 'reason');
+  return turn.calls.filter((call) => call.status === 'running' && call.role !== 'reason' && !isHiddenCallRole(call.role));
 }
 
 /** Props for the per-turn interrupt control. */

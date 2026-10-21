@@ -14,9 +14,9 @@ import { openActivityPanel } from '@/renderer/lib/activity-panel';
 import { formatTokenCount } from '@/renderer/lib/format';
 import {
   DISPATCH_TERMINAL_LABEL,
-  HIDDEN_CALL_ROLES,
-  HIDDEN_CONTEXT_SOURCES,
   dispatchTerminal,
+  isHiddenCallRole,
+  isHiddenContextSource,
   runningStepName,
   thinkingVerb,
   turnTokenTotal,
@@ -131,27 +131,18 @@ type TranscriptEntry =
   | { kind: 'reply'; reply: ReplyModel }
   | { kind: 'error'; error: ErrorItem };
 
-function transcriptActivityItem(item: ActivityItem, system = false): GroupActivityItem {
-  return system ? { ...item, system: true } : item;
-}
-
-function markActivityItem(item: ActivityItem): GroupActivityItem {
+function visibleActivityItem(item: ActivityItem): GroupActivityItem | undefined {
   switch (item.kind) {
     case 'call':
-      return transcriptActivityItem(item, isSystemCall(item.call));
+      if (isHiddenCallRole(item.call.role)) return undefined;
+      break;
     case 'context':
-      return transcriptActivityItem(item, isSystemContext(item.item));
+      if (isHiddenContextSource(item.item.source)) return undefined;
+      break;
     default:
-      return item;
+      break;
   }
-}
-
-function isSystemCall(call: CallModel): boolean {
-  return HIDDEN_CALL_ROLES.has(call.role);
-}
-
-function isSystemContext(context: ContextItem): boolean {
-  return HIDDEN_CONTEXT_SOURCES.has(context.source);
+  return item;
 }
 
 /** Cycle errors that only reflect failed engine auxiliaries stay in the trace view. */
@@ -160,7 +151,7 @@ function omitTranscriptError(turn: TurnModel, error: ErrorItem): boolean {
   if (cycle === undefined) return false;
   const failedCalls = turn.calls.filter((call) => call.cycle === cycle && call.status === 'failed');
   if (failedCalls.length === 0) return false;
-  return failedCalls.every((call) => HIDDEN_CALL_ROLES.has(call.role));
+  return failedCalls.every((call) => isHiddenCallRole(call.role));
 }
 
 /** Chronological entries of a turn: activity items, prose replies and errors. */
@@ -169,18 +160,21 @@ function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
   const turnCalls = turn.calls.filter(
     (call) => (call.cycle === undefined || call.cycle === 0)
       && call.role !== 'reason'
+      && !isHiddenCallRole(call.role)
       && !attachedToAction(call, turn.actions),
   );
   const firstCycleStart = turn.cycles[0]?.startedAt;
   const beforeFirstCycle = (call: CallModel): boolean => firstCycleStart === undefined
     || parseStamp(call.startedAt) < parseStamp(firstCycleStart);
   for (const call of turnCalls.filter(beforeFirstCycle)) {
-    entries.push({ kind: 'activity', item: markActivityItem({ kind: 'call', call }) });
+    const item = visibleActivityItem({ kind: 'call', call });
+    if (item !== undefined) entries.push({ kind: 'activity', item });
   }
 
   for (const cycle of turn.cycles) {
     for (const item of cycle.context.filter((context) => context.actionId === undefined)) {
-      entries.push({ kind: 'activity', item: markActivityItem({ kind: 'context', item }) });
+      const activity = visibleActivityItem({ kind: 'context', item });
+      if (activity !== undefined) entries.push({ kind: 'activity', item: activity });
     }
     const inCycle: { at: string; item: ActivityItem }[] = [];
     const reasoning = turn.calls.find((call) => call.role === 'reason' && call.cycle === cycle.index);
@@ -191,7 +185,10 @@ function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
       });
     }
     const standalone = turn.calls.filter(
-      (call) => call.cycle === cycle.index && call.role !== 'reason' && !attachedToAction(call, turn.actions),
+      (call) => call.cycle === cycle.index
+        && call.role !== 'reason'
+        && !isHiddenCallRole(call.role)
+        && !attachedToAction(call, turn.actions),
     );
     for (const call of standalone) {
       inCycle.push({ at: call.startedAt, item: { kind: 'call', call } });
@@ -202,12 +199,15 @@ function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
     for (const action of actions) {
       const calls = turn.calls.filter(
         (call) => (call.parent === action.id || call.id.startsWith(`${action.id}.`))
-          && !HIDDEN_CALL_ROLES.has(call.role),
+          && !isHiddenCallRole(call.role),
       );
       inCycle.push({ at: action.startedAt, item: { kind: 'action', action, calls } });
     }
     inCycle.sort((a, b) => parseStamp(a.at) - parseStamp(b.at));
-    for (const entry of inCycle) entries.push({ kind: 'activity', item: markActivityItem(entry.item) });
+    for (const entry of inCycle) {
+      const item = visibleActivityItem(entry.item);
+      if (item !== undefined) entries.push({ kind: 'activity', item });
+    }
     for (const error of cycle.errors) {
       if (!omitTranscriptError(turn, error)) entries.push({ kind: 'error', error });
     }
@@ -217,7 +217,8 @@ function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
   }
 
   for (const call of turnCalls.filter((call) => !beforeFirstCycle(call))) {
-    entries.push({ kind: 'activity', item: markActivityItem({ kind: 'call', call }) });
+    const item = visibleActivityItem({ kind: 'call', call });
+    if (item !== undefined) entries.push({ kind: 'activity', item });
   }
   const cycleIndices = new Set(turn.cycles.map((cycle) => cycle.index));
   for (const reply of turn.replies.filter((reply) => reply.cycle === undefined || !cycleIndices.has(reply.cycle))) {

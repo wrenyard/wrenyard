@@ -77,6 +77,14 @@ export const HIDDEN_CONTEXT_SOURCES: ReadonlySet<ContextItem['source']> = new Se
   'project-instructions',
 ]);
 
+export function isHiddenCallRole(role: CallModel['role']): boolean {
+  return HIDDEN_CALL_ROLES.has(role);
+}
+
+export function isHiddenContextSource(source: ContextItem['source']): boolean {
+  return HIDDEN_CONTEXT_SOURCES.has(source);
+}
+
 /** Row verb of every action kind. */
 export const ACTION_KIND_LABEL: Record<ActionModel['kind'], string> = {
   search: '检索',
@@ -229,7 +237,7 @@ export function runningStepName(turn: TurnModel): string | undefined {
   const action = turn.actions.find((item) => item.status === 'running');
   if (action !== undefined) return action.title === '' ? '运行中' : action.title;
   const call = turn.calls.find(
-    (item) => item.status === 'running' && item.role !== 'reason' && !HIDDEN_CALL_ROLES.has(item.role),
+    (item) => item.status === 'running' && item.role !== 'reason' && !isHiddenCallRole(item.role),
   );
   if (call !== undefined) return `正在${CALL_ROLE_LABEL[call.role] ?? call.role}`;
   return undefined;

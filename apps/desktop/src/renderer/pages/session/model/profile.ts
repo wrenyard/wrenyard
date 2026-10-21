@@ -1,5 +1,5 @@
 import type { TimelineBar, TimelineLane, TimelineRange } from '@/renderer/components/timeline-bars';
-import { ACTION_TONE, CALL_ROLE_LABEL, PHASE_LABEL, PHASE_TONE, cycleLabel } from './describe.js';
+import { ACTION_TONE, CALL_ROLE_LABEL, PHASE_LABEL, PHASE_TONE, cycleLabel, isHiddenCallRole } from './describe.js';
 import type { CallModel, Phase, TurnModel } from './types.js';
 
 interface TurnProfile {
@@ -93,7 +93,7 @@ export function buildTurnProfile(turn: TurnModel, now: number): TurnProfile {
   // Cheap calls: one set of overlapping rows per role.
   const cheap = turn.calls.filter((call) => call.role !== 'reason');
   for (const role of Object.keys(CALL_ROLE_LABEL) as CallModel['role'][]) {
-    if (role === 'reason') continue;
+    if (role === 'reason' || isHiddenCallRole(role)) continue;
     const roleCalls = cheap.filter((call) => call.role === role).sort((a, b) => ms(a.startedAt) - ms(b.startedAt));
     if (roleCalls.length === 0) continue;
     const rows: CallModel[][] = [];
