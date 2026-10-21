@@ -88,6 +88,7 @@ function selectMemoriesTool(targets: readonly string[]): ToolSpec {
             properties: {
               path: { type: 'string', pattern: MEMORY_SELECTION.pathPattern.source, enum: [...targets] },
               reason: { type: 'string' },
+              section: { type: 'string' },
             },
             required: [...MEMORY_SELECTION.pickFields],
             additionalProperties: false,
@@ -132,8 +133,20 @@ const LEXICAL_RELATIVE_CUTOFF = 0.5;
 const LEXICAL_TOP3_CLEAR_RATIO = 1.5;
 /** Max plain-text body excerpt per shortlist candidate in the selector index. */
 const SHORTLIST_BODY_EXCERPT = 240;
+/** Max injected bytes for one recalled memory file. */
+const MEMORY_RECALL_PER_MEMORY_CAP = 4000;
+/** Max injected bytes across all memories recalled in one search. */
+const MEMORY_RECALL_TOTAL_CAP = 9000;
+/** Max leading body bytes kept when a memory is section-truncated. */
+const MEMORY_RECALL_HEAD_EXCERPT = 600;
+/** Shortlist section labels appended per candidate. */
+const SHORTLIST_SECTION_HEADINGS_MAX = 8;
+const SHORTLIST_SECTION_HEADING_CHARS = 40;
+const MEMORY_TRUNCATION_MARKER = '\n\n… [memory truncated]\n';
 const BM25_K1 = 1.2;
 const BM25_B = 0.75;
+
+type MemoryPick = { path: string; reason: string; section?: string };
 
 interface LexicalMemoryDoc {
   path: string;
@@ -166,7 +179,7 @@ const lexicalCacheForFiles = new WeakMap<SessionRuntime['files'], LexicalCacheEn
 const MEMORY_FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)([\s\S]*)$/u;
 
 type LexicalRecall =
-  | { kind: 'direct'; picks: { path: string; reason: string }[] }
+  | { kind: 'direct'; picks: MemoryPick[] }
   | { kind: 'empty' }
   | { kind: 'llm'; shortlist: string[] };
 
@@ -184,6 +197,147 @@ function indexLineByPath(memoryIndex: string): Map<string, string> {
 function frontmatterField(frontmatter: string, field: string): string {
   const match = new RegExp(`^${field}:\\s*(.+)$`, 'mu').exec(frontmatter);
   return match === null ? '' : match[1]!.trim();
+}
+
+/** Top-level `recall:` in leading frontmatter only; indented keys are ignored. */
+function topLevelRecallMode(frontmatter: string): 'auto' | 'off' | 'manual' {
+  for (const line of frontmatter.split('\n')) {
+    if (/^[ \t]/u.test(line)) continue;
+    const match = /^recall:\s*(.+)$/iu.exec(line);
+    if (match === null) continue;
+    const value = match[1]!.trim().toLowerCase();
+    if (value === 'false') return 'off';
+    if (value === 'manual') return 'manual';
+    return 'auto';
+  }
+  return 'auto';
+}
+
+function memoryRecallExcluded(rawContent: string): boolean {
+  const match = rawContent.match(MEMORY_FRONTMATTER);
+  if (match === null) return false;
+  const mode = topLevelRecallMode(match[1]!);
+  return mode === 'off' || mode === 'manual';
+}
+
+interface MemoryBodySection {
+  heading: string;
+  body: string;
+  index: number;
+}
+
+function splitMemoryBodySections(body: string): { head: string; sections: MemoryBodySection[] } {
+  const lines = body.split(/\r?\n/u);
+  const sections: MemoryBodySection[] = [];
+  let headLines: string[] = [];
+  let currentHeading = '';
+  let currentBody: string[] = [];
+  let sectionIndex = 0;
+  const flush = () => {
+    if (currentHeading === '') return;
+    sections.push({
+      heading: currentHeading,
+      body: currentBody.join('\n'),
+      index: sectionIndex,
+    });
+    sectionIndex += 1;
+    currentHeading = '';
+    currentBody = [];
+  };
+  for (const line of lines) {
+    const headingMatch = /^(#{1,6})[ \t]+(.+?)[ \t]*$/u.exec(line);
+    if (headingMatch !== null) {
+      flush();
+      currentHeading = headingMatch[2]!.trim();
+      continue;
+    }
+    if (currentHeading === '') headLines.push(line);
+    else currentBody.push(line);
+  }
+  flush();
+  return { head: headLines.join('\n'), sections };
+}
+
+function sectionOverlapScore(section: MemoryBodySection, query: readonly string[]): number {
+  if (query.length === 0) return 0;
+  const headingTokens = new Set(recallTokens(section.heading));
+  const bodyTokens = new Set(recallTokens(section.body));
+  let score = 0;
+  for (const term of new Set(query)) {
+    if (headingTokens.has(term)) score += 2;
+    else if (bodyTokens.has(term)) score += 1;
+  }
+  return score;
+}
+
+function pickSectionBody(
+  head: string,
+  sections: readonly MemoryBodySection[],
+  query: readonly string[],
+  namedSection?: string,
+): string {
+  if (namedSection !== undefined && namedSection.trim() !== '') {
+    const needle = namedSection.trim().toLowerCase();
+    const explicit = sections.find((section) => section.heading.toLowerCase().includes(needle));
+    if (explicit !== undefined) return explicit.body;
+  }
+  if (sections.length === 0) return head;
+  let best = sections[0]!;
+  let bestScore = sectionOverlapScore(best, query);
+  for (let index = 1; index < sections.length; index += 1) {
+    const section = sections[index]!;
+    const score = sectionOverlapScore(section, query);
+    if (score > bestScore) {
+      best = section;
+      bestScore = score;
+    }
+  }
+  if (bestScore === 0) return sections[0]!.body;
+  return best.body;
+}
+
+function assembleRecalledMemoryContent(
+  rawContent: string,
+  queryTokens: readonly string[],
+  namedSection: string | undefined,
+  cap: number,
+): string {
+  if (rawContent.length <= cap) return rawContent;
+  const match = rawContent.match(MEMORY_FRONTMATTER);
+  const prefix = match === null ? '' : rawContent.slice(0, match[0].length);
+  const body = match === null ? rawContent : (match[2] ?? '');
+  const { head, sections } = splitMemoryBodySections(body);
+  const selected = pickSectionBody(head, sections, queryTokens, namedSection);
+  const headBit = head.trim() === '' ? '' : head.trim().slice(0, MEMORY_RECALL_HEAD_EXCERPT);
+  const chunks: string[] = [];
+  if (headBit !== '') chunks.push(headBit);
+  if (selected.trim() !== '') chunks.push(selected.trim());
+  let bodyText = chunks.join('\n\n');
+  const marker = MEMORY_TRUNCATION_MARKER;
+  const maxBody = cap - prefix.length;
+  if (maxBody <= 0) return rawContent.slice(0, cap);
+  if (prefix.length + bodyText.length <= cap) return prefix + bodyText;
+  const markerBudget = marker.length;
+  const sliceBudget = Math.max(0, maxBody - markerBudget);
+  if (sliceBudget <= 0) return (prefix + bodyText).slice(0, cap);
+  bodyText = bodyText.slice(0, sliceBudget) + marker;
+  if (prefix.length + bodyText.length > cap) return (prefix + bodyText).slice(0, cap);
+  return prefix + bodyText;
+}
+
+function sectionHeadingsForShortlist(body: string): string[] {
+  const headings: string[] = [];
+  for (const line of body.split('\n')) {
+    const match = /^(#{1,6})[ \t]+(.+?)[ \t]*$/u.exec(line);
+    if (match === null) continue;
+    let label = match[2]!.trim();
+    if (label.length > SHORTLIST_SECTION_HEADING_CHARS) {
+      label = label.slice(0, SHORTLIST_SECTION_HEADING_CHARS);
+    }
+    headings.push(label);
+    if (headings.length >= SHORTLIST_SECTION_HEADINGS_MAX) break;
+  }
+  return headings;
 }
 
 function parsedMemoryFields(indexLine: string, fileContent: string): {
@@ -300,6 +454,7 @@ function lexicalCorpusForRecall(
           continue;
         }
         const content = memory.read(entry.name).text;
+        if (memoryRecallExcluded(content)) continue;
         const indexLine = lineByPath.get(path) ?? '';
         const fields = parsedMemoryFields(indexLine, content);
         docs.push(lexicalMemoryDoc(path, indexLine, content, fields));
@@ -324,7 +479,7 @@ function lexicalCorpusForRecall(
         incomplete = true;
         continue;
       }
-      contentByPath.set(path, file.content);
+      if (!memoryRecallExcluded(file.content)) contentByPath.set(path, file.content);
     } catch {
       incomplete = true;
     }
@@ -338,6 +493,7 @@ function lexicalCorpusForRecall(
   for (const path of sortedPaths) {
     const content = contentByPath.get(path);
     if (content === undefined) continue;
+    if (memoryRecallExcluded(content)) continue;
     const indexLine = lineByPath.get(path) ?? '';
     const fields = parsedMemoryFields(indexLine, content);
     docs.push(lexicalMemoryDoc(path, indexLine, content, fields));
@@ -400,6 +556,11 @@ function buildShortlistMemoryIndex(
     if (doc !== undefined && doc.description !== '') lines.push(sanitizeShortlistText(doc.description));
     const excerpt = doc === undefined ? '' : bodyExcerptNearQuery(doc.body, query, SHORTLIST_BODY_EXCERPT);
     if (excerpt !== '') lines.push(excerpt);
+    if (doc !== undefined) {
+      for (const heading of sectionHeadingsForShortlist(doc.body)) {
+        lines.push(sanitizeShortlistText(heading));
+      }
+    }
   }
   return lines.join('\n');
 }
@@ -521,13 +682,13 @@ function evaluateLexicalRecall(
     return distinctInformativeDocMatches(doc, informative) > 0;
   });
   if (eligible.length === 0) return { kind: 'empty' };
-  const directPick = (entry: { score: number; path: string }) => ({
+  const directPick = (entry: { score: number; path: string }): MemoryPick => ({
     path: entry.path,
     reason: `lexical match (score ${entry.score.toFixed(2)})`,
   });
   const topDoc = docByPath.get(eligible[0]!.path);
   if (topDoc !== undefined && hasStrongLexicalEvidence(topDoc, informative)) {
-    const picks: { path: string; reason: string }[] = [];
+    const picks: MemoryPick[] = [];
     for (const entry of eligible) {
       if (picks.length >= MEMORY_SELECTION.maxPicks) break;
       const doc = docByPath.get(entry.path);
@@ -590,15 +751,16 @@ export async function runMemorySearch(
   const corpus = lexicalCorpusForRecall(memoryIndex, targets, memory, session);
   const latestRecalledByPath = latestRecalledVersions(events);
   const lexical = evaluateLexicalRecall(input, corpus, latestRecalledByPath);
+  const queryTokens = recallQueryTokens(input);
   if (lexical.kind === 'direct') {
-    await publishMemoryPicks(host, session, turn, step, events, memory, lexical.picks, turnId(turn.turn));
+    await publishMemoryPicks(host, session, turn, step, events, memory, lexical.picks, turnId(turn.turn), queryTokens);
     return;
   }
   if (lexical.kind === 'empty') return;
 
   const llmTargets = lexical.shortlist;
   const allowedTargets = new Set(llmTargets);
-  const query = recallQueryTokens(input);
+  const query = queryTokens;
   const llmInput: MemorySearchViewInput = {
     ...input,
     memoryIndex: buildShortlistMemoryIndex(llmTargets, corpus.docs, query),
@@ -635,7 +797,7 @@ export async function runMemorySearch(
     return;
   }
   const { selection, spanId } = result.value;
-  await publishMemoryPicks(host, session, turn, step, events, memory, selection.picks, spanId);
+  await publishMemoryPicks(host, session, turn, step, events, memory, selection.picks, spanId, queryTokens);
 }
 
 /** Publish validated memory picks as `memory.recalled` events when content changed. */
@@ -646,22 +808,29 @@ async function publishMemoryPicks(
   step: number,
   events: readonly LedgerEvent[],
   memory: WorkspaceMemoryPort | undefined,
-  picks: readonly { path: string; reason: string }[],
+  picks: readonly MemoryPick[],
   parent: string,
+  queryTokens: readonly string[],
 ): Promise<void> {
+  let remainingTotal = MEMORY_RECALL_TOTAL_CAP;
   for (const pick of picks) {
     if (turn.finished || turn.abort.signal.aborted) break;
+    if (remainingTotal <= 0) break;
     const file = memory === undefined ? session.files.read(pick.path) : readMemoryFile(memory, pick.path);
     if (!file) continue;
+    if (memoryRecallExcluded(file.content)) continue;
     const version = contentVersion(file.content);
     if (latestMemoryVersion(events, pick.path) === version) continue;
+    const perMemoryCap = Math.min(MEMORY_RECALL_PER_MEMORY_CAP, remainingTotal);
+    const content = assembleRecalledMemoryContent(file.content, queryTokens, pick.section, perMemoryCap);
+    remainingTotal -= content.length;
     await host.ledger.append(session.sessionId, {
       type: 'memory.recalled',
       turn: turn.turn,
       step,
       parent,
       path: pick.path,
-      content: file.content,
+      content,
       version,
       source: 'memory-search',
     });
@@ -770,7 +939,7 @@ function canonicalMemoryTargets(memoryIndex: string): Set<string> {
 
 /** One validated memory selection, or the classified reason it was rejected. */
 type MemorySelection =
-  | { ok: true; picks: { path: string; reason: string }[] }
+  | { ok: true; picks: MemoryPick[] }
   | { ok: false; reason: string };
 
 /**
@@ -868,13 +1037,29 @@ function parseMemoryPicks(text: string, allowedTargets: ReadonlySet<string>): Me
   if (picks.length > MEMORY_SELECTION.maxPicks) {
     return { ok: false, reason: `memory-search output has more than ${MEMORY_SELECTION.maxPicks} picks` };
   }
-  const result: { path: string; reason: string }[] = [];
+  const result: MemoryPick[] = [];
   for (const raw of picks) {
+    if (typeof raw === 'string') {
+      const path = raw.trim();
+      if (path === '') {
+        return { ok: false, reason: 'memory-search pick needs a non-empty path' };
+      }
+      if (!MEMORY_SELECTION.pathPattern.test(path) || path.toLowerCase() === MEMORY_SELECTION.indexFile) {
+        return { ok: false, reason: `memory-search path is not a root memory file: ${path}` };
+      }
+      if (!allowedTargets.has(path)) {
+        return { ok: false, reason: `memory-search path is not in the memory index: ${path}` };
+      }
+      if (!result.some((pick) => pick.path === path)) result.push({ path, reason: '' });
+      continue;
+    }
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-      return { ok: false, reason: 'memory-search pick must be an object' };
+      return { ok: false, reason: 'memory-search pick must be an object or path string' };
     }
     const entry = raw as Record<string, unknown>;
-    const unknown = Object.keys(entry).filter((key) => !MEMORY_SELECTION.pickFields.includes(key));
+    const unknown = Object.keys(entry).filter(
+      (key) => !MEMORY_SELECTION.pickFields.includes(key) && key !== 'section',
+    );
     if (unknown.length > 0) {
       return { ok: false, reason: `memory-search pick has an unknown field: ${unknown[0]}` };
     }
@@ -884,11 +1069,15 @@ function parseMemoryPicks(text: string, allowedTargets: ReadonlySet<string>): Me
     }
     const path = entry.path;
     const reason = entry.reason;
+    const section = entry.section;
     if (typeof path !== 'string' || path.trim() === '') {
       return { ok: false, reason: 'memory-search pick needs a non-empty path' };
     }
     if (typeof reason !== 'string') {
       return { ok: false, reason: 'memory-search pick needs a reason string' };
+    }
+    if (section !== undefined && typeof section !== 'string') {
+      return { ok: false, reason: 'memory-search pick section must be a string' };
     }
     if (!MEMORY_SELECTION.pathPattern.test(path) || path.toLowerCase() === MEMORY_SELECTION.indexFile) {
       return { ok: false, reason: `memory-search path is not a root memory file: ${path}` };
@@ -896,7 +1085,10 @@ function parseMemoryPicks(text: string, allowedTargets: ReadonlySet<string>): Me
     if (!allowedTargets.has(path)) {
       return { ok: false, reason: `memory-search path is not in the memory index: ${path}` };
     }
-    if (!result.some((pick) => pick.path === path)) result.push({ path, reason });
+    const pick: MemoryPick = section === undefined || section === ''
+      ? { path, reason }
+      : { path, reason, section };
+    if (!result.some((existing) => existing.path === path)) result.push(pick);
   }
   return { ok: true, picks: result };
 }
