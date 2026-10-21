@@ -320,7 +320,11 @@ const DISPATCH_METHOD_INFOS: readonly MethodInfo[] = [
         project: { type: 'string' },
         task: { type: 'string' },
         input: { description: 'Task input matching the task schema.' },
-        worktree: { type: 'string', description: 'Optional managed worktree id.' },
+        worktree: {
+          type: 'string',
+          description:
+            'Optional managed worktree id. Include only when the intent explicitly names one, copying the id exactly; never invent. Read-only tasks run in the project checkout without a worktree.',
+        },
         fast: { type: 'boolean', description: 'Optional explicit Fast preference.' },
         title: { type: 'string', description: 'Optional short title, at most 40 characters.' },
       },

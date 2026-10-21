@@ -295,7 +295,10 @@ function dispatchSystemPrompt(): string {
     '- Read the task contract before calling task_create.',
     '- task_create must name the same project and task the intent requires, with input matching the schema.',
     '- When task_create returns an error, read the message, correct the call and try again inside this session.',
-    '- When worktree or fast preferences appear in the intent, pass them to task_create.',
+    '- worktree: pass task_create worktree only when <intent> explicitly names a managed worktree of the chosen project (for example worktree wyauxlp1); copy that worktree id exactly. Otherwise omit worktree. Never invent or guess a worktree id. Read-only tasks with no write targets run in the project checkout without a worktree.',
+    '- fast: pass fast only when <intent> explicitly requests upstream Fast mode on or off for this dispatch. Never infer Fast from a quick task, routing speed, or the main conversation model. Omit fast when the intent states no Fast preference.',
+    '- docsRoot is the project documentation directory; checkout is the business source directory (see the project list). Resolve workspace-relative document and reference paths against workspace-root, not checkout.',
+    '- Do not invent registered checkouts or paths. Use only project list values.',
     '- Finish with done and a one-sentence summary once task_create succeeds, or done failed when the work cannot continue.',
   ].join('\n');
 }
