@@ -288,24 +288,27 @@ interface StatsDayCacheRow {
   built_at: string
 }
 
-/** Guarded json_extract for turn_usage input_tokens (matches live summary scan). */
-const SQL_TURN_USAGE_INPUT = `CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
-      AND json_type(e.data, '$.input_tokens') IN ('integer','real')
-      AND json_extract(e.data, '$.input_tokens') > 0
-      AND json_extract(e.data, '$.input_tokens') < 1e308
- THEN json_extract(e.data, '$.input_tokens') ELSE 0 END`
+/** Inner-select JSON aliases: one parse per key; outer CASE only compares aliases. */
+const SQL_USAGE_JSON_ALIASES = `
+    json_valid(e.data) AS valid,
+    json_extract(e.data, '$.input_tokens') AS v_in,
+    json_extract(e.data, '$.cached_input_tokens') AS v_cached,
+    json_extract(e.data, '$.output_tokens') AS v_out,
+    json_type(e.data, '$.input_tokens') AS t_in,
+    json_type(e.data, '$.cached_input_tokens') AS t_cached,
+    json_type(e.data, '$.output_tokens') AS t_out`
 
-const SQL_TURN_USAGE_CACHED = `CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
-      AND json_type(e.data, '$.cached_input_tokens') IN ('integer','real')
-      AND json_extract(e.data, '$.cached_input_tokens') > 0
-      AND json_extract(e.data, '$.cached_input_tokens') < 1e308
- THEN json_extract(e.data, '$.cached_input_tokens') ELSE 0 END`
+const SQL_USAGE_U_INPUT_FROM_ALIASES = `CASE WHEN valid AND t_in IN ('integer','real') AND v_in > 0 AND v_in < 1e308 THEN v_in ELSE 0 END`
 
-const SQL_TURN_USAGE_OUTPUT = `CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
-      AND json_type(e.data, '$.output_tokens') IN ('integer','real')
-      AND json_extract(e.data, '$.output_tokens') > 0
-      AND json_extract(e.data, '$.output_tokens') < 1e308
- THEN json_extract(e.data, '$.output_tokens') ELSE 0 END`
+const SQL_USAGE_U_CACHED_FROM_ALIASES = `CASE WHEN valid AND t_cached IN ('integer','real') AND v_cached > 0 AND v_cached < 1e308 THEN v_cached ELSE 0 END`
+
+const SQL_USAGE_U_OUTPUT_FROM_ALIASES = `CASE WHEN valid AND t_out IN ('integer','real') AND v_out > 0 AND v_out < 1e308 THEN v_out ELSE 0 END`
+
+const SQL_USAGE_U_INPUT_LIVE = `CASE WHEN ev.type = 'turn_usage' AND valid AND t_in IN ('integer','real') AND v_in > 0 AND v_in < 1e308 THEN v_in ELSE 0 END`
+
+const SQL_USAGE_U_CACHED_LIVE = `CASE WHEN ev.type = 'turn_usage' AND valid AND t_cached IN ('integer','real') AND v_cached > 0 AND v_cached < 1e308 THEN v_cached ELSE 0 END`
+
+const SQL_USAGE_U_OUTPUT_LIVE = `CASE WHEN ev.type = 'turn_usage' AND valid AND t_out IN ('integer','real') AND v_out > 0 AND v_out < 1e308 THEN v_out ELSE 0 END`
 
 interface StatsDayWindow {
   dayKey: string
@@ -371,12 +374,15 @@ function dayWindowFromDayKey(dayKey: string): StatsDayWindow | undefined {
   return { dayKey, startAt: start.toISOString(), endAt: end.toISOString() }
 }
 
-interface SealEventLoadRow {
+interface SealUsageLoadRow {
   created_at: string
-  type: string
   u_input: number
   u_cached: number
   u_output: number
+}
+
+interface SealDispatchLoadRow {
+  created_at: string
 }
 
 interface SealTaskLoadRow {
@@ -404,13 +410,22 @@ function emptySealDayTotals(): SealDayTotals {
   }
 }
 
-const SQL_LOAD_SEAL_EVENTS = `SELECT e.created_at, e.type,
-            ${SQL_TURN_USAGE_INPUT} AS u_input,
-            ${SQL_TURN_USAGE_CACHED} AS u_cached,
-            ${SQL_TURN_USAGE_OUTPUT} AS u_output
+const SQL_LOAD_SEAL_USAGE = `SELECT created_at,
+            ${SQL_USAGE_U_INPUT_FROM_ALIASES} AS u_input,
+            ${SQL_USAGE_U_CACHED_FROM_ALIASES} AS u_cached,
+            ${SQL_USAGE_U_OUTPUT_FROM_ALIASES} AS u_output
+     FROM (
+       SELECT e.created_at,
+              ${SQL_USAGE_JSON_ALIASES}
+       FROM events e
+       WHERE e.created_at >= ? AND e.created_at < ?
+         AND e.type = 'turn_usage'
+     )`
+
+const SQL_LOAD_SEAL_DISPATCH = `SELECT e.created_at
      FROM events e
      WHERE e.created_at >= ? AND e.created_at < ?
-       AND e.type IN ('dispatch', 'turn_usage')`
+       AND e.type = 'dispatch'`
 
 const SQL_LOAD_SEAL_TASKS = `SELECT t.ended_at, t.status
      FROM tasks t
@@ -448,19 +463,23 @@ function sealStatsDaysInTransaction(dayKeys: string[]): void {
 
   const builtAt = new Date().toISOString()
   dbTx(() => {
-    const eventRows = dbQuery<SealEventLoadRow>(SQL_LOAD_SEAL_EVENTS, minStart, maxEnd)
+    const usageRows = dbQuery<SealUsageLoadRow>(SQL_LOAD_SEAL_USAGE, minStart, maxEnd)
+    const dispatchRows = dbQuery<SealDispatchLoadRow>(SQL_LOAD_SEAL_DISPATCH, minStart, maxEnd)
     const taskRows = dbQuery<SealTaskLoadRow>(SQL_LOAD_SEAL_TASKS, minStart, maxEnd)
 
-    for (const row of eventRows) {
+    for (const row of usageRows) {
       const key = localDayKeyOf(row.created_at)
       const totals = totalsByDayKey.get(key)
       if (!totals) continue
-      if (row.type === 'dispatch') {
-        totals.dispatch_count++
-      } else if (row.type === 'turn_usage') {
-        totals.input_tokens += row.u_input + row.u_cached
-        totals.output_tokens += row.u_output
-      }
+      totals.input_tokens += row.u_input + row.u_cached
+      totals.output_tokens += row.u_output
+    }
+
+    for (const row of dispatchRows) {
+      const key = localDayKeyOf(row.created_at)
+      const totals = totalsByDayKey.get(key)
+      if (!totals) continue
+      totals.dispatch_count++
     }
 
     for (const row of taskRows) {
@@ -655,18 +674,22 @@ function readStatsSummaryUncached(
   // fields are extracted in SQL under json_valid so the event `data` blob never
   // crosses to JS; executions wide profile columns are not selected.
   const allEventsRows = dbQuery<StatsEventRow>(
-    `SELECT e.type, e.created_at, COALESCE(t.template, ex_t.template) AS template,
+    `SELECT ev.type, ev.created_at, COALESCE(t.template, ex_t.template) AS template,
             tra.provider AS provider, tra.model AS model, tra.model_id AS model_id,
-            ${SQL_TURN_USAGE_INPUT} AS u_input,
-            ${SQL_TURN_USAGE_CACHED} AS u_cached,
-            ${SQL_TURN_USAGE_OUTPUT} AS u_output
-     FROM events e
-     LEFT JOIN executions ex ON e.execution_id = ex.id
-     LEFT JOIN tasks t ON e.task_id = t.id
+            ${SQL_USAGE_U_INPUT_LIVE} AS u_input,
+            ${SQL_USAGE_U_CACHED_LIVE} AS u_cached,
+            ${SQL_USAGE_U_OUTPUT_LIVE} AS u_output
+     FROM (
+       SELECT e.execution_id, e.task_id, e.type, e.created_at,
+              ${SQL_USAGE_JSON_ALIASES}
+       FROM events e
+       WHERE e.type IN ('dispatch', 'turn_usage')
+         AND e.created_at >= ? AND e.created_at < ?
+     ) ev
+     LEFT JOIN executions ex ON ev.execution_id = ex.id
+     LEFT JOIN tasks t ON ev.task_id = t.id
      LEFT JOIN tasks ex_t ON ex.task_id = ex_t.id
-     LEFT JOIN task_run_attempt_dispatch tra ON e.execution_id = tra.execution_id
-     WHERE e.type IN ('dispatch', 'turn_usage')
-       AND e.created_at >= ? AND e.created_at < ?`,
+     LEFT JOIN task_run_attempt_dispatch tra ON ev.execution_id = tra.execution_id`,
     windowsStartIso,
     fullEndIso,
   )
