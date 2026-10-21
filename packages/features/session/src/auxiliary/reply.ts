@@ -1,9 +1,9 @@
 /**
- * session replies: the communication calls of a session. One call is made after
- * each main reasoning output that produced something, plus one closing call when
- * a turn's reasoning failed without output. The writer sends a message only when
- * this output carries new user-visible content; otherwise it stays silent, even
- * on a terminal step.
+ * session replies: communication calls after each main reasoning output that
+ * produced something, plus one closing call when a turn's reasoning failed
+ * without output. Progress invocations may stay silent when they carry nothing
+ * new; terminal invocations must deliver one nonempty user message through the
+ * reply tool, or through the provider capability-gated plain-text exception.
  */
 
 import { attachmentRefUrl, type SessionFile } from '@wrenyard/protocol';
@@ -193,7 +193,7 @@ export class ReplyWriter {
     if (turn.finished || turn.abort.signal.aborted) {
       // Record explicit interruption on a terminal abort.
       if (request.terminal && turn.abort.signal.aborted) {
-        await this.appendReply(session, request, undefined, INTERRUPTED_CLOSING);
+        await this.appendReply(session, request, undefined, INTERRUPTED_CLOSING, 'interruption');
       }
       return;
     }
@@ -232,11 +232,12 @@ export class ReplyWriter {
       step: request.step,
       maxTokens: canSave ? FINAL_REPLY_MAX_TOKENS : REPLY_MAX_TOKENS,
       tools: [canSave ? REPLY_TOOL_WITH_MEMORY : REPLY_TOOL],
+      ...(request.terminal ? { toolChoice: { name: REPLY_TOOL.name } } : {}),
     });
     // An interrupt that landed while the call was in flight suppresses it.
     if (turn.finished || turn.abort.signal.aborted) {
       if (request.terminal && turn.abort.signal.aborted) {
-        await this.appendReply(session, request, outcome.spanId, INTERRUPTED_CLOSING);
+        await this.appendReply(session, request, outcome.spanId, INTERRUPTED_CLOSING, 'interruption');
       }
       return;
     }
@@ -247,14 +248,19 @@ export class ReplyWriter {
     if (outcome.ok) {
       try {
         const replyText = replyTextOfCalls(outcome.toolCalls ?? []);
-        if (replyText.trim() !== '') text = replyText;
+        if (replyText.trim() !== '') {
+          text = replyText;
+          source = 'tool';
+        }
       } catch (error) {
         failure = messageOf(error);
       }
       if (text === undefined && failure === undefined) {
+        const toolCalls = outcome.toolCalls ?? [];
         const providerId = outcome.route?.provider;
         if (
-          providerId !== undefined
+          toolCalls.length === 0
+          && providerId !== undefined
           && outcome.text.trim() !== ''
           && this.host.host.resolveInferenceProvider(providerId)?.ignoresForcedToolChoice === true
         ) {
@@ -272,7 +278,10 @@ export class ReplyWriter {
     if (failure !== undefined && request.terminal) {
       await this.host.appendError(session.sessionId, 'reply', failure, turn, request.step);
       if (turn.finished || turn.abort.signal.aborted) return;
-      await this.finishTurn(session, turn, 'failed', failure);
+      const finishError = request.status === 'failed' && request.error !== undefined
+        ? request.error
+        : failure;
+      await this.finishTurn(session, turn, 'failed', finishError);
       return;
     }
 
@@ -282,17 +291,14 @@ export class ReplyWriter {
     if (request.terminal) {
       // Only an accepted nonempty reply made through the reply tool may carry
       // memories; capability-gated plain text and failed replies save nothing.
-      const memoryCalls = canSave && text !== undefined && source === undefined && outcome.ok && failure === undefined
+      const memoryCalls = canSave && text !== undefined && source === 'tool' && outcome.ok && failure === undefined
         ? outcome.toolCalls
         : undefined;
       await this.finishTurn(session, turn, request.status as TerminalStatus, request.error, memoryCalls);
     }
   }
 
-  /**
-   * Append one `reply.sent` record. `source` stays absent for the ordinary
-   * reply tool text, which is the default meaning.
-   */
+  /** Append one `reply.sent` record with an explicit publication source when known. */
   private async appendReply(
     session: SessionRuntime,
     request: ReplyRequest,
@@ -337,6 +343,7 @@ export class ReplyWriter {
         ...(parent === undefined ? {} : { parent }),
         text,
         kind: 'final',
+        source: 'agent-text',
       });
     }
     if (turn.finished || turn.abort.signal.aborted) return;
@@ -352,10 +359,8 @@ export class ReplyWriter {
     const memory = memoryPortOf(this.host.ports, session.sessionId);
     if (memory === undefined) return;
     try {
-      // The reply run is a single completion with tool choice auto: the model
-      // may answer with no reply call or split the reply across several calls.
-      // Only a reply call can carry memory candidates, so read the first one
-      // and stay quiet without any.
+      // Memory candidates ride the first reply tool call of an accepted terminal
+      // reply; stay quiet when there is none.
       const replies = calls.filter((call) => call.name === REPLY_TOOL.name);
       const reply = replies[0];
       if (reply === undefined) return;
@@ -476,7 +481,7 @@ function terminalReasonOutput(
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]!;
     if (event.type !== 'reasoning.completed' || event.turn !== turn || event.step !== step) continue;
-    return { text: event.workerOutput ?? event.text, parent: event.parent };
+    return { text: event.text, parent: event.parent };
   }
   return undefined;
 }
@@ -486,7 +491,7 @@ function terminalReasonOutput(
 const REPLY_SYSTEM = `<wy-system>
 You are the replier in a Wrenyard work session. You communicate with the user.
 The session also has a reasoning model. It works in the background: it reads material, calls tools, dispatches tasks and writes down its conclusions. The user cannot see the output of the reasoning model. The user sees only the messages you send with the reply tool.
-Each time the reasoning model outputs a segment, the program calls you once. You decide whether to reply to the user this time.
+Each time the reasoning model outputs a segment, the program calls you once. On a progress step you decide whether to reply; on a terminal step you must send one final message to the user.
 
 Input:
 - wy-conversation in wy-ctx is the whole conversation of this session so far. role="user" is a message from the user. role="assistant" is a message you sent earlier with reply.
@@ -495,14 +500,15 @@ Input:
 - The finished-actions results are authoritative outcomes of the actions the reasoning model started. Trust them over any plan or claim: a write succeeded only when a finished action says so. Never claim a write that a finished action did not confirm.
 
 When to reply:
-- When a reply is needed, you must call the reply tool once and put the entire message in its text argument. Never send a reply as ordinary output text.
+- A user-visible message is only a native reply tool call with your whole message in its text argument. Ordinary assistant text, reasoning notes and decision commentary are not replies and must never stand in for one.
 - Before you write, compare wy-output with the replies already in wy-conversation. Send only what this output supports.
-- Always worth sending: the first reply of the session, a new failure, a real new conclusion, real new progress, or a new, unanswered decision actually asked in this output.
+- Always worth sending on a progress step: the first reply of the session, a new failure, a real new conclusion, real new progress, or a new, unanswered decision actually asked in this output.
 - Do not say again what you already said in wy-conversation, not even in other words. This covers unsolicited restatement; when the latest user message explicitly asks to repeat, summarize or explain something again, answer that request.
 - Do not ask a decision the reasoning model did not ask in this output. Do not ask now a question it will ask later.
 - When this output has no new user-visible conclusion — only internal dispatch, retry or verification actions — and the goal has not changed, do not announce the same goal again. Real natural-language progress may still be sent.
 - The user can see running actions in the interface. Do not report that something is "still running".
-- When the turn ends (the turn status is not running), the end of the turn is not new information. If you already delivered the conclusion or the question and this output adds nothing, choose silence: call no tool and output no text. You may choose silence on a terminal step when nothing new needs saying.
+- Progress step (turn status is running): when this output adds nothing the user still needs, stay silent — return no content and no tool calls.
+- Terminal step (turn status is not running): you must call the reply tool exactly once with nonempty, user-facing text. Do not stay silent. Do not include reasoning drafts, deliberation, or commentary about the decision to communicate. When this output adds no new success, state only the brief evidenced conclusion or failure the session already supports; do not invent filler.
 
 Language:
 - Write text in the language of the latest user message in wy-conversation.
@@ -554,7 +560,8 @@ Durable memory, only when the reply tool offers memories:
 Output contract:
 - A reply must be one native function call to reply, with your whole message in the text argument. Ordinary assistant content does not send a message and is discarded.
 - Do not describe a tool call, print its JSON as text, or write the answer outside the function call.
-- If you choose not to reply, return no content and no tool calls.
+- Progress step: if you choose not to reply, return no content and no tool calls.
+- Terminal step: call reply exactly once with nonempty text in the text argument; silence and non-reply commentary are invalid.
 </wy-system>`;
 
 /**

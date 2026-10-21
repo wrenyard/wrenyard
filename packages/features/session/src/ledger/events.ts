@@ -582,12 +582,16 @@ export interface ReplySentEvent extends LedgerEventBase {
    */
   kind?: 'progress' | 'final';
   /**
-   * Where the reply text came from: the reply tool call (`tool`) or plain text
+   * Where the reply text came from: the reply tool call (`tool`), plain text
    * from the communication call when the serving provider ignores forced tool
-   * choice (`reply-text`). Absent means `tool`, the default. Reasoning output,
-   * action results and closing lines are not reconstructed as reply fallbacks.
+   * choice (`reply-text`), the native agentTools final output (`agent-text`),
+   * or an explicit interruption message (`interruption`). `agent-text` and
+   * `interruption` are deliberate publication paths, not fallbacks. Records
+   * written before this field existed have an unspecified source; do not infer
+   * `tool` from a missing value. Reasoning output, action results and closing
+   * lines are not reconstructed as reply fallbacks.
    */
-  source?: 'tool' | 'reply-text';
+  source?: 'tool' | 'reply-text' | 'agent-text' | 'interruption';
 }
 
 /**
