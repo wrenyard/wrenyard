@@ -236,6 +236,7 @@ async function runRounds(options: AuxiliaryLoopOptions, spanId: string, startedA
         // failure with an explicit no-change explanation, never a successful
         // completion.
         if (done.status === 'done' && options.record !== undefined
+          && role !== 'memory-search'
           && options.record.changes.length === 0 && options.record.documents.length === 0
           && options.record.observations.length === 0) {
           return finish(
