@@ -1,4 +1,6 @@
-import { readdir, stat } from 'node:fs/promises'
+import { readdir, stat, lstat, readlink } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { foremanStateRoot } from '../../config/state.mts'
 import { runGit } from '../../core/vcs/git.mts'
@@ -7,6 +9,7 @@ import { get as dbGet } from '../../db/connection.mts'
 interface RunBaseline {
   head: string
   cwd: string
+  dirtyFiles: Map<string, string | undefined>
 }
 
 const baselines = new Map<string, RunBaseline>()
@@ -17,11 +20,30 @@ export async function captureRunBaseline(taskRunId: string, cwd: string): Promis
     if (result.code !== 0) return null
     const head = result.stdout.trim()
     if (!head) return null
-    const baseline = { head, cwd }
+    const status = await runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames'])
+    if (status.code !== 0) return null
+    const paths = status.stdout.split('\0').filter(Boolean).map((entry) => entry.slice(3))
+    const dirtyFiles = new Map(await Promise.all(paths.map(async (path) =>
+      [path, await fileFingerprint(join(cwd, path))] as const)))
+    const baseline = { head, cwd, dirtyFiles }
     baselines.set(taskRunId, baseline)
     return baseline
   } catch {
     return null
+  }
+}
+
+/** Hash only paths already dirty at admission; unchanged pre-existing work is not this run's output. */
+async function fileFingerprint(path: string): Promise<string | undefined> {
+  try {
+    const info = await lstat(path)
+    if (info.isSymbolicLink()) return `link:${await readlink(path)}`
+    if (!info.isFile()) return undefined
+    const hash = createHash('sha256')
+    for await (const chunk of createReadStream(path)) hash.update(chunk)
+    return hash.digest('hex')
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : undefined
   }
 }
 
@@ -72,8 +94,7 @@ function durationMs(startedAt: string | null | undefined, endedAt: string | null
 function uniqueSortedPaths(paths: readonly string[]): string[] {
   const seen = new Set<string>()
   for (const path of paths) {
-    const trimmed = path.trim()
-    if (trimmed) seen.add(trimmed)
+    if (path) seen.add(path)
   }
   return [...seen].sort()
 }
@@ -94,25 +115,30 @@ function pathsFromPorcelain(output: string): string[] {
   return paths
 }
 
-async function collectChangedFilesWithBaseline(cwd: string, head: string): Promise<string[]> {
+async function collectChangedFilesWithBaseline(cwd: string, baseline: RunBaseline): Promise<string[]> {
   const lines: string[] = []
   try {
-    const diffResult = await runGit(cwd, ['diff', '--name-only', head])
+    const diffResult = await runGit(cwd, ['diff', '--name-only', '-z', baseline.head])
     if (diffResult.code === 0) {
-      lines.push(...diffResult.stdout.split('\n'))
+      lines.push(...diffResult.stdout.split('\0'))
     }
   } catch {
     // diff failure contributes no paths
   }
   try {
-    const untrackedResult = await runGit(cwd, ['ls-files', '--others', '--exclude-standard'])
+    const untrackedResult = await runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z'])
     if (untrackedResult.code === 0) {
-      lines.push(...untrackedResult.stdout.split('\n'))
+      lines.push(...untrackedResult.stdout.split('\0'))
     }
   } catch {
     // untracked listing failure contributes no paths
   }
-  return uniqueSortedPaths(lines)
+  const paths = uniqueSortedPaths([...lines, ...baseline.dirtyFiles.keys()])
+  const changed = await Promise.all(paths.map(async (path) => {
+    const before = baseline.dirtyFiles.get(path)
+    return before !== undefined && before === await fileFingerprint(join(cwd, path)) ? undefined : path
+  }))
+  return changed.filter((path): path is string => path !== undefined)
 }
 
 async function collectCommitsWithBaseline(cwd: string, head: string): Promise<Array<{ sha: string; subject: string }>> {
@@ -185,7 +211,7 @@ export async function collectRunFacts(input: CollectRunFactsInput): Promise<Coll
     if (cwd) {
       try {
         if (baseline) {
-          facts.changed_files = await collectChangedFilesWithBaseline(cwd, baseline.head)
+          facts.changed_files = await collectChangedFilesWithBaseline(cwd, baseline)
           facts.commits = await collectCommitsWithBaseline(cwd, baseline.head)
         } else {
           facts.changed_files = await collectChangedFilesWithoutBaseline(cwd)

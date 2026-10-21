@@ -5,7 +5,7 @@ import {
   validateTaskArtifacts,
 } from '@wrenyard/task'
 import type { TaskRunCompileResult, TaskRunFacts } from '@wrenyard/protocol/task'
-import { findTaskDefinition, resolveTaskTarget } from '../../workspace/definition-registry.mts'
+import { ensureDiscovered, findTaskDefinition, resolveTaskTarget } from '../../workspace/definition-registry.mts'
 import type { TaskOutputModelCallPort } from '../../daemon/execution/task-output-model-call.mts'
 import type { TaskService } from './service.mts'
 
@@ -70,9 +70,13 @@ export function createTaskRunOutputCompiler(options: {
     if (record === null) throw new Error(`Task run '${taskRunId}' not found`)
     const report = recordedReport(record)
     const facts = recordedFacts(record)
+    if (!['done', 'failed', 'cancelled', 'interrupted'].includes(String(record['status']))) {
+      return { task_run_id: taskRunId, ok: false, compile_error: 'Task run is not terminal', report, facts }
+    }
     const taskId = typeof record['task_id'] === 'string' ? record['task_id'] : ''
     const project = recordedProject(record)
 
+    await ensureDiscovered(options.workspaceRoot)
     const definition = taskId === ''
       ? null
       : findTaskDefinition(taskId, options.workspaceRoot, project)

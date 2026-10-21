@@ -1860,6 +1860,7 @@ async function createForemanDaemonResources(
     operationComponents: runtime.operationComponents,
     operationAdapter: runtime.operationAdapter,
     taskService: workspaceScoped.taskService,
+    taskOutputCompile: workspaceScoped.taskOutputCompile,
     resolveExecRequest: (params) => {
       const provider = params.provider ?? catalog.clients().find(client => client.id === params.client)?.nativeProvider
       if (!provider) throw new Error('Execution requires a provider')

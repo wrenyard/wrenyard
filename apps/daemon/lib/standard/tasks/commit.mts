@@ -5,6 +5,8 @@ import {
   type CommitRequest,
 } from '@wrenyard/task'
 import type { GateContext, GateFail, GatePass } from '@wrenyard/task'
+import type { TaskRunFacts } from '@wrenyard/protocol/task'
+import { runGit } from '../../core/vcs/git.mts'
 import commitRules from '../instructions/commit-rules.mts'
 import shellUsage from '../instructions/shell-usage.mts'
 import { COMMIT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
@@ -200,6 +202,33 @@ export const originTrackingUnchangedGate = {
  * `wrenyard project push <project>`.
  */
 
+/** Commit identities and statistics come from the recorded commits, never the compiler. */
+async function commitOutputFacts(facts: Readonly<TaskRunFacts>): Promise<Record<string, unknown>> {
+  if (!facts.checkout_path) throw new Error('Commit facts have no checkout path')
+  const commits = await Promise.all(facts.commits.map(async (commit) => {
+    if (!/^[0-9a-f]{40,64}$/u.test(commit.sha)) throw new Error('Invalid recorded commit identity')
+    const [numstat, shortstat] = await Promise.all([
+      runGit(facts.checkout_path!, ['show', '--format=', '--no-renames', '--numstat', '-z', commit.sha]),
+      runGit(facts.checkout_path!, ['show', '--format=', '--shortstat', commit.sha]),
+    ])
+    if (numstat.code !== 0 || shortstat.code !== 0) throw new Error('Unable to read recorded commit statistics')
+    const rows = numstat.stdout.split('\0').filter(Boolean).map((raw) => {
+      const match = /^(\d+|-)\t(\d+|-)\t([\s\S]+)$/u.exec(raw)
+      if (!match) throw new Error('Invalid Git numstat output')
+      return { file: match[3], added: match[1] === '-' ? 0 : Number(match[1]),
+        deleted: match[2] === '-' ? 0 : Number(match[2]), raw }
+    })
+    return { hash: commit.sha, message: commit.subject, stats: {
+      files_changed: rows.length,
+      added_lines: rows.reduce((sum, row) => sum + row.added, 0),
+      deleted_lines: rows.reduce((sum, row) => sum + row.deleted, 0),
+      edited_lines: rows.reduce((sum, row) => sum + Math.min(row.added, row.deleted), 0),
+      raw_shortstat: shortstat.stdout.trim(), raw_numstat: rows,
+    } }
+  }))
+  return { commits }
+}
+
 // ─── Task definition (TaskDefinition object literal) ──────────────
 
 const definition = {
@@ -214,6 +243,7 @@ const definition = {
     instructions: [commitRules, shellUsage],
     input: CommitRequestSchema,
     output: CommitReportSchema,
+    outputFacts: commitOutputFacts,
     gates: {
       pre: [captureOriginTrackingGate],
       post: [originTrackingUnchangedGate],

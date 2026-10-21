@@ -229,7 +229,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
 
   if (terminal.status === 'timeout') {
     lastActivity = terminal.output ?? 'agent execution still running at deadline'
-    const captured = terminal.output?.trim()
+    const captured = terminal.output
     throw agentTimeoutError(
       terminal.executionId ?? lastExecutionId ?? 'unknown',
       1,
@@ -255,7 +255,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
     )
   }
 
-  const report = terminal.output?.trim() ?? ''
+  const report = terminal.output ?? ''
   opts.onRouteSuccess?.()
   opts.onDelivery?.({ summary: summaryFromReport(report), report })
   return report

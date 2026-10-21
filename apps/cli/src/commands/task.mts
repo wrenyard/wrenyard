@@ -174,8 +174,9 @@ export async function handleTaskRun(args: string[]): Promise<number> {
     const result = servicePayload(await client.task.run.wait({ task_run_id: taskRunId }))
     const succeeded = isTaskRunSuccess(result.value)
     if (outputMode === 'structured') {
-      writeTaskRunCompile(await client.task.run.compile({ task_run_id: taskRunId }))
-      return succeeded ? 0 : 1
+      const compiled = await client.task.run.compile({ task_run_id: taskRunId })
+      writeTaskRunCompile(compiled)
+      return succeeded && compiled.ok ? 0 : 1
     }
     writeTaskRunResult(result.value, outputMode)
     return succeeded ? 0 : 1
@@ -272,8 +273,9 @@ export async function handleTaskOutput(args: string[]): Promise<number> {
   try {
     const taskRunId = positionals[0]
     if (outputMode === 'structured') {
-      writeTaskRunCompile(await client.task.run.compile({ task_run_id: taskRunId }))
-      return 0
+      const compiled = await client.task.run.compile({ task_run_id: taskRunId })
+      writeTaskRunCompile(compiled)
+      return compiled.ok ? 0 : 1
     }
     writeTaskRunResult(await client.task.run.output({ task_run_id: taskRunId }), outputMode)
   } finally {

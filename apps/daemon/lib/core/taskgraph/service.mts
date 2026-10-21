@@ -40,7 +40,7 @@ import {
 import type { TaskGraphAutoSchemaResolver } from './materialize.mts'
 import { WorkspaceTaskContractResolver, type TaskGraphTaskContractResolver } from './task-contract-resolver.mts'
 import { buildTaskSlipNode, type TaskSlipNodeOutput } from './task-slip.mts'
-import { findTaskDefinition } from '../../workspace/definition-registry.mts'
+import { ensureDiscovered, findTaskDefinition } from '../../workspace/definition-registry.mts'
 import { normalizeTaskContext, TaskContextError } from '@wrenyard/task'
 
 export type TaskGraphServiceErrorCode =
@@ -87,11 +87,13 @@ export class TaskGraphService {
   private readonly taskBridge: TaskGraphTaskBridge
   private readonly schemaResolver: TaskGraphAutoSchemaResolver
   private readonly contractResolver: TaskGraphTaskContractResolver
+  private readonly workspaceRoot: string
   private readonly eventSink?: (event: TaskGraphEvent) => void | Promise<void>
   private readonly now: () => string
   private readonly runners = new Map<string, GraphRunner>()
 
   constructor(options: TaskGraphServiceOptions) {
+    this.workspaceRoot = options.workspaceRoot
     this.store = new TaskGraphStore(options.db)
     this.taskBridge = options.taskBridge ?? new TaskServiceTaskBridge({
       workspaceRoot: options.workspaceRoot,
@@ -105,6 +107,7 @@ export class TaskGraphService {
   }
 
   async create(params: TaskGraphCreateParams): Promise<TaskGraphCreateResult> {
+    await ensureDiscovered(this.workspaceRoot)
     const id = createTaskGraphId()
     const title = normalizeCreateTitle(params.title)
     let taskGraphContext
@@ -156,6 +159,7 @@ export class TaskGraphService {
   }
 
   async patch(params: TaskGraphPatchParams): Promise<TaskGraphPatchResult> {
+    await ensureDiscovered(this.workspaceRoot)
     this.requireTaskGraph(params.taskgraph_id)
     const r = this.runner(params.taskgraph_id)
     if (params.operation.type === 'request_patch') {

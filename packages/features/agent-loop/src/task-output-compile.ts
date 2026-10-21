@@ -8,28 +8,25 @@ import type { CallRunResult, Message, ToolCall, ToolChoice, ToolSpec } from './p
 /** The only round bound for task-output compilation. */
 export const TASK_OUTPUT_COMPILE_MAX_ROUNDS = 6
 
-/** The submit tool carries the real task output schema as its `output` property. */
-function submitTool(outputSchema: Record<string, unknown> | boolean): ToolSpec {
+/** Encode arbitrary JSON roots as text so provider tool-schema subsets accept the submit tool. */
+function submitTool(): ToolSpec {
   return {
     name: 'submit',
-    description: 'Submit the compiled output as a JSON value matching the schema.',
+    description: 'Submit the compiled output as a JSON-encoded value matching the output schema.',
     parameters: {
       type: 'object',
-      properties: { output: outputSchema },
+      properties: { output: { type: 'string', description: 'JSON-encoded output value matching the complete schema in the prompt.' } },
       required: ['output'],
       additionalProperties: false,
     },
   }
 }
 
-/** Force the submit tool on every compile call; nothing else is ever offered. */
-const submitToolChoice: ToolChoice = { name: 'submit' }
-
 export interface TaskOutputCompileOptions {
   outputSchema: Record<string, unknown> | boolean
   report: string
   facts: TaskRunFacts
-  outputFacts?: (facts: Readonly<TaskRunFacts>) => Readonly<Record<string, unknown>>
+  outputFacts?: (facts: Readonly<TaskRunFacts>) => Readonly<Record<string, unknown>> | Promise<Readonly<Record<string, unknown>>>
   signal?: AbortSignal
   call(request: {
     messages: readonly Message[]
@@ -171,7 +168,7 @@ export async function runTaskOutputCompile(
   try {
     facts = jsonSnapshot(options.facts, 'Task facts') as TaskRunFacts
     schema = jsonSnapshot(options.outputSchema, 'Output schema') as Record<string, unknown> | boolean
-    const mapped = options.outputFacts?.(structuredClone(facts)) ?? {}
+    const mapped = await options.outputFacts?.(structuredClone(facts)) ?? {}
     if (!isPlainObject(mapped)) throw new Error('Output facts mapper must return a plain object.')
     fixedFields = jsonSnapshot(mapped, 'Mapped output facts') as Record<string, unknown>
     validate = new Ajv({ allErrors: true, strict: false }).compile(schema)
@@ -198,8 +195,7 @@ export async function runTaskOutputCompile(
     try {
       const request = {
         messages: structuredClone(messages),
-        tools: [submitTool(schema)],
-        toolChoice: submitToolChoice,
+        tools: [submitTool()],
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       }
       result = await options.call(request)
@@ -217,7 +213,7 @@ export async function runTaskOutputCompile(
       }),
     })
     if (calls.length === 0) {
-      // Text fallback: a model that ignored the forced choice may still carry
+      // Text fallback: a model that did not submit a tool call may still carry
       // the JSON in its text; the extracted value goes through the same
       // fixed-fields overwrite and schema validation as a tool submission.
       const extracted = extractJsonFromText(result.text)
@@ -249,7 +245,15 @@ export async function runTaskOutputCompile(
         messages.push(toolMessage(call, errorResult('invalid_arguments', 'submit arguments must contain exactly the required output field.')))
         continue
       }
-      const submitted = args.output
+      let submitted = args.output
+      if (typeof submitted === 'string') {
+        try {
+          submitted = JSON.parse(submitted)
+        } catch {
+          messages.push(toolMessage(call, errorResult('invalid_arguments', 'output must contain a JSON-encoded value.')))
+          continue
+        }
+      }
       if (Object.keys(fixedSnapshot).length > 0 && !isPlainObject(submitted)) {
         messages.push(toolMessage(call, errorResult('schema_invalid', 'Output must be an object when fixed output fields are mapped.')))
         continue
