@@ -1,11 +1,11 @@
-import type { ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Maximize2, Menu, Network, PanelLeftClose, PanelLeftOpen, PanelRight, PictureInPicture2, Pin, PinOff, Plus, X } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Activity, ChevronLeft, ChevronRight, Maximize2, Menu, Network, PanelLeftClose, PanelLeftOpen, PictureInPicture2, Pin, PinOff, Plus, X } from 'lucide-react';
 import type { ShellPage } from '@/shell-contract';
 import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { shell, useActivityStatus, useShellPage } from '@/renderer/lib/desktop';
-import { toggleActivityPanel } from '@/renderer/lib/activity-panel';
+import { toggleActivityPanel, useActivityPanelState } from '@/renderer/lib/activity-panel';
 import { TaskGraphsPopover } from '@/renderer/app/TitleBarPanels';
 import { closeCard, getCurrentSession, openMiniCard, restoreMain, setMiniPinned, useMiniMode, useMiniPinned } from '@/renderer/lib/mini';
 import { back, forward, toggleSecondarySidebar, useNavigation, useSecondarySidebarToggle } from '@/renderer/lib/navigation';
@@ -28,15 +28,26 @@ interface TitleBarButtonProps {
   label: string;
   tooltip: string;
   disabled?: boolean;
+  pressed?: boolean;
   onClick(): void;
   children: ReactNode;
 }
 
-function TitleBarButton({ label, tooltip, disabled, onClick, children }: TitleBarButtonProps) {
+function TitleBarButton({ label, tooltip, disabled, pressed, onClick, children }: TitleBarButtonProps) {
   return (
     <Tooltip>
       <TooltipTrigger
-        render={<Button variant="ghost" size="icon-sm" aria-label={label} disabled={disabled} onClick={onClick} />}
+        render={(
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={label}
+            aria-pressed={pressed}
+            disabled={disabled}
+            className={cn(pressed === true && 'bg-muted')}
+            onClick={onClick}
+          />
+        )}
       >
         {children}
       </TooltipTrigger>
@@ -63,9 +74,26 @@ export function TitleBar() {
   const mini = useMiniMode();
   const pinned = useMiniPinned();
   const activitySnapshot = useActivityStatus();
+  const activityOpen = useActivityPanelState().open;
   const activityBadgeCount = activitySnapshot.tasks.filter(
     (task) => task.status === 'running' || task.status === 'queued',
   ).length;
+
+  // Track whether any page portals content into its auxiliary slot; the
+  // separator between app-level and page-level controls only renders then.
+  const [hasAuxiliary, setHasAuxiliary] = useState(false);
+  const auxiliaryRefs = useRef(new Map<ShellPage, HTMLElement | null>());
+  useEffect(() => {
+    const update = () => {
+      setHasAuxiliary((auxiliaryRefs.current.get(page)?.hasChildNodes() ?? false));
+    };
+    update();
+    const target = auxiliaryRefs.current.get(page);
+    if (target === null || target === undefined) return;
+    const observer = new MutationObserver(update);
+    observer.observe(target, { childList: true });
+    return () => observer.disconnect();
+  }, [page]);
 
   // Mini card: a compact 36px drag strip. 置顶 sits at the far left; the middle
   // is a plain, non-interactive session title inside the drag region; the right
@@ -205,9 +233,14 @@ export function TitleBar() {
       </div>
 
       <div className={cn('flex shrink-0 items-center gap-2 px-2', DRAG, SLOT_NO_DRAG)}>
-        <TitleBarButton label="后台任务" tooltip="后台任务" onClick={() => toggleActivityPanel()}>
+        <TitleBarButton
+          label="后台任务"
+          tooltip="后台任务"
+          pressed={activityOpen}
+          onClick={() => toggleActivityPanel()}
+        >
           <span className="relative inline-flex">
-            <PanelRight />
+            <Activity />
             {activityBadgeCount > 0 ? (
               <span className="absolute -top-1 -right-1 flex min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[10px] font-medium leading-none text-primary-foreground">
                 {activityBadgeCount > 9 ? '9+' : activityBadgeCount}
@@ -222,12 +255,16 @@ export function TitleBar() {
             </TitleBarButton>
           )}
         />
+        {hasAuxiliary && <span aria-hidden className="h-4 w-px shrink-0 bg-border" />}
         {TITLE_BAR_PAGES.map((id) => (
           <div
             key={id}
             data-titlebar-auxiliary={id}
             className={cn('flex items-center gap-1', id !== page && 'hidden')}
-            ref={(element) => registerTitleBarSlot(id, 'auxiliary', element)}
+            ref={(element) => {
+              auxiliaryRefs.current.set(id, element);
+              registerTitleBarSlot(id, 'auxiliary', element);
+            }}
           />
         ))}
         {page === 'session' && (

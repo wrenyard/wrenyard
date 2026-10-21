@@ -5,7 +5,7 @@
  * hover footer.
  */
 import type { ReactNode } from 'react';
-import { ListTodo, TriangleAlert } from 'lucide-react';
+import { Activity, TriangleAlert } from 'lucide-react';
 import { cn } from 'cn';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
 import { MessageFooter } from '@/renderer/components/chat/MessageFooter';
@@ -246,7 +246,7 @@ function RunningTasks({ tasks, sessionId }: { tasks: readonly ActionModel[]; ses
       className="ml-auto inline-flex shrink-0 items-center gap-1 rounded text-muted-foreground hover:text-foreground"
       onClick={() => openActivityPanel(sessionId)}
     >
-      <ListTodo className="size-3.5" aria-hidden />
+      <Activity className="size-3.5" aria-hidden />
       {tasks.length} 个任务
     </button>
   );
