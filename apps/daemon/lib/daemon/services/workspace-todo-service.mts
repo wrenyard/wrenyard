@@ -20,6 +20,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import Database from 'better-sqlite3'
 import type { Database as DatabaseInstance } from 'better-sqlite3'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import type { TodoCompact, TodoListParams } from '@wrenyard/protocol/workspace'
 
 /** Todos live in this directory under the workspace root. */
 const TODO_DIRECTORY = 'todos'
@@ -196,13 +197,22 @@ export class WorkspaceTodoService {
   }
 
   /** Every todo currently on disk, ordered by id. Malformed files are errors. */
-  async listTodos(): Promise<Todo[]> {
+  async listTodos(params: TodoListParams = {}): Promise<Todo[] | TodoCompact[]> {
+    const fields = params.fields ?? 'compact'
     const todos = await this.withLock(async () => {
       const scanned = await this.scanLocked()
       await this.reconcileIndexLocked(scanned)
       return scanned
     })
-    return todos.map(cloneTodo)
+    let filtered = todos
+    if (params.status !== undefined) {
+      filtered = filtered.filter((todo) => todo.status === params.status)
+    }
+    if (params.project !== undefined) {
+      filtered = filtered.filter((todo) => todo.project === params.project)
+    }
+    if (fields === 'full') return filtered.map(cloneTodo)
+    return filtered.map(toCompactTodo)
   }
 
   /** One todo by id; a missing or non-regular target is an error. */
@@ -656,6 +666,19 @@ function sameIndexRecord(a: TodoIndexRecord, b: TodoIndexRecord): boolean {
 /** Copy a todo so callers never share a mutable object with the parse cache. */
 function cloneTodo(todo: Todo): Todo {
   return { ...todo, depends_on: [...todo.depends_on], attachments: [...todo.attachments] }
+}
+
+function toCompactTodo(todo: Todo): TodoCompact {
+  const cloned = cloneTodo(todo)
+  const compact: TodoCompact = {
+    id: cloned.id,
+    title: cloned.title,
+    status: cloned.status,
+    depends_on: cloned.depends_on,
+    updated: cloned.updated,
+  }
+  if (cloned.project !== undefined) compact.project = cloned.project
+  return compact
 }
 
 /** Whether a filesystem error means the target is absent. */

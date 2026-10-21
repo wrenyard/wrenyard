@@ -161,6 +161,7 @@ async function runRounds(options: AuxiliaryLoopOptions, spanId: string, startedA
     const finishedAt = new Date().toISOString();
     const recordInput = buildAuxiliaryRunRecordInput({
       options,
+      record: options.record ?? createLoopRecord(),
       status,
       summary,
       route: lastRoute,
@@ -490,6 +491,84 @@ export function recordWorkspaceUpdate(record: LoopRecord, ctx: ActionRunContext,
   record.changes.push(`- ${update.change} ${update.target}${suffix}`);
 }
 
+/** Total byte budget for caller-facing observation lines in an action result. */
+const OBSERVATION_TOTAL_CAP_BYTES = 65536;
+
+const observationTextEncoder = new TextEncoder();
+
+function utf8ByteLength(text: string): number {
+  return observationTextEncoder.encode(text).byteLength;
+}
+
+/** Largest prefix of `text` whose UTF-8 encoding fits in `maxBytes`. */
+function sliceToUtf8ByteBudget(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return '';
+  if (utf8ByteLength(text) <= maxBytes) return text;
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (utf8ByteLength(text.slice(0, mid)) <= maxBytes) lo = mid;
+    else hi = mid - 1;
+  }
+  return text.slice(0, lo);
+}
+
+/**
+ * Cap observation lines for the action result while leaving `record.observations`
+ * uncapped for the auxiliary run record.
+ */
+function capObservationsForCaller(observations: readonly string[]): string[] {
+  if (observations.length === 0) return [];
+  let budget = OBSERVATION_TOTAL_CAP_BYTES;
+  const out: string[] = [];
+  let keptEntries = 0;
+  let omittedBytes = 0;
+
+  for (const entry of observations) {
+    const entryBytes = utf8ByteLength(entry);
+    if (budget <= 0) {
+      omittedBytes += entryBytes;
+      continue;
+    }
+    if (entryBytes <= budget) {
+      out.push(entry);
+      budget -= entryBytes;
+      keptEntries += 1;
+      continue;
+    }
+    let head = sliceToUtf8ByteBudget(entry, budget);
+    let headBytes = utf8ByteLength(head);
+    let truncatedBytes = entryBytes - headBytes;
+    let marker = `…[truncated ${truncatedBytes} bytes]`;
+    let line = head + marker;
+    while (headBytes > 0 && utf8ByteLength(line) > budget) {
+      const markerBytes = utf8ByteLength(marker);
+      head = sliceToUtf8ByteBudget(entry, Math.max(0, budget - markerBytes));
+      headBytes = utf8ByteLength(head);
+      truncatedBytes = entryBytes - headBytes;
+      marker = `…[truncated ${truncatedBytes} bytes]`;
+      line = head + marker;
+    }
+    if (headBytes === 0) {
+      omittedBytes += entryBytes;
+      continue;
+    }
+    out.push(line);
+    budget -= utf8ByteLength(line);
+    keptEntries += 1;
+    omittedBytes += truncatedBytes;
+  }
+
+  const totalEntries = observations.length;
+  if (keptEntries < totalEntries || omittedBytes > 0) {
+    out.push(
+      `(observations capped: kept ${keptEntries} of ${totalEntries} entries, ${omittedBytes} bytes omitted; full payloads stored in the auxiliary run record)`,
+    );
+  }
+  return out;
+}
+
 /**
  * Turn a finished loop into the action outcome: `done` maps to a successful
  * action and `failed` to a failed one; the result text is the summary followed
@@ -502,7 +581,12 @@ export function toActionOutcome(
   record: LoopRecord,
   extraDrafts: readonly LedgerEventDraft[] = [],
 ): ActionExecutionOutcome {
-  const lines = [result.summary, ...record.changes, ...record.observations, ...record.notes]
+  const lines = [
+    result.summary,
+    ...record.changes,
+    ...capObservationsForCaller(record.observations),
+    ...record.notes,
+  ]
     .filter((line) => line.trim() !== '');
   return {
     status: result.status === 'done' ? 'done' : 'failed',
@@ -518,6 +602,7 @@ export function toActionOutcome(
  */
 function buildAuxiliaryRunRecordInput(args: {
   options: AuxiliaryLoopOptions;
+  record: LoopRecord;
   status: 'done' | 'failed';
   summary: string;
   route?: { provider?: string; model?: string; effort?: string };
@@ -525,7 +610,7 @@ function buildAuxiliaryRunRecordInput(args: {
   startedAt: string;
   finishedAt: string;
 }): AuxiliaryRunRecordInput {
-  const { options, status, summary, route, usage, startedAt, finishedAt } = args;
+  const { options, record, status, summary, route, usage, startedAt, finishedAt } = args;
   return {
     id: options.ctx.actionId,
     role: options.role,
@@ -536,6 +621,7 @@ function buildAuxiliaryRunRecordInput(args: {
     startedAt,
     finishedAt,
     summary,
+    ...(record.observations.length > 0 ? { observations: [...record.observations] } : {}),
   };
 }
 

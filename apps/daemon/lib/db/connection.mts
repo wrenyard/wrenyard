@@ -81,8 +81,13 @@ export function initDb(path?: string): ForemanDatabase {
       started_at    TEXT,
       finished_at   TEXT,
       usage         TEXT,
-      summary       TEXT
+      summary       TEXT,
+      observations  TEXT
     )`).run()
+    const auxiliaryRunColumns = nextDb.prepare('PRAGMA table_info(auxiliary_runs)').all() as { name: string }[]
+    if (!auxiliaryRunColumns.some((column) => column.name === 'observations')) {
+      nextDb.prepare('ALTER TABLE auxiliary_runs ADD COLUMN observations TEXT').run()
+    }
     nextDb.prepare(
       'CREATE INDEX IF NOT EXISTS idx_auxiliary_runs_finished ON auxiliary_runs(COALESCE(finished_at, created_at) DESC, created_at DESC)',
     ).run()

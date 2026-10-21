@@ -51,10 +51,27 @@ export interface TodoUpdateInput {
 
 // ─── todo.list ─────────────────────────────────────────────────────
 
-export type TodoListParams = Record<string, never>
+/** Row shape for `todo.list` when `fields` is `compact` (the default). */
+export interface TodoCompact {
+  id: string
+  title: string
+  status: TodoStatus
+  project?: string
+  depends_on: string[]
+  updated: string
+}
+
+export type TodoListFields = 'compact' | 'full'
+
+export interface TodoListParams {
+  status?: TodoStatus
+  project?: string
+  /** `compact` omits bodies; `full` returns complete todo records. */
+  fields?: TodoListFields
+}
 
 export interface TodoListResult {
-  todos: Todo[]
+  todos: Todo[] | TodoCompact[]
 }
 
 // ─── todo.get ──────────────────────────────────────────────────────

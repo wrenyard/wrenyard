@@ -8,6 +8,12 @@ export const TODO_LIST_QUERY_KEY = ['todos', 'list'] as const;
 /** Polling cadence while the todo page is the visible shell page. */
 const TODO_POLL_INTERVAL_MS = 30_000;
 
+/** Full todo rows for UI surfaces that render request, acceptance or delivery text. */
+async function fetchTodoListFull(): Promise<{ todos: Todo[] }> {
+  const result = await todoRequest('todo.list', { fields: 'full' });
+  return { todos: result.todos as Todo[] };
+}
+
 /**
  * The workspace todo list. It is read-only and cached for ten seconds, and it
  * polls only while the todo page is active: hidden pages are paused by the
@@ -17,7 +23,7 @@ export function useTodosQuery() {
   const page = useShellPage();
   return useQuery({
     queryKey: TODO_LIST_QUERY_KEY,
-    queryFn: () => todoRequest('todo.list'),
+    queryFn: fetchTodoListFull,
     staleTime: 10_000,
     refetchOnWindowFocus: true,
     refetchInterval: page === 'todo' ? TODO_POLL_INTERVAL_MS : false,

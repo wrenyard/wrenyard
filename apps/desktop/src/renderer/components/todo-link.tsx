@@ -15,6 +15,7 @@ import {
   TODO_LIST_QUERY_KEY,
   TODO_STATUS_LABEL,
 } from '@/renderer/pages/todo/queries';
+import type { TodoListResult } from '@/shell-contract';
 
 /** Characters of the todo request shown in the hover card. */
 const REQUEST_EXCERPT_LENGTH = 160;
@@ -24,10 +25,15 @@ const REQUEST_EXCERPT_LENGTH = 160;
  * key and cache, so a link never issues a duplicate read while the list is
  * fresh; unlike the page it never polls.
  */
+async function fetchTodoListFull(): Promise<TodoListResult & { todos: Todo[] }> {
+  const result = await todoRequest('todo.list', { fields: 'full' });
+  return { todos: result.todos as Todo[] };
+}
+
 function useTodoLinkTodos() {
   return useQuery({
     queryKey: TODO_LIST_QUERY_KEY,
-    queryFn: () => todoRequest('todo.list'),
+    queryFn: fetchTodoListFull,
     staleTime: 10_000,
     refetchOnWindowFocus: true,
   });

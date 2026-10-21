@@ -83,5 +83,8 @@ export function toAuxiliaryRunRecord(input: AuxiliaryRunRecordInput): RunRecord 
   }
   if (input.usage !== undefined) record.usage = input.usage
   if (input.summary !== undefined && input.summary !== '') record.summary = input.summary
+  if (input.observations !== undefined && input.observations.length > 0) {
+    record.observations = input.observations
+  }
   return record
 }

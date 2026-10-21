@@ -55,6 +55,8 @@ export interface AuxiliaryRunRecordInput {
   /** ISO timestamp the run finished. */
   finishedAt: string
   summary?: string
+  /** Full auxiliary observation lines, uncapped on the run record. */
+  observations?: string[]
 }
 
 export interface RunRecord {
@@ -71,4 +73,6 @@ export interface RunRecord {
   usage?: TaskUsage
   /** Result summary when the producer has one. */
   summary?: string
+  /** Full auxiliary observation lines when persisted. */
+  observations?: string[]
 }

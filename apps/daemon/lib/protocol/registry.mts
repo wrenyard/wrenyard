@@ -1342,7 +1342,7 @@ export const methodRegistry: {
   'todo.list': {
     params: todoListParamsSchema,
     result: todoListResultSchema,
-    description: 'List every workspace todo, ordered by id. Read-only.',
+    description: 'List workspace todos (compact by default), optionally filtered by status or project. Read-only.',
   },
   'todo.get': {
     params: todoGetParamsSchema,

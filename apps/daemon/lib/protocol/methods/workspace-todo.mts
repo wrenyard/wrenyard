@@ -56,21 +56,48 @@ const todoSchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
+/** Compact list row: metadata only; bodies come from todo.get. */
+const todoCompactSchema = {
+  type: 'object',
+  required: ['id', 'title', 'status', 'depends_on', 'updated'],
+  properties: {
+    id: { type: 'string', description: 'The short stable path-safe todo id.' },
+    title: { type: 'string', description: 'The human-readable todo title.' },
+    status: todoStatusProperty,
+    project: { type: 'string', description: 'The optional project label the todo belongs to.' },
+    depends_on: { type: 'array', items: { type: 'string' }, description: 'Ids of todos this todo depends on.' },
+    updated: { type: 'string', description: 'Last update time as an ISO 8601 timestamp.' },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
 // ─── todo.list ─────────────────────────────────────────────────────
 
 export const todoListParamsSchema = {
   type: 'object',
-  description: 'List every workspace todo, ordered by id. Read-only.',
-  properties: {},
+  description: 'List workspace todos, ordered by id. Compact rows by default; use todo.get for full bodies.',
+  properties: {
+    status: todoStatusProperty,
+    project: { type: 'string', minLength: 1, description: 'Filter to todos with this project label.' },
+    fields: {
+      type: 'string',
+      enum: ['compact', 'full'],
+      description: "Row shape: 'compact' (default) or 'full' with request, acceptance and attachments.",
+    },
+  },
   additionalProperties: false,
 } as const satisfies JsonSchema
 
 export const todoListResultSchema = {
   type: 'object',
-  description: 'Every workspace todo, ordered by id.',
+  description: 'Matching workspace todos, ordered by id.',
   required: ['todos'],
   properties: {
-    todos: { type: 'array', description: 'The matching todos.', items: todoSchema },
+    todos: {
+      type: 'array',
+      description: 'The matching todos (compact or full per params.fields).',
+      items: { oneOf: [todoCompactSchema, todoSchema] },
+    },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema

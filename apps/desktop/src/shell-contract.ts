@@ -98,6 +98,7 @@ import type {
   TodoCreateInput,
   TodoCreateParams,
   TodoCreateResult,
+  TodoListParams,
   TodoListResult,
   TodoStatus,
   TodoUpdateResult,
@@ -1379,14 +1380,14 @@ export const BOT_TODO_METHODS = ['todo.create', 'todo.update'] as const;
 
 export type BotTodoMethod = (typeof BOT_TODO_METHODS)[number];
 
-export type { TodoListResult, TodoCreateParams, TodoCreateResult };
+export type { TodoListParams, TodoListResult, TodoCreateParams, TodoCreateResult };
 /** `todo.update` takes the narrowed local input; result is the protocol row. */
 export type TodoUpdateParams = TodoUpdateInput;
 export type { TodoUpdateResult };
 
 /** Params and result of each forwarded todo method, used to type the facade. */
 export interface TodoMethodMap {
-  'todo.list': { params: undefined; result: TodoListResult };
+  'todo.list': { params: TodoListParams; result: TodoListResult };
 }
 
 /** Params and result of each forwarded bot-todo method, used to type the facade. */

@@ -17,6 +17,7 @@ export interface AuxiliaryRunRow {
   finished_at: string | null
   usage: string | null
   summary: string | null
+  observations: string | null
 }
 
 /**
@@ -35,8 +36,8 @@ export class AuxiliaryRunStore {
     this.run(
       `INSERT OR REPLACE INTO auxiliary_runs (
         id, role, caller_origin, caller_id, provider, model, effort, status,
-        created_at, started_at, finished_at, usage, summary
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_at, started_at, finished_at, usage, summary, observations
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       record.id,
       record.role ?? null,
       record.caller?.origin ?? 'unknown',
@@ -50,13 +51,16 @@ export class AuxiliaryRunStore {
       record.timing.finishedAt ?? null,
       record.usage === undefined ? null : toJsonText(record.usage),
       record.summary ?? null,
+      record.observations === undefined || record.observations.length === 0
+        ? null
+        : toJsonText(record.observations),
     )
   }
 
   readRecent(limit: number): AuxiliaryRunRow[] {
     return this.query<AuxiliaryRunRow>(
       `SELECT id, role, caller_origin, caller_id, provider, model, effort, status,
-              created_at, started_at, finished_at, usage, summary
+              created_at, started_at, finished_at, usage, summary, observations
        FROM auxiliary_runs
        ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC
        LIMIT ?`,
