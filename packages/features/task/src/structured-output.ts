@@ -127,13 +127,6 @@ export interface TaskUpstreamError {
  */
 export type TaskRouteFault = MarkableFailure | TaskUpstreamError
 
-/** The gateway's structured-output delivery failure, scoped to the exact route. */
-const STRUCTURED_OUTPUT_FAILURE: MarkableFailure = {
-  state: 'model_unavailable',
-  scope: 'route',
-  faultKind: 'structured_output',
-}
-
 export interface StructuredOutputOptions {
   profile: string
   instructions: string
@@ -375,7 +368,6 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
     // check runs before profile resolution so its diagnostic is always the one
     // reported.
     if (attempt > 0 && !resume) {
-      opts.onRouteFault?.(STRUCTURED_OUTPUT_FAILURE)
       const validationErrors = lastValidationErrors ?? []
       const rawExcerpt = lastOutputExcerpt ?? ''
       const hasPlaceholderErrors = validationErrors.some((e) => e.includes('placeholder'))
@@ -518,7 +510,6 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
       // verbatim for the route-state port to classify. Any other agent failure
       // is functional and never touches route health, and an execution without
       // an upstream error records no fault.
-      if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.(STRUCTURED_OUTPUT_FAILURE)
       if (terminal.upstreamError !== undefined) opts.onRouteFault?.(terminal.upstreamError)
       throw agentFailedError(
         terminal.executionId ?? lastExecutionId ?? 'unknown',
@@ -589,9 +580,6 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
       retryable: false,
     },
   )
-  // The launched model attempts never produced a valid delivery: report the
-  // terminal structured-output failure to the shared circuit before failing.
-  opts.onRouteFault?.(STRUCTURED_OUTPUT_FAILURE)
   throw gateErr
 }
 
@@ -711,7 +699,6 @@ async function runTimeLimitWarningResume(
     // The same protocol/delivery class faults the route here too; a
     // client-reported upstream error is carried verbatim for downstream
     // classification. A functional agent failure does not fault the route.
-    if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.(STRUCTURED_OUTPUT_FAILURE)
     if (terminal.upstreamError !== undefined) opts.onRouteFault?.(terminal.upstreamError)
     throw agentFailedError(
       terminal.executionId ?? lastExecutionId ?? 'unknown',

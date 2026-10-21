@@ -31,7 +31,7 @@ export interface GatewayRequestCompletedEvent {
   routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'access_denied' | 'model_unavailable';
   routeUntil?: string;
   /** The specific fault kind behind `routeState`, when a route was faulted. */
-  faultReason?: RouteFaultKind;
+  faultReason?: string;
   /** The circuit phase of the faulted scope at the moment of the outcome. */
   routePhase?: CircuitPhase;
   /**
