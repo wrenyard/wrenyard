@@ -150,20 +150,19 @@ test('a hung streaming route times out without poisoning route availability', as
   await gateway.close();
 });
 
-test('a transport failure is isolated to the exact route', async () => {
+test('a transport failure is reported but never blocks the route', async () => {
   const clock = fakeClock();
   const gateway = makeGateway({ fetch: (() => Promise.reject(new Error('ECONNREFUSED'))) as unknown as typeof globalThis.fetch, now: clock.now });
   await withServer(gateway, async (port) => {
     const response = await post(port, { model: 'alpha', stream: true });
     assert.equal(response.status, 502);
-    assert.equal(gateway.routeStatus('test/alpha')?.faultKind, 'transport');
-    // A sibling model of the same provider is untouched by the route fault.
+    assert.equal(gateway.routeStatus('test/alpha'), undefined);
     assert.equal(gateway.routeStatus('test/beta'), undefined);
   });
   await gateway.close();
 });
 
-test('a 5xx poisons the exact route while a caller-caused 400 does not', async () => {
+test('a 5xx and a caller-caused 400 never poison a route', async () => {
   const clock = fakeClock();
   let status = 500;
   const gateway = makeGateway({
@@ -175,8 +174,7 @@ test('a 5xx poisons the exact route while a caller-caused 400 does not', async (
   await withServer(gateway, async (port) => {
     const failed = await post(port, { model: 'alpha', stream: true });
     assert.equal(failed.status, 500);
-    assert.equal(gateway.routeStatus('test/alpha')?.faultKind, 'server_error');
-    assert.equal(gateway.routeStatus('test/alpha')?.phase, 'open');
+    assert.equal(gateway.routeStatus('test/alpha'), undefined);
 
     status = 400;
     const invalid = await post(port, { model: 'beta', stream: true });
@@ -187,7 +185,7 @@ test('a 5xx poisons the exact route while a caller-caused 400 does not', async (
   await gateway.close();
 });
 
-test('an in-stream error after HTTP 200 classifies into the same health authority', async () => {
+test('a server-fault in-stream frame after HTTP 200 never poisons a route', async () => {
   const clock = fakeClock();
   const gateway = makeGateway({
     fetch: (() => Promise.resolve(sseResponse(['data: {"error":{"message":"overloaded","type":"server_error","code":"overloaded_error"}}\n\n']))) as unknown as typeof globalThis.fetch,
@@ -196,7 +194,21 @@ test('an in-stream error after HTTP 200 classifies into the same health authorit
   await withServer(gateway, async (port) => {
     const response = await post(port, { model: 'alpha', stream: true });
     assert.equal(response.status, 200);
-    assert.equal(gateway.routeStatus('test/alpha')?.faultKind, 'server_error');
+    assert.equal(gateway.routeStatus('test/alpha'), undefined);
+  });
+  await gateway.close();
+});
+
+test('an explicit in-stream rate-limit frame still poisons the pool', async () => {
+  const clock = fakeClock();
+  const gateway = makeGateway({
+    fetch: (() => Promise.resolve(sseResponse(['data: {"error":{"message":"slow down","type":"rate_limit_error","code":"rate_limit_exceeded"}}\n\n']))) as unknown as typeof globalThis.fetch,
+    now: clock.now,
+  });
+  await withServer(gateway, async (port) => {
+    const response = await post(port, { model: 'alpha', stream: true });
+    assert.equal(response.status, 200);
+    assert.equal(gateway.routeStatus('test/alpha')?.faultKind, 'rate_limited');
     assert.equal(gateway.routeStatus('test/alpha')?.phase, 'open');
   });
   await gateway.close();

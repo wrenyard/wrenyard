@@ -3,16 +3,13 @@ import type { GatewayRouteState, ProviderDefinition, UpstreamRouteFailure } from
 const MAX_TIME_MS = 8.64e15;
 
 /**
- * Route-scoped fault kinds: the four legacy states plus the transport classes
- * that a route-scoped (provider/model) fault can carry. A transport fault is
- * isolated to the exact model that observed it; a rate limit or quota fault
- * keeps its shared pool scope. `structured_output` is the delivery/protocol
- * failure of a model attempt: like the transport classes it is isolated to the
- * exact route that observed it and never claims a provider or shared pool.
- * `empty_stream` is the delivered-nothing variant of that delivery failure: a
- * response that completed without producing any output.
+ * Route-scoped fault kinds: exactly the explicit upstream meanings the route
+ * state may block on (the five legacy states). An outcome without an explicit
+ * upstream meaning — an overload, another 5xx, a connection or transport
+ * failure, an empty stream, a delivery failure, a timeout, or a 429 without a
+ * reset — is reported in request statistics but never blocks a route.
  */
-export type RouteFaultKind = GatewayRouteState | 'timeout' | 'transport' | 'server_error' | 'structured_output' | 'empty_stream';
+export type RouteFaultKind = GatewayRouteState;
 
 /**
  * A poisoning outcome: it is allowed to mark a route (or its provider/pool)
@@ -27,11 +24,15 @@ export interface ClassifiedRouteFailure extends UpstreamRouteFailure {
  * An outcome that must be reported but must never poison route availability: a
  * malformed request or a context-window overflow is the caller's fault, not the
  * route's, so it is classified explicitly instead of being left unclassified.
+ * A failure without an explicit upstream meaning (overload, other 5xx,
+ * connection failures, empty streams, timeouts, a 429 without a reset) is the
+ * route's failure in fact but carries no explicit blocking meaning, so it is
+ * classified the same way: reported, never poisoned.
  */
 export interface NonPoisoningOutcome {
   nonPoisoning: true;
   status: number;
-  category: 'request_invalid' | 'context_overflow' | 'client_error' | 'other';
+  category: 'request_invalid' | 'context_overflow' | 'client_error' | 'server_error' | 'transport' | 'timeout' | 'empty_stream' | 'other';
 }
 
 export type RouteFailureOutcome = ClassifiedRouteFailure | NonPoisoningOutcome;
@@ -81,32 +82,36 @@ function codeOf(body: unknown): string | undefined {
 }
 
 /**
- * Classify one non-ok HTTP outcome by its own status and headers. The mapping is
- * fixed and identical for every supplier:
+ * Classify one non-ok HTTP outcome by its own status and headers. Only answers
+ * whose meaning is explicit may block a route:
  *
- * - 429 rate limit / 402 quota exhaustion claim a shared pool,
+ * - 429 rate limit with a stated reset claims a shared pool until that
+ *   instant; a 429 without a reset is reported but never blocks,
+ * - 402 quota exhaustion claims a shared pool (backoff),
  * - 401 authentication failure claims the provider (recovered by a credential
  *   change),
- * - 403 access denial claims the provider too, but is a distinct state: the
- *   server accepted the credential and refused access (a plan, region or
- *   free-tier restriction), which a credential change cannot repair,
- * - 404 model missing claims the exact route,
- * - 408 request timeout and every 5xx claim the exact route (transport class),
- * - every other 4xx is a request the caller must fix and never poisons a route;
- *   a context-window overflow is recorded under its own non-poisoning category.
+ * - 403 access denial claims the provider too (backoff), but is a distinct
+ *   state: the server accepted the credential and refused access (a plan,
+ *   region or free-tier restriction), which a credential change cannot repair,
+ * - 404 model missing claims the exact route (backoff),
+ * - 408 request timeout, every 5xx and every other unlisted outcome is
+ *   reported but never poisons a route;
+ * - a caller-caused 4xx is a request the caller must fix and never poisons a
+ *   route; a context-window overflow is recorded under its own non-poisoning
+ *   category.
  */
-function genericFailure(status: number | undefined, headers: Headers, body: unknown, nowMs: number): RouteFailureOutcome | undefined {
-  if (status === undefined) return undefined;
+function genericFailure(status: number, headers: Headers, body: unknown, nowMs: number): RouteFailureOutcome | undefined {
   if (status === 429) {
     const reset = retryAfter(headers.get('retry-after'), nowMs) ?? rateLimitReset(headers.get('x-ratelimit-reset'), nowMs);
-    return { state: 'rate_limited', scope: 'pool', faultKind: 'rate_limited', ...(reset === undefined ? {} : { until: new Date(reset).toISOString() }) };
+    if (reset === undefined) return { nonPoisoning: true, status, category: 'client_error' };
+    return { state: 'rate_limited', scope: 'pool', faultKind: 'rate_limited', until: new Date(reset).toISOString() };
   }
   if (status === 402) return { state: 'quota_exhausted', scope: 'pool', faultKind: 'quota_exhausted' };
   if (status === 401) return { state: 'auth_failed', scope: 'provider', faultKind: 'auth_failed' };
   if (status === 403) return { state: 'access_denied', scope: 'provider', faultKind: 'access_denied' };
   if (status === 404) return { state: 'model_unavailable', scope: 'route', faultKind: 'model_unavailable' };
-  if (status === 408) return { state: 'model_unavailable', scope: 'route', faultKind: 'timeout' };
-  if (status >= 500) return { state: 'model_unavailable', scope: 'route', faultKind: 'server_error' };
+  if (status === 408) return { nonPoisoning: true, status, category: 'timeout' };
+  if (status >= 500) return { nonPoisoning: true, status, category: 'server_error' };
   if (status >= 400) {
     const code = codeOf(body);
     const category = code === 'context_length_exceeded' || code === 'context_overflow' ? 'context_overflow' : 'request_invalid';
@@ -124,7 +129,7 @@ function genericFailure(status: number | undefined, headers: Headers, body: unkn
 export function classifyRouteOutcome(
   provider: ProviderDefinition,
   modelId: string,
-  status: number | undefined,
+  status: number,
   headers: Headers,
   body: unknown,
   nowMs: number,
@@ -152,32 +157,18 @@ export function classifyRouteOutcome(
  * non-poisoning or non-error outcome. This is the exact view the route state
  * store consumes.
  */
-export function classifyRouteFailure(provider: ProviderDefinition, modelId: string, status: number | undefined, headers: Headers, body: unknown, nowMs: number): ClassifiedRouteFailure | undefined {
+export function classifyRouteFailure(provider: ProviderDefinition, modelId: string, status: number, headers: Headers, body: unknown, nowMs: number): ClassifiedRouteFailure | undefined {
   const outcome = classifyRouteOutcome(provider, modelId, status, headers, body, nowMs);
   return outcome !== undefined && isPoisoning(outcome) ? outcome : undefined;
 }
 
-/** The exact route a client-observed transport/fetch failure must be isolated to. */
-export function transportFailure(): ClassifiedRouteFailure {
-  return { state: 'model_unavailable', scope: 'route', faultKind: 'transport' };
-}
-
-/**
- * The exact route a structured-output/protocol delivery failure must be
- * isolated to. It is route-scoped, so a delivery failure on one model never
- * poisons an unrelated model, its provider or a shared pool.
- */
-export function structuredOutputFailure(): ClassifiedRouteFailure {
-  return { state: 'model_unavailable', scope: 'route', faultKind: 'structured_output' };
-}
-
 /**
  * Classify an official in-stream error frame (an error observed after an HTTP
- * success status) into the same health authority as an HTTP error, so a stream
- * failure and a non-ok response agree on the scope they poison. Only a fault the
- * route itself owns is classified; a benign or caller-caused frame
- * (`content_filter`, an invalid request, an unknown code) returns `undefined`
- * and never poisons a route.
+ * success status) into the same health authority as an HTTP error. Only a
+ * frame whose meaning is explicit (a rate limit, quota exhaustion, an access
+ * or authentication refusal) is classified; a benign or caller-caused frame
+ * (`content_filter`, an invalid request), a timeout, a server fault and an
+ * unknown code return `undefined` and never poison a route.
  */
 export function classifyStreamFailure(identity: { type?: string; code?: string }): ClassifiedRouteFailure | undefined {
   const token = `${identity.type ?? ''} ${identity.code ?? ''}`.toLowerCase();
@@ -186,11 +177,5 @@ export function classifyStreamFailure(identity: { type?: string; code?: string }
   if (/quota|insufficient_quota|billing|payment/.test(token)) return { state: 'quota_exhausted', scope: 'pool', faultKind: 'quota_exhausted' };
   if (/access.?denied|permission|forbidden/.test(token)) return { state: 'access_denied', scope: 'provider', faultKind: 'access_denied' };
   if (/authentication|unauthenticated|unauthorized|invalid.?api.?key|invalid_key|api_key_invalid/.test(token)) return { state: 'auth_failed', scope: 'provider', faultKind: 'auth_failed' };
-  if (/timeout|timed_out/.test(token)) return { state: 'model_unavailable', scope: 'route', faultKind: 'timeout' };
-  // A completed response that delivered nothing is a delivery failure of the
-  // exact route, like a structured-output failure, not an upstream transport
-  // fault: no official error frame accompanied it.
-  if (/empty_stream|empty.?output/.test(token)) return { state: 'model_unavailable', scope: 'route', faultKind: 'empty_stream' };
-  if (/overload|server_error|internal_error|api_error|unavailable|bad_gateway/.test(token)) return { state: 'model_unavailable', scope: 'route', faultKind: 'server_error' };
   return undefined;
 }

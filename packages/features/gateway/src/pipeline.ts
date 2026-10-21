@@ -13,7 +13,6 @@ import {
   type ReasoningEffort,
 } from '@wrenyard/providers/catalog';
 import { upstreamAuthHeaders, type ProviderCredential, type ProviderRuntime } from '@wrenyard/providers';
-import { completedWithoutOutput } from './response-usage.ts';
 import { classifyRouteOutcome, classifyStreamFailure, isPoisoning, type RouteFaultKind } from './route-failure.ts';
 import type { CircuitPhase, MarkableFailure, RouteStateStore, RouteStatus } from './route-state.ts';
 import { ResponseSampler, type ResponseTpsContract } from './response-tps.ts';
@@ -460,14 +459,12 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       let sampler: ResponseSampler | undefined;
       let activeCredential = credential;
       /**
-       * Record one route fault through the same classification path, correlated
-       * to the attempt when one was identified, so a client report and a
-       * server-side fault of the same attempt are never double counted. An
-       * already-settled attempt yields nothing.
+       * Record one route fault. Only an explicit upstream answer reaches this:
+       * overloads, other 5xx, timeouts and transport failures are reported in
+       * the completion event but never block the route.
        */
-      const recordFault = (failure: MarkableFailure, status: number): RouteStatus | undefined => attemptId === undefined
-        ? options.routeStates.mark(resolved.provider.id, resolved.model.id, failure, status, activeCredential.value, guard)
-        : options.routeStates.markAttemptFault(resolved.provider.id, resolved.model.id, attemptId, failure, status, activeCredential.value, guard);
+      const recordFault = (failure: MarkableFailure, status: number): RouteStatus | undefined =>
+        options.routeStates.mark(resolved.provider.id, resolved.model.id, failure, status, activeCredential.value, guard);
       let executionUpstreamFact: UpstreamErrorFact | undefined;
       const controller = new AbortController();
       options.active.add(controller);
@@ -632,18 +629,15 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         }), controller.signal);
         clearFirstResponseTimer();
         // Only a validated completed response restores health. An observed
-        // in-stream error is classified first: a genuine fault is recorded, while
-        // a caller-benign frame (`content_filter`, an invalid request) never
-        // poisons a route or backs it off.
+        // in-stream error is classified first: only a frame with an explicit
+        // upstream meaning (rate limit, quota, access or auth refusal) is
+        // recorded; a caller-benign frame (`content_filter`, an invalid
+        // request), a timeout, a server fault and an empty stream never poison
+        // a route or back it off.
         const validated = observer.succeeded();
-        // An observed in-stream error is classified first. A streamed response
-        // that completed without producing any output of any kind is the
-        // fail-closed case of the same path: it is classified as `empty_stream`
-        // so the route records a fault and the request never finalizes as a
-        // successful completion.
         const streamFailure = relayed.observedError !== undefined
           ? classifyStreamFailure(relayed.observedError)
-          : completedWithoutOutput(observer) ? classifyStreamFailure({ type: 'empty_stream' }) : undefined;
+          : undefined;
         let streamState: RouteStatus | undefined;
         if (validated) {
           options.routeStates.success(resolved.provider.id, resolved.model.id, guard);
@@ -697,7 +691,6 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           if (message !== undefined) faultCause.message = message;
           if (code !== undefined) faultCause.code = code;
           faultFact = {
-            faultReason: 'transport',
             ...(Object.keys(faultCause).length > 0 ? { faultCause } : {}),
           };
         }

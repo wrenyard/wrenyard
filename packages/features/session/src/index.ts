@@ -243,18 +243,6 @@ export function createSession(host: SessionHost): Session {
           isRouteExcluded: (model: string) => host.isRouteExcluded!(model),
         }),
         ...(host.routeStatus === undefined ? {} : { routeStatus: (model: string) => host.routeStatus!(model) }),
-        // Attempt-level route feedback is forwarded only when the host supplies
-        // it; a host without it keeps the prior behaviour unchanged.
-        ...(host.beginRouteAttempt === undefined ? {} : {
-          beginRouteAttempt: (publicModel: string, attemptId: string) => host.beginRouteAttempt!(publicModel, attemptId),
-        }),
-        ...(host.reportRouteFault === undefined ? {} : {
-          reportRouteFault: (publicModel: string, attemptId: string, kind: 'timeout' | 'transport') =>
-            host.reportRouteFault!(publicModel, attemptId, kind),
-        }),
-        ...(host.completeRouteAttempt === undefined ? {} : {
-          completeRouteAttempt: (publicModel: string, attemptId: string) => host.completeRouteAttempt!(publicModel, attemptId),
-        }),
         resolveProvider: (id) => host.resolveInferenceProvider(id),
         cacheKey: sessionId,
         sessionId,

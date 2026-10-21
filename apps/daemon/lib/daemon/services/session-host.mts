@@ -72,10 +72,6 @@ export interface DaemonSessionHostOptions {
   stateRoot: string
   gateway(): Promise<WrenyardGatewayConnection>
   routeStatus?: SessionHost['routeStatus']
-  /** Attempt-level route feedback forwarded to the same gateway health store. */
-  beginRouteAttempt?: SessionHost['beginRouteAttempt']
-  reportRouteFault?: SessionHost['reportRouteFault']
-  completeRouteAttempt?: SessionHost['completeRouteAttempt']
   selectAuxiliary: SessionHost['selectAuxiliary']
   /** Current routing.exclude check for an open route wait. */
   isRouteExcluded?: SessionHost['isRouteExcluded']
@@ -232,9 +228,6 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     selectAuxiliary: (role, input) => options.selectAuxiliary(role, input),
     ...(options.isRouteExcluded === undefined ? {} : { isRouteExcluded: (model: string) => options.isRouteExcluded!(model) }),
     routeStatus: options.routeStatus,
-    beginRouteAttempt: options.beginRouteAttempt,
-    reportRouteFault: options.reportRouteFault,
-    completeRouteAttempt: options.completeRouteAttempt,
     recordAuxiliaryRun: (input) => auxiliaryRunStoreOf().insert(toAuxiliaryRunRecord(input)),
     /**
      * Read-only rank-1 preview of every auxiliary role. Reuses the injected

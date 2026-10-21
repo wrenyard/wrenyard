@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { bareModelId, type Catalog, type GatewayProtocol, type PublicGatewayModel } from '@wrenyard/providers/catalog';
 import type { ProviderRuntime } from '@wrenyard/providers';
-import { RouteStateStore, type Admission, type ClientFaultKind, type MarkableFailure, type RouteGuard, type RouteStateChangedEvent, type RouteStatus } from './route-state.ts';
+import { RouteStateStore, type Admission, type MarkableFailure, type RouteGuard, type RouteStateChangedEvent, type RouteStatus } from './route-state.ts';
 import { chatProtocol } from './protocols/chat.ts';
 import { responsesProtocol } from './protocols/responses.ts';
 import { messagesProtocol } from './protocols/messages.ts';
@@ -19,7 +19,7 @@ import {
   type GatewayHealthWindowFigures,
 } from './health.ts';
 
-export type { RouteStateChangedEvent, RouteStatus, CircuitPhase, ClientFaultKind, MarkableFailure, Admission, RouteGuard } from './route-state.ts';
+export type { RouteStateChangedEvent, RouteStatus, CircuitPhase, MarkableFailure, Admission, RouteGuard } from './route-state.ts';
 export type { RouteFaultKind } from './route-failure.ts';
 export { classifyRouteFailure } from './route-failure.ts';
 export type { GatewayRequestCompletedEvent } from './pipeline.ts';
@@ -74,20 +74,6 @@ export interface ModelGateway {
   connection(origin: string): Promise<GatewayConnection>;
   /** Current in-memory state of a public `provider/model` route, with circuit detail. */
   routeStatus(publicModel: string): RouteStatus | undefined;
-  /**
-   * Begin a client attempt, capturing the fault generations it observes. The
-   * attempt identity is shared with the Gateway through `x-wrenyard-gateway-attempt`.
-   */
-  beginRouteAttempt(publicModel: string, attemptId: string): void;
-  /**
-   * Report a client-observed transport fault (a fetch failure the Gateway only
-   * saw as a disconnect) into the same route state store. A fault is recorded
-   * only while the attempt is unsettled, so a client report and a server-side
-   * fault of the same attempt are never double counted.
-   */
-  reportRouteFault(publicModel: string, attemptId: string, kind: ClientFaultKind): void;
-  /** Finish a client attempt; its settled tombstone expires after a bounded TTL. */
-  completeRouteAttempt(publicModel: string, attemptId: string): void;
   /**
    * Admit one native task attempt for an exact `provider/model` route before it
    * launches. The identity is the route's provider plus its model key (the
@@ -236,21 +222,6 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
     return split === undefined ? undefined : routeStates.status(split.provider, split.model);
   };
 
-  const beginRouteAttempt = (publicModel: string, attemptId: string): void => {
-    const split = gatewayRouteKey(options.catalog, publicModel);
-    if (split !== undefined) routeStates.beginAttempt(split.provider, split.model, attemptId);
-  };
-
-  const reportRouteFault = (publicModel: string, attemptId: string, kind: ClientFaultKind): void => {
-    const split = gatewayRouteKey(options.catalog, publicModel);
-    if (split !== undefined) routeStates.reportAttemptFault(split.provider, split.model, attemptId, kind, 502);
-  };
-
-  const completeRouteAttempt = (publicModel: string, attemptId: string): void => {
-    const split = gatewayRouteKey(options.catalog, publicModel);
-    if (split !== undefined) routeStates.completeAttempt(split.provider, split.model, attemptId);
-  };
-
   // ── Native task route-state ──
   // The task path admits exactly one attempt per collected run, so it hands the
   // admission handle back to be settled here instead of re-deriving a route.
@@ -344,9 +315,6 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
 
   return {
     routeStatus,
-    beginRouteAttempt,
-    reportRouteFault,
-    completeRouteAttempt,
     admitRoute,
     completeRouteSuccess,
     reportNativeRouteFault,

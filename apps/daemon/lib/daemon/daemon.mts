@@ -1362,9 +1362,6 @@ async function createForemanDaemonResources(
       taskSettingsConfigPath: taskSettingsService.authoritativeConfigPath,
       router: rpcRouter,
       routeStatus: model => gateway.routeStatus(model),
-      beginRouteAttempt: (publicModel, attemptId) => gateway.beginRouteAttempt(publicModel, attemptId),
-      reportRouteFault: (publicModel, attemptId, kind: 'transport') => gateway.reportRouteFault(publicModel, attemptId, kind),
-      completeRouteAttempt: (publicModel, attemptId) => gateway.completeRouteAttempt(publicModel, attemptId),
       selectAuxiliary: (role, input) => {
         resetAuxiliaryRouteHealth()
         return selectRoutesByRequirement(

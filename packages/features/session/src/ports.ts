@@ -60,21 +60,6 @@ export interface SessionHost {
    * a caller skip an open route instead of only a legacy block.
    */
   routeStatus?(model: string): import('@wrenyard/providers/base').GatewayRouteStatus | undefined;
-  /**
-   * Announce the start of one auxiliary attempt so a later client-observed
-   * timeout or transport failure is attributed to the same attempt the Gateway
-   * already knows about. Optional: a host without attempt-level feedback keeps
-   * the prior behaviour.
-   */
-  beginRouteAttempt?(publicModel: string, attemptId: string): void;
-  /**
-   * Report a client-observed route fault (a timeout or a real transport failure)
-   * for one attempt into the same route-health authority. A user cancellation is
-   * never reported as a route fault.
-   */
-  reportRouteFault?(publicModel: string, attemptId: string, kind: 'timeout' | 'transport'): void;
-  /** Release one attempt's bookkeeping once it has settled, success or failure. */
-  completeRouteAttempt?(publicModel: string, attemptId: string): void;
   selectAuxiliary(
     role: import('./model/roles.ts').AuxiliaryCallRole,
     input?: { toolChoice?: ToolChoice },

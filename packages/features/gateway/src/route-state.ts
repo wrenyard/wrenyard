@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { GatewayRouteState, GatewayRouteStatus, UpstreamRouteFailure } from '@wrenyard/providers/base';
-import { resetInstant, transportFailure, type RouteFaultKind } from './route-failure.ts';
+import { resetInstant, type RouteFaultKind } from './route-failure.ts';
 
 type Scope = 'provider' | 'pool' | 'route';
 
@@ -65,36 +65,6 @@ interface Block extends GatewayRouteStatus {
 /** A failure the store may record: the legacy shape plus an optional fault kind. */
 export type MarkableFailure = UpstreamRouteFailure & { faultKind?: RouteFaultKind };
 
-/** The client-observed fault kind the attempt-correlated feedback API accepts. */
-export type ClientFaultKind = 'transport';
-
-/** One in-flight attempt, correlated by the client so a duplicate report is dropped. */
-interface Attempt {
-  readonly generations: Map<string, number>;
-  settled: boolean;
-  expiresAt: number;
-}
-
-/** Base cooldown of a fresh fault; the delay doubles per consecutive failure. */
-const ROUTE_COOLDOWN_BASE_MS = 60_000;
-/** Hard cap of the exponential cooldown: one hour. */
-const MAX_ROUTE_COOLDOWN_MS = 60 * 60_000;
-/** Jitter added to a computed cooldown, as a fraction of the delay. */
-const ROUTE_COOLDOWN_JITTER = 0.25;
-/** Idle attempts are expired so attempt bookkeeping stays bounded over a long run. */
-const ATTEMPT_TTL_MS = 10 * 60_000;
-const MAX_ATTEMPTS = 4_096;
-/** Inactive generation tombstones retained beyond the keys that hold a block. */
-const MAX_GENERATION_TOMBSTONES = 4_096;
-const MAX_TIMER_MS = 2_147_483_647;
-
-const fingerprint = (value: string): string => createHash('sha256').update(value).digest('hex');
-
-/** The fault a client-observed transport failure maps to: the exact route that observed it. */
-function clientFailure(_kind: ClientFaultKind): MarkableFailure {
-  return transportFailure();
-}
-
 /** The HTTP status a native fault is reported with, matching its classification. */
 function nativeFailureStatus(failure: MarkableFailure): number {
   switch (failure.faultKind ?? failure.state) {
@@ -103,10 +73,21 @@ function nativeFailureStatus(failure: MarkableFailure): number {
     case 'auth_failed': return 401;
     case 'access_denied': return 403;
     case 'model_unavailable': return 404;
-    case 'timeout': return 504;
     default: return 502;
   }
 }
+
+/** Base cooldown of a fresh fault; the delay doubles per consecutive failure. */
+const ROUTE_COOLDOWN_BASE_MS = 60_000;
+/** Hard cap of the exponential cooldown: one hour. */
+const MAX_ROUTE_COOLDOWN_MS = 60 * 60_000;
+/** Jitter added to a computed cooldown, as a fraction of the delay. */
+const ROUTE_COOLDOWN_JITTER = 0.25;
+/** Inactive generation tombstones retained beyond the keys that hold a block. */
+const MAX_GENERATION_TOMBSTONES = 4_096;
+const MAX_TIMER_MS = 2_147_483_647;
+
+const fingerprint = (value: string): string => createHash('sha256').update(value).digest('hex');
 
 /**
  * In-memory route health of one Gateway process, and the single authority for
@@ -119,6 +100,10 @@ function nativeFailureStatus(failure: MarkableFailure): number {
  * scope with an upstream reset is cleared when the reset passes. There is no
  * half-open phase and no probe lease: requests admitted together that fail
  * together count once, through the generation fence.
+ *
+ * Only an upstream answer whose meaning is explicit (quota exhausted or a rate
+ * limit with a stated reset, quota exhausted without one, 401, 403, 404) may
+ * open a scope. Every other outcome is reported in request statistics only.
  */
 export class RouteStateStore {
   private readonly blocks = new Map<string, Block>();
@@ -134,8 +119,6 @@ export class RouteStateStore {
    * accepted so the map stays bounded.
    */
   private retiredFloor = 0;
-  /** In-flight attempts by `provider/model#attemptId`, bounded by count and TTL. */
-  private readonly attempts = new Map<string, Attempt>();
 
   constructor(
     private readonly now: () => number,
@@ -170,24 +153,6 @@ export class RouteStateStore {
   }
 
   /**
-   * Record a client-observed transport fault (a fetch failure the Gateway only
-   * saw as a disconnect) into the same store, correlated to the attempt that
-   * observed it. A fault is only recorded while the attempt is unsettled, so a
-   * client report and a server-side fault of the same attempt are never double
-   * counted.
-   */
-  reportAttemptFault(provider: string, model: string, attemptId: string, kind: ClientFaultKind, status: number, until?: string): RouteStatus | undefined {
-    this.pruneAttempts();
-    const attempt = this.attempts.get(this.attemptKey(provider, model, attemptId));
-    if (attempt?.settled === true) return undefined;
-    const failure: MarkableFailure = { ...clientFailure(kind), ...(until === undefined ? {} : { until }) };
-    const guard: RouteGuard | undefined = attempt === undefined ? undefined : { generations: attempt.generations };
-    const result = this.mark(provider, model, failure, status, '', guard);
-    if (attempt !== undefined) attempt.settled = true;
-    return result;
-  }
-
-  /**
    * Record a route-local fault a native task attempt already classified for its
    * own route. The failure carries its own fault kind, scope and any
    * upstream-stated reset instant, so it is the same as a gateway-observed
@@ -195,56 +160,6 @@ export class RouteStateStore {
    */
   reportNativeRouteFault(provider: string, model: string, failure: MarkableFailure, guard?: RouteGuard): RouteStatus | undefined {
     return this.mark(provider, model, failure, nativeFailureStatus(failure), '', guard);
-  }
-
-  /** Begin one attempt, capturing the fault generations it observes. */
-  beginAttempt(provider: string, model: string, attemptId: string): void {
-    this.pruneAttempts();
-    const key = this.attemptKey(provider, model, attemptId);
-    this.attempts.delete(key);
-    this.attempts.set(key, { generations: new Map(this.capture(provider, model).generations), settled: false, expiresAt: this.now() + ATTEMPT_TTL_MS });
-    this.boundAttempts();
-  }
-
-  /**
-   * Finish one attempt. The settled tombstone is kept for a bounded TTL so a
-   * late client report of the same attempt is ignored, and is evicted after.
-   */
-  completeAttempt(provider: string, model: string, attemptId: string, settled = true): void {
-    this.pruneAttempts();
-    const attempt = this.attempts.get(this.attemptKey(provider, model, attemptId));
-    if (attempt !== undefined) attempt.settled = settled;
-  }
-
-  /**
-   * Record an upstream fault attributed to an attempt, through the same
-   * classification path as a passive fault. A settled attempt is ignored in
-   * either order, so a client report and the server-side fault of the same
-   * attempt are never double counted. An ignored settlement returns nothing.
-   */
-  markAttemptFault(provider: string, model: string, attemptId: string, failure: MarkableFailure, status: number, credential: string, guard?: RouteGuard): RouteStatus | undefined {
-    this.pruneAttempts();
-    if (this.attempts.get(this.attemptKey(provider, model, attemptId))?.settled === true) return undefined;
-    const result = this.mark(provider, model, failure, status, credential, guard);
-    this.completeAttempt(provider, model, attemptId);
-    return result;
-  }
-
-  private attemptKey(provider: string, model: string, attemptId: string): string {
-    return `${provider}/${model}#${attemptId}`;
-  }
-
-  private pruneAttempts(): void {
-    const now = this.now();
-    for (const [key, attempt] of this.attempts) if (attempt.expiresAt <= now) this.attempts.delete(key);
-  }
-
-  private boundAttempts(): void {
-    while (this.attempts.size > MAX_ATTEMPTS) {
-      const oldest = this.attempts.keys().next().value;
-      if (oldest === undefined) return;
-      this.attempts.delete(oldest);
-    }
   }
 
   /** Advance the store-wide sequence and record the key's new generation. */
@@ -350,7 +265,6 @@ export class RouteStateStore {
     for (const block of this.blocks.values()) clearTimeout(block.timer);
     this.blocks.clear();
     this.generations.clear();
-    this.attempts.clear();
   }
 
   /**

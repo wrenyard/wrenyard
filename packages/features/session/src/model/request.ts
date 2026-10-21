@@ -182,20 +182,6 @@ export interface CallRunnerOptions {
   transport: ModelTransport;
   /** Current Gateway state of a route; a provider or pool failure can block sibling routes. */
   routeStatus?: (model: string) => RouteHealth | undefined;
-  /**
-   * Announce the start of one auxiliary attempt, so a later client-observed
-   * transport failure is attributed to the same attempt the Gateway already saw.
-   * Optional: absent, no attempt-level feedback is sent.
-   */
-  beginRouteAttempt?: (publicModel: string, attemptId: string) => void;
-  /**
-   * Report a client-observed transport failure for one attempt into the same
-   * route-health authority. Never called for a user cancellation or an HTTP
-   * error the Gateway already recorded.
-   */
-  reportRouteFault?: (publicModel: string, attemptId: string, kind: 'transport') => void;
-  /** Release one attempt's bookkeeping once it has settled. */
-  completeRouteAttempt?: (publicModel: string, attemptId: string) => void;
   /** Session id, sent to the Gateway for request attribution. */
   sessionId?: string;
   /**
@@ -797,7 +783,6 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? maxTokens;
         const effort = actualReasoningEffort!;
         const attemptId = randomUUID();
-        options.beginRouteAttempt?.(route.model, attemptId);
         try {
           const request: ModelRequest = {
             model: route.model,
@@ -822,15 +807,10 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           const cancelled = abortKind === 'signal';
           const attemptUntil = retryInstantOf(route.model);
           collectAttempts(metricsOf(error), attemptUntil);
-          if (!cancelled && fact.kind === 'network') {
-            options.reportRouteFault?.(route.model, attemptId, 'transport');
-          }
           if (cancelled || outputStarted) throw error;
           if (fact.kind === 'invalid_request' || fact.kind === 'context_overflow' || fact.kind === 'protocol' || fact.kind === 'aborted') throw error;
           const message = withOverflowPrefix(error);
           return await fail(message, auxiliaryFailure(message, attemptUntil, fact.kind));
-        } finally {
-          options.completeRouteAttempt?.(route.model, attemptId);
         }
       };
 
