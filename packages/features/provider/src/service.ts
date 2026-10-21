@@ -53,6 +53,13 @@ export interface ProviderServiceOptions {
   quota?: QuotaService
   /** Operation timeout for a quota request in ms. Defaults to 30 000. */
   quotaTimeoutMs?: number
+  /**
+   * Daemon-owned reader of each WorkBuddy provider's current login type, keyed
+   * by provider id (absent until a login was read). The quota cache is keyed by
+   * it alongside the CodeBuddy context, so switching the WorkBuddy login type
+   * can never serve the previous type's cached quota.
+   */
+  workBuddyAccountKinds?: () => Readonly<Record<string, string>>
 }
 
 /**
@@ -71,6 +78,7 @@ export class ProviderService {
   private readonly localSpeed: ProviderLocalSpeedReader
   private readonly quota: QuotaService
   private readonly quotaTimeoutMs: number
+  private readonly workBuddyAccountKinds: (() => Readonly<Record<string, string>>) | undefined
   private quotaCache?: { key: string; result: ProviderQuotaResult }
   private pending?: { key: string; refresh: boolean; promise: Promise<ProviderQuotaResult> }
   private generation = 0
@@ -84,6 +92,7 @@ export class ProviderService {
     this.localSpeed = options.localSpeed
     this.quota = options.quota ?? new QuotaService()
     this.quotaTimeoutMs = options.quotaTimeoutMs ?? PROVIDER_QUOTA_TIMEOUT_MS
+    this.workBuddyAccountKinds = options.workBuddyAccountKinds
   }
 
   /**
@@ -177,7 +186,10 @@ export class ProviderService {
   async quotaSnapshot(params: ProviderQuotaParams = {}): Promise<ProviderQuotaResult> {
     if (params.forceRefresh === true) this.invalidateList()
     const context = await currentCodeBuddyContext()
-    const key = JSON.stringify([context?.expectedScope, context?.expectedEnvironment])
+    // The WorkBuddy login type joins the key: its quota source and validation
+    // path are chosen by that type, so a cached result of the previous type is
+    // never served after an account switch.
+    const key = JSON.stringify([context?.expectedScope, context?.expectedEnvironment, this.workBuddyAccountKinds?.() ?? {}])
     const refresh = params.forceRefresh === true
     if (this.pending?.key === key && (!refresh || this.pending.refresh)) return this.pending.promise
     if (!refresh && this.quotaCache?.key === key
@@ -266,6 +278,8 @@ export function toQuotaSnapshot(row: ProviderQuotaSnapshot): ProviderQuotaSnapsh
       })),
     }),
     ...(row.not_applicable_windows === undefined ? {} : { not_applicable_windows: [...row.not_applicable_windows] }),
+    ...(row.accountType === undefined ? {} : { accountType: row.accountType }),
+    ...(row.idp === undefined ? {} : { idp: row.idp }),
   }
 }
 

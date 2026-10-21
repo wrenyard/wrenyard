@@ -109,6 +109,12 @@ export interface ProviderQuotaSnapshot {
    * that observed traffic; never fabricated.
    */
   estimatedSpend?: readonly ProviderEstimatedSpend[]
+  /** Verified login type the provider reported for this observation; absent
+   * when it reports none. Carried verbatim, never derived from quota numbers. */
+  accountType?: string
+  /** Verified identity provider of that login (e.g. `ioa_auth`); absent when
+   * the provider reports none. */
+  idp?: string
 }
 
 /** Estimated spend inside one named quota window. */
@@ -145,10 +151,27 @@ export interface ProviderQuotaResult {
 /** Params of `provider.signIn`. */
 export interface ProviderSignInParams {
   provider: 'workbuddy' | 'workbuddy-ai'
+  /** Explicit account switch: discard the stored WorkBuddy login and its
+   * derived caches before starting a new browser login. Absent (or false)
+   * keeps the existing behaviour of reporting an existing login as signed in. */
+  switchAccount?: boolean
+  /** Login source an explicit switch binds: re-authenticate in the browser
+   * (default) or re-import the desktop native client's own login. */
+  source?: 'browser' | 'desktop'
+}
+
+/** Sanitized identity of the bound WorkBuddy account. Only the classified
+ * login kind and, when the login reports one, its domain — never a token,
+ * uid or enterprise id. */
+export interface ProviderSignInAccount {
+  kind: 'ioa' | 'personal' | 'enterprise' | 'unknown'
+  domain?: string
 }
 
 /** Result of `provider.signIn`. */
 export interface ProviderSignInResult {
   authUrl: string
   alreadySignedIn: boolean
+  /** Sanitized identity of the account bound by this sign-in. */
+  account?: ProviderSignInAccount
 }

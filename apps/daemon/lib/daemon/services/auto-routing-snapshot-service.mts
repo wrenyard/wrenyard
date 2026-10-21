@@ -89,6 +89,8 @@ import type {
 } from '@wrenyard/auto-routing';
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
 import { codeBuddyPoolsForModel } from '@wrenyard/providers/codebuddy';
+import { WORKBUDDY_PROVIDER_IDS, workBuddyPoolsForModel } from '@wrenyard/providers/workbuddy';
+import type { WorkBuddyAccountKind } from '@wrenyard/providers/workbuddy';
 import type { ProviderQuotaBinding, ProviderQuotaPool } from '@wrenyard/providers';
 import { QUOTA_EVIDENCE_GRACE_MS } from '@wrenyard/auto-routing';
 /** Evidence freshness window for a direct raw observation (ms). */
@@ -129,10 +131,17 @@ export interface CodeBuddyActiveSnapshotView {
     | undefined;
 }
 
-/** Deterministic private cache key for one CodeBuddy query context. */
-function codeBuddyContextKey(context: CodeBuddyQueryContext | undefined): string {
-  if (context === undefined) return NO_CODEBUDDY_CONTEXT_KEY;
-  return `${context.expectedScope}\u0000${context.expectedEnvironment}`;
+/**
+ * Deterministic private cache key for one query context: the CodeBuddy
+ * scope/environment plus every observed WorkBuddy login type, so evidence of a
+ * previous login type is never served after an account switch.
+ */
+function codeBuddyContextKey(
+  context: CodeBuddyQueryContext | undefined,
+  workBuddyKinds: Readonly<Record<string, string>> = {},
+): string {
+  if (context === undefined && Object.keys(workBuddyKinds).length === 0) return NO_CODEBUDDY_CONTEXT_KEY;
+  return `${context?.expectedScope}\u0000${context?.expectedEnvironment}\u0000${JSON.stringify(workBuddyKinds)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +177,13 @@ export interface AutoRoutingQuotaSnapshotServiceOptions {
   codeBuddySnapshot?: () => Promise<CodeBuddyActiveSnapshotView | undefined>;
   /** Live gateway pool exhaustion observations keyed `${providerId}|${quotaPoolId}`. */
   observedPoolExhaustion?: () => ReadonlyMap<string, number>;
+  /**
+   * Daemon-owned reader of each WorkBuddy provider's current login type, keyed
+   * by provider id. WorkBuddy entries are rebound to the pool set of that
+   * login type (iOA draws the usage-unknown credits pool), and the cache key
+   * carries it so evidence of the previous login type is never reused.
+   */
+  workBuddyAccountKinds?: () => Readonly<Record<string, string>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -569,14 +585,27 @@ function codebuddyExhaustionReset(row: RawRow): number | null {
  * codeBuddyPoolsForModel so iOA's pay-as-you-go monthly pool (usageUnknown)
  * reaches the constraints; HY family and non-CodeBuddy providers keep the
  * static declarations. An absent environment falls back to the static table.
+ *
+ * WorkBuddy entries are rebound the same way by the live login type through
+ * workBuddyPoolsForModel: an iOA WorkBuddy login draws the usage-unknown
+ * credits pool (pay-as-you-go), every other login type keeps the measured
+ * credits pool. A provider with no observed login type keeps the static table.
  */
-function routingBindings(environment: string | undefined): readonly ProviderQuotaBinding[] {
-  if (environment === undefined) return PROVIDER_QUOTA_BINDINGS;
-  return PROVIDER_QUOTA_BINDINGS.map((binding) => (
-    binding.providerId === 'codebuddy'
-      ? { ...binding, pools: codeBuddyPoolsForModel(binding.modelId, environment) as readonly ProviderQuotaPool[] }
-      : binding
-  ));
+function routingBindings(
+  environment: string | undefined,
+  workBuddyKinds: Readonly<Record<string, string>> = {},
+): readonly ProviderQuotaBinding[] {
+  if (environment === undefined && Object.keys(workBuddyKinds).length === 0) return PROVIDER_QUOTA_BINDINGS;
+  return PROVIDER_QUOTA_BINDINGS.map((binding) => {
+    if (binding.providerId === 'codebuddy' && environment !== undefined) {
+      return { ...binding, pools: codeBuddyPoolsForModel(binding.modelId, environment) as readonly ProviderQuotaPool[] };
+    }
+    const kind = workBuddyKinds[binding.providerId];
+    if (kind !== undefined && WORKBUDDY_PROVIDER_IDS.includes(binding.providerId)) {
+      return { ...binding, pools: workBuddyPoolsForModel(binding.providerId, binding.modelId, kind as WorkBuddyAccountKind) as readonly ProviderQuotaPool[] };
+    }
+    return binding;
+  });
 }
 
 function buildUnknownSnapshot(
@@ -584,8 +613,9 @@ function buildUnknownSnapshot(
   rows: readonly RawRow[] = [],
   lastUsableRows: ReadonlyMap<string, RawRow> = new Map(),
   environment?: string,
+  workBuddyKinds: Readonly<Record<string, string>> = {},
 ): AutoRoutingQuotaSnapshot {
-  const entries: AutoRoutingQuotaSnapshotEntry[] = routingBindings(environment).map((binding) => {
+  const entries: AutoRoutingQuotaSnapshotEntry[] = routingBindings(environment, workBuddyKinds).map((binding) => {
     // Preserve the explicit presence of a provider-declared not-applicable
     // window even when the row itself is stale/non-ok: present-but-unusable
     // stays an explicit null constraint rather than disappearing into a
@@ -627,12 +657,13 @@ function buildSnapshot(
   lastUsableRows: Map<string, RawRow>,
   observedPoolExhaustion: ReadonlyMap<string, number> | undefined,
   environment?: string,
+  workBuddyKinds: Readonly<Record<string, string>> = {},
 ): AutoRoutingQuotaSnapshot | null {
   const entries: AutoRoutingQuotaSnapshotEntry[] = [];
   const boundaries: number[] = [];
   let hasFreshBindingEvidence = false;
 
-  for (const binding of routingBindings(environment)) {
+  for (const binding of routingBindings(environment, workBuddyKinds)) {
     // Row lookup is by row.provider === binding.providerId (the owner
     // provider). Normalized pool ids are retained in output only.
     const row = findRow(rows, binding.providerId);
@@ -734,12 +765,14 @@ export class AutoRoutingQuotaSnapshotService {
    */
   private readonly lastUsableRows = new Map<string, RawRow>();
   private readonly observedPoolExhaustion: (() => ReadonlyMap<string, number>) | undefined;
+  private readonly workBuddyAccountKinds: (() => Readonly<Record<string, string>>) | undefined;
 
   constructor(options: AutoRoutingQuotaSnapshotServiceOptions = {}) {
     this.queryJson = options.queryJson ?? queryQuotaJson;
     this.now = options.now ?? (() => Date.now());
     this.codeBuddySnapshot = options.codeBuddySnapshot;
     this.observedPoolExhaustion = options.observedPoolExhaustion;
+    this.workBuddyAccountKinds = options.workBuddyAccountKinds;
   }
 
   /**
@@ -774,7 +807,8 @@ export class AutoRoutingQuotaSnapshotService {
       ? undefined
       : await this.resolveCodeBuddySnapshot();
     const context = this.codeBuddyContext(codeBuddySnapshot);
-    const key = codeBuddyContextKey(context);
+    const workBuddyKinds = this.workBuddyAccountKinds?.() ?? {};
+    const key = codeBuddyContextKey(context, workBuddyKinds);
     const nowMs = this.now();
     const cached = this.cachedByContext.get(key);
     if (cached !== undefined && cached.validUntilMs > nowMs) {
@@ -786,7 +820,7 @@ export class AutoRoutingQuotaSnapshotService {
       return Object.freeze({ snapshot: await pending, codeBuddySnapshot });
     }
 
-    const started = this.refresh(context, codeBuddySnapshot?.environment).finally(() => {
+    const started = this.refresh(context, codeBuddySnapshot?.environment, workBuddyKinds).finally(() => {
       this.inFlightByContext.delete(key);
     });
     this.inFlightByContext.set(key, started);
@@ -820,12 +854,13 @@ export class AutoRoutingQuotaSnapshotService {
   private async refresh(
     context: CodeBuddyQueryContext | undefined,
     environment?: string,
+    workBuddyKinds: Readonly<Record<string, string>> = {},
   ): Promise<AutoRoutingQuotaSnapshot> {
     let text: string;
     try {
       text = await this.queryJson(context);
     } catch {
-      return this.failClosed(context, [], environment);
+      return this.failClosed(context, [], environment, workBuddyKinds);
     }
     // Evaluate provider observations against the time at which the asynchronous
     // sample completed. Wrenyard stamps each provider row as that provider
@@ -844,12 +879,13 @@ export class AutoRoutingQuotaSnapshotService {
         this.lastUsableRows,
         this.observedPoolExhaustion?.(),
         environment,
+        workBuddyKinds,
       );
-      if (snapshot === null) return this.failClosed(context, rows, environment);
-      this.cachedByContext.set(codeBuddyContextKey(context), snapshot);
+      if (snapshot === null) return this.failClosed(context, rows, environment, workBuddyKinds);
+      this.cachedByContext.set(codeBuddyContextKey(context, workBuddyKinds), snapshot);
       return snapshot;
     } catch {
-      return this.failClosed(context, [], environment);
+      return this.failClosed(context, [], environment, workBuddyKinds);
     }
   }
 
@@ -857,12 +893,13 @@ export class AutoRoutingQuotaSnapshotService {
     context: CodeBuddyQueryContext | undefined,
     rows: readonly RawRow[] = [],
     environment?: string,
+    workBuddyKinds: Readonly<Record<string, string>> = {},
   ): AutoRoutingQuotaSnapshot {
     // Never serve expired old evidence after a failed or empty refresh for the
     // current context; drop only that context's cache and hand back a
     // short-lived unknown snapshot. Other contexts (e.g. a previous login) can
     // never be served because they are keyed separately.
-    this.cachedByContext.delete(codeBuddyContextKey(context));
-    return buildUnknownSnapshot(this.now(), rows, this.lastUsableRows, environment);
+    this.cachedByContext.delete(codeBuddyContextKey(context, workBuddyKinds));
+    return buildUnknownSnapshot(this.now(), rows, this.lastUsableRows, environment, workBuddyKinds);
   }
 }

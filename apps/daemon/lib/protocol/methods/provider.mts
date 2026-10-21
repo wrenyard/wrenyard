@@ -98,6 +98,8 @@ export const providerQuotaParamsSchema = {
 export const providerSignInParamsSchema = {
   type: 'object', required: ['provider'], properties: {
     provider: { type: 'string', enum: ['workbuddy', 'workbuddy-ai'] },
+    switchAccount: { type: 'boolean' },
+    source: { type: 'string', enum: ['browser', 'desktop'] },
   }, additionalProperties: false,
 } as const satisfies JsonSchema
 
@@ -105,6 +107,12 @@ export const providerSignInResultSchema = {
   type: 'object', required: ['authUrl', 'alreadySignedIn'], properties: {
     authUrl: { type: 'string', maxLength: 4096 },
     alreadySignedIn: { type: 'boolean' },
+    account: {
+      type: 'object', required: ['kind'], properties: {
+        kind: { type: 'string', enum: ['ioa', 'personal', 'enterprise', 'unknown'] },
+        domain: { type: 'string', maxLength: 200 },
+      }, additionalProperties: false,
+    },
   }, additionalProperties: false,
 } as const satisfies JsonSchema
 
@@ -145,6 +153,8 @@ export const providerQuotaResultSchema = {
             totalUsd: { type: 'number', minimum: 0 },
           }, additionalProperties: false,
         } },
+        accountType: { type: 'string', maxLength: 200 },
+        idp: { type: 'string', maxLength: 200 },
       }, additionalProperties: false,
     } },
     fetchedAt: { type: 'number' },

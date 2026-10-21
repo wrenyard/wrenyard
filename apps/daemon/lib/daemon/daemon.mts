@@ -93,10 +93,14 @@ import {
 } from '@wrenyard/gateway'
 import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin, createOpenCodeZen, createWorkBuddyProviders, resolveHistoricalOfferedModelId, type WorkBuddyProvider, type CodeBuddy } from '@wrenyard/providers'
 import {
+  classifyWorkBuddyAccountIdentity,
   defaultProviderContext,
+  deletePersistedAuth,
   pollWorkBuddyBrowserToken,
+  readDesktopAuth,
   resolveWorkBuddySession,
   startWorkBuddyBrowserAuth,
+  writePersistedAuth,
 } from '../../../../packages/providers/src/workbuddy/credentials.ts'
 import { AUTH_POLL_TIMEOUT_MS } from '../../../../packages/providers/src/workbuddy/protocol.ts'
 import { WORKBUDDY_BUILDS, type WorkBuddyBuildId } from '../../../../packages/providers/src/workbuddy/definition.ts'
@@ -829,6 +833,19 @@ async function createForemanDaemonResources(
   const workBuddyProvidersById = new Map<WorkBuddyBuildId, WorkBuddyProvider>(
     workBuddyProviders.map((provider) => [provider.id as WorkBuddyBuildId, provider]),
   )
+  // One private current-WorkBuddy-login-type reader bound to the two WorkBuddy
+  // providers. Quota routing and every quota cache are keyed by it: an iOA
+  // login draws the usage-unknown credits pool, a personal login the measured
+  // credits pool, and a switch between them can never reuse the previous
+  // login type's quota evidence.
+  const readWorkBuddyAccountKinds = (): Readonly<Record<string, string>> => {
+    const kinds: Record<string, string> = {}
+    for (const provider of workBuddyProviders) {
+      const kind = provider.accountIdentity()?.kind
+      if (kind !== undefined) kinds[provider.id] = kind
+    }
+    return kinds
+  }
   // One private current-CodeBuddy-active-snapshot loader bound to the catalog
   // codebuddy provider definition and the existing provider runtime. Every
   // snapshot() request and every exact-codebuddy readiness probe resolves the
@@ -873,6 +890,7 @@ async function createForemanDaemonResources(
   const autoRoutingQuotaSnapshots = new AutoRoutingQuotaSnapshotService({
     codeBuddySnapshot: loadCurrentCodeBuddySnapshot,
     observedPoolExhaustion: observedPoolExhaustionSnapshot,
+    workBuddyAccountKinds: readWorkBuddyAccountKinds,
   })
   // Authoritative, non-inference native auth/model readiness now comes from the
   // clients' own native observations (AgentClient.readReadiness), not a Wrenyard
@@ -1497,6 +1515,7 @@ async function createForemanDaemonResources(
     // task settings, so a switch is visible without rebuilding the service.
     modelStatus: () => workspaceScoped.taskSettingsService.modelStatus(),
     localSpeed: readLocalSpeedSamplesCached,
+    workBuddyAccountKinds: readWorkBuddyAccountKinds,
   })
   providerServiceForInvalidation = providerService
   // Daemon-owned saved-remote-host registry backing remote.host.list/save/rename.
@@ -1842,9 +1861,54 @@ async function createForemanDaemonResources(
       const build = WORKBUDDY_BUILDS.find((entry) => entry.id === providerId)
       if (build === undefined) throw new Error(`Unknown WorkBuddy provider '${providerId}'`)
       const store = { context: defaultProviderContext(), build }
-      const existing = await resolveWorkBuddySession(store, AbortSignal.timeout(15_000))
+      // Sanitized identity of one login: the classified kind plus its domain
+      // when the login reports one. Never a token, uid or enterprise id.
+      const accountSummaryOf = (auth: {
+        readonly domain?: string
+        readonly uid?: string
+        readonly enterpriseId?: string
+        readonly accountType?: string
+        readonly idp?: string
+      }) => {
+        const { kind } = classifyWorkBuddyAccountIdentity(auth)
+        return auth.domain ? { kind, domain: auth.domain } : { kind }
+      }
+      // An explicit account switch discards the stored login and every cache
+      // derived from it before a new login starts, so the new login type's
+      // quota source and validation path are used and no credential, renewal
+      // entry or quota evidence of the previous type survives the switch.
+      if (params.switchAccount === true) {
+        await deletePersistedAuth(store)
+        provider.resetAccount()
+        // An exhaustion fault observed for the previous account must not be
+        // inherited by the newly bound one.
+        for (const key of [...observedPoolExhaustionByPool.keys()]) {
+          if (key.startsWith('workbuddy|')) observedPoolExhaustionByPool.delete(key)
+        }
+        invalidateProviderReadiness()
+        providerService.invalidateList()
+        if (params.source === 'desktop') {
+          // Desktop re-import: the native client's own login becomes the bound
+          // account, so it is re-read and persisted instead of opening a
+          // browser login. A missing or unreadable native login fails cleanly.
+          const desktop = await readDesktopAuth(store)
+          if (desktop.kind !== 'ok') {
+            throw new Error(desktop.kind === 'encrypted'
+              ? 'WorkBuddy desktop login is encrypted and cannot be imported'
+              : 'No WorkBuddy desktop login is available')
+          }
+          await writePersistedAuth(store, desktop.auth)
+          await provider.refreshModels()
+          invalidateProviderReadiness()
+          providerService.invalidateList()
+          return { authUrl: '', alreadySignedIn: true, account: accountSummaryOf(desktop.auth) }
+        }
+      }
+      const existing = params.switchAccount === true
+        ? undefined
+        : await resolveWorkBuddySession(store, AbortSignal.timeout(15_000))
       if (existing !== undefined) {
-        return { authUrl: '', alreadySignedIn: true }
+        return { authUrl: '', alreadySignedIn: true, account: accountSummaryOf(existing) }
       }
       const { state, authUrl } = await startWorkBuddyBrowserAuth(store, AbortSignal.timeout(30_000))
       void (async () => {
