@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from 'cn';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
@@ -15,15 +15,14 @@ export interface UsageCardProps {
 
 export function UsageCard({ id, title, children, actions, footer, defaultOpen = true, className }: UsageCardProps) {
   const key = `wrenyard.usage-card.${id}`;
-  const [open, setOpen] = useState(defaultOpen);
-
-  useEffect(() => {
+  const [open, setOpen] = useState(() => {
     try {
       const stored = window.localStorage.getItem(key);
-      if (stored === 'open') setOpen(true);
-      else if (stored === 'closed') setOpen(false);
+      if (stored === 'open') return true;
+      if (stored === 'closed') return false;
     } catch { /* Storage may be unavailable. */ }
-  }, [key]);
+    return defaultOpen;
+  });
 
   const toggle = () => setOpen((current) => {
     const next = !current;
@@ -35,8 +34,8 @@ export function UsageCard({ id, title, children, actions, footer, defaultOpen = 
     <section className={cn('flex flex-col rounded-xl border bg-card px-4 py-2.5', className)} data-slot="usage-card">
       <div className="flex h-7 items-center gap-2">
         <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-medium" aria-expanded={open} onClick={toggle}>
-          <ChevronDown className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform duration-fast', !open && '-rotate-90')} aria-hidden="true" />
           <span className="truncate">{title}</span>
+          <ChevronDown className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform duration-fast', !open && '-rotate-90')} aria-hidden="true" />
         </button>
         {actions}
       </div>

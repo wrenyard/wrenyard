@@ -127,7 +127,7 @@ export function SessionInspector({ draft, usageHydrating = false }: { draft: boo
     <>
       {overlay ? (
         <div
-          className="absolute inset-0 z-30 bg-black/20"
+          className="absolute inset-0 z-30 bg-(--overlay)"
           onMouseDown={() => closeSessionInspector()}
         />
       ) : null}

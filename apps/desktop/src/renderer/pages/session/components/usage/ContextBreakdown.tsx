@@ -48,8 +48,8 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
 
   const estimateDetail = budget === undefined ? null : (
     <div className="flex flex-col gap-2" data-slot="context-estimate">
-      <div className="flex items-center gap-2 text-xs">
-        <span className="shrink-0">
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 text-sm font-medium">
           预计发送
           {budget.ratio !== undefined && (
             <span
@@ -64,7 +64,7 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
           )}
         </span>
         {estimateFigure !== undefined && (
-          <span className="ml-auto tabular-nums text-muted-foreground">{estimateFigure}</span>
+          <span className="ml-auto text-sm tabular-nums text-muted-foreground">{estimateFigure}</span>
         )}
       </div>
       {budget.exceeded === true && (
