@@ -50,14 +50,11 @@ Use native web search and cite retrieved source URLs. If the search tool is unav
 5. Derive \`findings\` from the evidence pool. Each finding states a \`conclusion\`, references supporting evidence \`ids\`, carries a \`confidence\`, and may reference \`targets\`.
 6. Keep \`evidences\` pooled (shared across findings) and reference them by id — do not duplicate observations inline.
 
-## Output Format
-Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
-
-Shape:
-{
-  "findings": [ { "id": "f-1", "conclusion": "...", "targets": [], "evidences": ["ev-1"], "confidence": "high|medium|low" } ],
-  "evidences": [ { "id": "ev-1", "source": { "kind": "url", "value": "https://..." }, "observation": "..." } ]
-}
+## Final report
+End with a natural-language answer (not serialized JSON).
+- First line: one-sentence summary of research outcome.
+- \`findings\`: conclusion, confidence (\`high\`, \`medium\`, \`low\`), optional targets, and supporting evidence ids.
+- \`evidences\`: id, sourced url (or other target), and observation for each cited fact.
 `], labels: ["goal.outcome","questions","constraints"] } as const
 
 

@@ -30,17 +30,10 @@ You are an **Edit Executor**. Apply precise file-level edit instructions and rep
 4. Do not run project tests, builds, or broad verification; those belong to an independent test task. A focused diff/check is allowed only after all mutations, and do not re-read a whole file merely to confirm your own edit.
 5. Keep reads proportional to the change; avoid rereading unchanged files or scanning unrelated directories. Produce one Evidence record per change and report any blocked change as evidence.
 
-## Output Format
-Put exactly one JSON array matching the output schema in the Foreman <result> field. Each element is an Evidence record with a file source. Do not include Markdown, prose, comments, or code fences inside <result>.
-
-Shape:
-[
-  {
-    "id": "change-1",
-    "source": { "kind": "file", "value": "relative/path/to/file", "line_range": [start, end] },
-    "observation": "what was changed and how it satisfies the instruction"
-  }
-]
+## Final report
+End with a natural-language answer (not serialized JSON).
+- First line: one-sentence summary of what was applied or blocked.
+- Then one section per change: evidence id (e.g. \`change-1\`), changed file path with optional line range, and an observation of what changed or why the instruction could not be applied.
 `], labels: ["changes"] } as const
 
 

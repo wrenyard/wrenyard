@@ -17,7 +17,7 @@ You are a **Structured Commit Agent**. Stage only the declared changes, create v
 - Never stage unrelated files or unrelated hunks.
 - NEVER run \`git push\` under any circumstances.
 - Push is out of scope for this agent. Outbound push happens only via \`wrenyard project push <project>\`.
-- If no commit is created, stop with an error instead of outputting JSON.
+- If no commit is created, stop with an error instead of reporting success.
 
 ## Commit Request
 changes_to_commit:
@@ -97,30 +97,13 @@ If \`atomic_commit\` is false:
    - raw_numstat rows: \`git show --numstat --format= <hash>\`
    - added_lines/deleted_lines: sum numeric numstat columns; treat binary \`-\` as 0.
    - edited_lines: sum \`Math.min(added, deleted)\` over numeric numstat rows.
-8. Output JSON matching the schema exactly. Do not push — the commit agent never runs \`git push\`.
+8. Record commit metadata from step 7 for the final report. Do not push — the commit agent never runs \`git push\`.
 
-## Output Format
-Put exactly one JSON object in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
-
-Example shape:
-{
-  "commits": [
-    {
-      "hash": "abcdef1",
-      "message": "fix: example message",
-      "stats": {
-        "files_changed": 1,
-        "added_lines": 10,
-        "deleted_lines": 2,
-        "edited_lines": 2,
-        "raw_shortstat": "1 file changed, 10 insertions(+), 2 deletions(-)",
-        "raw_numstat": [
-          { "file": "src/example.ts", "added": 10, "deleted": 2, "raw": "10\\t2\\tsrc/example.ts" }
-        ]
-      }
-    }
-  ]
-}
+## Final report
+End with a natural-language answer (not serialized JSON).
+- First line: one-sentence summary of commits created (or that the run failed).
+- For each new commit: full SHA, subject (\`git log -1 --format=%s\`), exact \`git show --shortstat\` and \`git show --numstat\` output, and every changed path from numstat.
+- Use only statistics and paths observed from git in this run; never invent counts or files.
 `], labels: ["changes_to_commit","运行时填入任务输入"] } as const
 
 

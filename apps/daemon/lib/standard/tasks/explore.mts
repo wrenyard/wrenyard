@@ -17,15 +17,11 @@ READ-ONLY. Do not modify files.
 
 ## Question
 `,``,`
-## Output Format
-Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
-
-Shape:
-{
-  "status": "answered|not_found",
-  "answer": "<string>",
-  "locations": [ { "path": "<string>", "line": <number, optional> } ]
-}
+## Final report
+End with a natural-language answer (not serialized JSON).
+- First line: one-sentence summary of whether the fact was found.
+- State outcome using schema statuses only: \`answered\` or \`not_found\`.
+- Give the factual \`answer\` and supporting \`locations\` (file path and line when known).
 `], labels: ['role','question','hints'] } as const
 
 

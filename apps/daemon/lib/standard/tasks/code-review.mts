@@ -69,16 +69,12 @@ Do not report style, pattern, performance, testing, or optional polish items. Re
 3. As you observe facts, record them as pooled \`evidences\` (id, source target, observation) and reference them by id.
 4. Missing, conflicting, or unreviewable inputs are a task execution failure, not a review result.
 
-## Output Format
-Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
-
-Shape:
-{
-  "assessments": [ { "criterion_id": "ac-1", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ],
-  "findings": [ { "id": "f-1", "conclusion": "definite_correctness_bug: ...", "targets": [ { "kind": "file", "value": "src/batch.ts", "line_range": [40, 58] } ], "evidences": ["ev-1"], "confidence": "high" } ],
-  "required_changes": [ { "target": { "kind": "file", "value": "src/batch.ts" }, "action": "update", "instruction": "Change the loop end bound to be inclusive.", "expected": "Final item is processed." } ],
-  "evidences": [ { "id": "ev-1", "source": { "kind": "file", "value": "src/batch.ts" }, "observation": "Loop end bound is exclusive." } ]
-}
+## Final report
+End with a natural-language answer (not serialized JSON).
+- First line: one-sentence summary (approved, or blocking issues present).
+- Per acceptance criterion: \`criterion_id\`, assessment status (\`passed\`, \`failed\`, \`blocked\`, \`not_supported\`), referenced evidence ids, and optional \`reason\`.
+- Blocking \`findings\` with evidence references and matching \`required_changes\` (exact file targets, action, instruction, expected), or explicitly state there are no blockers and findings/required_changes are empty.
+- Pooled \`evidences\`: id, source, and observation for facts cited above.
 `], labels: ["goal.outcome","targets","changes","constraints","acceptance_criteria","evidences"] } as const
 
 

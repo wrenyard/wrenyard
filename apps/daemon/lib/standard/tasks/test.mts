@@ -47,15 +47,13 @@ You are a **Verification Runner**. Verify the requested behavior and report evid
 ## Artifacts (optional)
 You may report screenshots or other generated files as optional artifacts. The runtime prompt provides the absolute artifact directory; place files there and declare each one in the optional \`artifacts\` array. Omit \`artifacts\` when there is nothing to report.
 
-## Output Format
-Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
-
-Shape:
-{
-  "evidences": [ { "id": "ev-1", "source": { "kind": "command", "value": "npm test" }, "observation": "..." } ],
-  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ],
-  "artifacts": [ { "path": "<absolute path>", "kind": "image|file", "role": "<short role>", "description": "<what it shows>" } ]
-}
+## Final report
+End with a natural-language answer (not serialized JSON).
+- First line: one-sentence summary of verification outcome.
+- Pooled \`evidences\`: id, source, and observation; reference ids from each \`assessment\`.
+- Per criterion: \`criterion_id\`, verdict status (\`passed\`, \`failed\`, \`blocked\`, \`not_supported\`), evidence ids, and optional \`reason\`.
+- Optional \`artifacts\` (path, kind, role, description) when files were produced.
+- If work stopped early or checks could not finish, state that limitation plainly in prose (do not invent extra output fields).
 `], labels: ["criteria","运行时填入任务输入"] } as const
 
 export const TASK_PROMPT_TEMPLATE_2 = { label: "浏览器验证", strings: [`
@@ -83,15 +81,12 @@ You are a **Verification Runner** with **browser capabilities**. Use the \`agent
 ## Artifacts (optional)
 You may report screenshots or other generated files as optional artifacts. The runtime prompt provides the absolute artifact directory; place files there and declare each one in the optional \`artifacts\` array. Omit \`artifacts\` when there is nothing to report.
 
-## Output Format
-Put exactly one JSON object matching the output schema in the Foreman <result> field.
-
-Shape:
-{
-  "evidences": [ { "id": "ev-1", "source": { "kind": "screenshot", "value": "dashboard-loaded" }, "observation": "..." } ],
-  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ],
-  "artifacts": [ { "path": "<absolute path>", "kind": "image|file", "role": "<short role>", "description": "<what it shows>" } ]
-}
+## Final report
+End with a natural-language answer (not serialized JSON).
+- First line: one-sentence summary of verification outcome.
+- Pooled \`evidences\` and per-criterion \`assessments\` with status (\`passed\`, \`failed\`, \`blocked\`, \`not_supported\`), evidence ids, and optional \`reason\`.
+- Optional \`artifacts\` when screenshots or other files were saved.
+- If work stopped early or checks could not finish, state that limitation plainly in prose (do not invent extra output fields).
 `], labels: ["criteria"] } as const
 
 export const TASK_PROMPT_TEMPLATE_3 = { label: "桌面验证", strings: [`
@@ -120,15 +115,12 @@ You are a **Verification Runner** with **desktop application capabilities**. Use
 ## Artifacts (optional)
 You may report screenshots or other generated files as optional artifacts. The runtime prompt provides the absolute artifact directory; place files there and declare each one in the optional \`artifacts\` array. Omit \`artifacts\` when there is nothing to report.
 
-## Output Format
-Put exactly one JSON object matching the output schema in the Foreman <result> field.
-
-Shape:
-{
-  "evidences": [ { "id": "ev-1", "source": { "kind": "screenshot", "value": "app-window-loaded" }, "observation": "..." } ],
-  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ],
-  "artifacts": [ { "path": "<absolute path>", "kind": "image|file", "role": "<short role>", "description": "<what it shows>" } ]
-}
+## Final report
+End with a natural-language answer (not serialized JSON).
+- First line: one-sentence summary of verification outcome.
+- Pooled \`evidences\` and per-criterion \`assessments\` with status (\`passed\`, \`failed\`, \`blocked\`, \`not_supported\`), evidence ids, and optional \`reason\`.
+- Optional \`artifacts\` when screenshots or other files were saved.
+- If work stopped early or checks could not finish, state that limitation plainly in prose (do not invent extra output fields).
 `], labels: ["criteria"] } as const
 
 

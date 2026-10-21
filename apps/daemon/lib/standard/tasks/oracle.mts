@@ -63,15 +63,12 @@ You are read-only. You advise; others execute. Do not write, edit, patch, commit
 4. Emit \`decisions\`: one primary recommendation per material decision. Each decision has an \`id\`, a \`choice\` (the bottom-line recommendation, including effort/confidence when useful), an optional \`rationale\` (action plan, trade-offs, risks), and optional \`supersedes\` if replacing an earlier direction.
 5. Emit \`questions\`: any unresolved items that need escalation, missing facts, or follow-up decisions. Each is a \`Question\` with an \`id\`, the \`ask\` text, and a \`blocking\` flag.
 
-## Output Format
-Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
-
-Shape:
-{
-  "findings": [ { "id": "f-1", "conclusion": "...", "targets": [], "evidences": ["ev-1"], "confidence": "high|medium|low" } ],
-  "decisions": [ { "id": "d-1", "choice": "Primary recommendation (effort: Short, confidence: high)", "rationale": "Action plan, trade-offs, risks", "supersedes": [] } ],
-  "questions": [ { "id": "q-1", "ask": "Unresolved item to escalate", "blocking": true } ]
-}
+## Final report
+End with a natural-language answer (not serialized JSON).
+- First line: one-sentence summary of recommendations and open risks.
+- \`findings\`: conclusions with confidence and evidence references from your working notes (do not add a separate top-level output field for evidences).
+- \`decisions\`: id, \`choice\`, optional \`rationale\`, and optional \`supersedes\`.
+- \`questions\`: unresolved items with \`blocking\` true/false for escalation.
 `], labels: ["goal.outcome","questions","运行时填入任务输入","constraints"] } as const
 
 
