@@ -858,7 +858,13 @@ function parseTodoFile(filePath: string, content: string): Todo {
       throw new WorkspaceTodoError('unknown_field', `Todo ${id}: unknown front matter field: ${key}`)
     }
   }
-  const declaredId = requireTodoId(record.id, `Todo ${id}`)
+  const rawId = record.id
+  const declaredId =
+    typeof rawId === 'number' &&
+    (Number.isFinite(rawId) || rawId === Infinity || rawId === -Infinity) &&
+    ID_RE.test(id)
+      ? id
+      : requireTodoId(rawId, `Todo ${id}`)
   if (declaredId !== id) {
     throw new WorkspaceTodoError('bad_id', `Todo ${id}: front matter id "${declaredId}" does not match the file name`)
   }
