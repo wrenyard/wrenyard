@@ -6,6 +6,7 @@
  * reply tool, or through the provider capability-gated plain-text exception.
  */
 
+import { keepNewestWithinBudget } from '@wrenyard/agent-loop';
 import { attachmentRefUrl, type SessionFile } from '@wrenyard/protocol';
 import { stepId, turnId, type LedgerEvent } from '../ledger/store.ts';
 import type { ToolCall, ToolSpec } from '../transport/index.ts';
@@ -15,6 +16,8 @@ import type { BuiltView, CallFailureSummary, SessionCallHost } from '../ports.ts
 import type { SessionRuntime, TurnRuntime } from '../turn/runtime.ts';
 import { maybeClassifyStatus } from './status.ts';
 import { memoryPortOf } from '../memory-write.ts';
+import { computeReplyConversationTokenBudget } from './shared.ts';
+import { estimateTokens } from '../model/request.ts';
 
 /** Output-token allowance for the single communication reply call. */
 const REPLY_MAX_TOKENS = 800;
@@ -214,6 +217,14 @@ export class ReplyWriter {
     const memory = memoryPortOf(this.host.ports, session.sessionId);
     const canSave = request.terminal && request.status === 'completed'
       && turn.asksThisStep.length === 0 && memory !== undefined;
+    const maxTokens = canSave ? FINAL_REPLY_MAX_TOKENS : REPLY_MAX_TOKENS;
+    const conversationTokenBudget = this.host.host === undefined
+      ? undefined
+      : await computeReplyConversationTokenBudget(
+        this.host.host,
+        estimateTokens(REPLY_SYSTEM),
+        maxTokens,
+      );
     const input: ReplyViewInput = {
       events: this.host.ledger.read(session.sessionId),
       turn: request.turn,
@@ -225,12 +236,13 @@ export class ReplyWriter {
       ...(request.failure === undefined ? {} : { failure: request.failure }),
       ...(turn.imageUnsupported ? { imageUnsupported: true } : {}),
       ...(canSave ? { memoryIndex: memory!.index() } : {}),
+      ...(conversationTokenBudget === undefined ? {} : { conversationTokenBudget }),
     };
     const outcome = await this.host.invoke(session, turn, 'reply', buildReply(input), {
       // The reply is a system auxiliary task owned by its step.
       parent: stepId(request.turn, request.step),
       step: request.step,
-      maxTokens: canSave ? FINAL_REPLY_MAX_TOKENS : REPLY_MAX_TOKENS,
+      maxTokens,
       tools: [canSave ? REPLY_TOOL_WITH_MEMORY : REPLY_TOOL],
       ...(request.terminal ? { toolChoice: { name: REPLY_TOOL.name } } : {}),
     });
@@ -599,6 +611,35 @@ export interface ReplyViewInput {
   imageUnsupported?: boolean;
   /** Current memory index, present only when this reply may save memories. */
   memoryIndex?: string;
+  /** Route-derived token budget for wy-conversation when metadata is available. */
+  conversationTokenBudget?: number;
+}
+
+function omittedReplyConversationMarker(droppedCount: number): string {
+  return `(${droppedCount} older conversation events omitted for context limit)`;
+}
+
+function formatReplyConversation(
+  lines: readonly string[],
+  conversationTokenBudget: number | undefined,
+  otherCtxTokenCost: number,
+): string {
+  if (lines.length === 0) return '(none)';
+  if (conversationTokenBudget === undefined) {
+    return `\n${lines.join('\n')}\n`;
+  }
+  const effectiveBudget = conversationTokenBudget - otherCtxTokenCost;
+  if (effectiveBudget <= 0) {
+    return `\n${omittedReplyConversationMarker(lines.length)}\n`;
+  }
+  const { kept, droppedCount } = keepNewestWithinBudget(
+    lines,
+    effectiveBudget,
+    (line) => estimateTokens(line),
+  );
+  const marker = droppedCount > 0 ? `${omittedReplyConversationMarker(droppedCount)}\n` : '';
+  if (kept.length === 0) return `\n${marker}`;
+  return `\n${marker}${kept.join('\n')}\n`;
 }
 
 /** Where one produced file came from, for the attachment metadata line. */
@@ -710,16 +751,10 @@ function buildReply(input: ReplyViewInput): BuiltView {
     return `- ${entry.name}${stage}`;
   });
   const attachments = attachmentLines(input.events);
-
-  const ctx = [
-    '<wy-ctx>',
-    tag('wy-conversation', [], conversation.length === 0 ? '(none)' : `\n${conversation.join('\n')}\n`),
-    tag('wy-attachments', [], attachments.length === 0 ? '(none)' : `\n${attachments.join('\n')}\n`),
-    ...(input.memoryIndex === undefined ? [] : [
-      tag('wy-memory-context', [], `${escapeReplyBody(input.memoryIndex)}\n${memories.join('\n')}`),
-    ]),
-    '</wy-ctx>',
-  ].join('\n');
+  const attachmentsBlock = attachments.length === 0 ? '(none)' : `\n${attachments.join('\n')}\n`;
+  const memoryBlock = input.memoryIndex === undefined
+    ? ''
+    : tag('wy-memory-context', [], `${escapeReplyBody(input.memoryIndex)}\n${memories.join('\n')}`);
   const info = [
     '<wy-info>',
     tag('infos', [], escapeReplyBody(infos.join('\n'))),
@@ -727,6 +762,21 @@ function buildReply(input: ReplyViewInput): BuiltView {
     tag('finished-actions', [], finishedActions.length === 0 ? '(none)' : escapeReplyBody(finishedActions.join('\n'))),
     tag('wy-output', [], escapeReplyBody(worker === undefined ? '(none)' : worker.workerOutput ?? worker.text)),
     '</wy-info>',
+  ].join('\n');
+  const otherUserTokenCost = estimateTokens(
+    tag('wy-attachments', [], attachmentsBlock) + memoryBlock + info,
+  );
+
+  const ctx = [
+    '<wy-ctx>',
+    tag('wy-conversation', [], formatReplyConversation(
+      conversation,
+      input.conversationTokenBudget,
+      otherUserTokenCost,
+    )),
+    tag('wy-attachments', [], attachmentsBlock),
+    ...(input.memoryIndex === undefined ? [] : [memoryBlock]),
+    '</wy-ctx>',
   ].join('\n');
   const user = `${ctx}\n${info}`;
   return {

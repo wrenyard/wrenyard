@@ -19,8 +19,7 @@ import {
   type LoopRecord,
 } from '@wrenyard/agent-loop';
 
-import { escapeBody, renderEventsBlock } from '../context/render.ts';
-import { messageOf } from '../errors.ts';
+import { createAuxiliaryLoopHelpers } from './shared.ts';
 import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';
 
 /** Start one workspace todo session for a parsed action. */
@@ -31,11 +30,7 @@ export async function runTodoAction(
 ): Promise<ActionExecutionOutcome> {
   const record: AuxiliaryRecordPort = {
     ...createLoopRecord(),
-    helpers: {
-      messageOf,
-      escapeBody,
-      renderEventsBlock,
-    },
+    helpers: await createAuxiliaryLoopHelpers(deps.host, 'todo'),
   };
   // Only the todo task records every successful authoritative payload.
   record.observeToolResult = (content) => observe(record, content);

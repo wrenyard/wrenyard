@@ -370,4 +370,10 @@ export interface LoopHelpers {
   escapeBody(text: string): string;
   /** Render the conversation events block of the auxiliary user message. */
   renderEventsBlock(events: readonly LedgerEvent[]): string;
+  /** Optional token estimator for bounded conversation rendering. */
+  estimateTokens?(text: string): number;
+  /** Optional per-event renderer; undefined means omit the event. */
+  renderEvent?(event: LedgerEvent): string | undefined;
+  /** Optional conversation budget before intent and tag reserves. */
+  conversationTokenBudget?: number;
 }

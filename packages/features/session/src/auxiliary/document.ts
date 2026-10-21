@@ -16,9 +16,8 @@
 
 import { runAuxiliary, type AuxiliaryRecordPort, createLoopRecord } from '@wrenyard/agent-loop';
 
-import { escapeBody, renderEventsBlock } from '../context/render.ts';
 import { makeDocumentDraft, type DocContentDraft } from '../documents.ts';
-import { messageOf } from '../errors.ts';
+import { createAuxiliaryLoopHelpers } from './shared.ts';
 import type { LedgerEvent, LedgerEventDraft } from '../ledger/store.ts';
 import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';
 
@@ -47,11 +46,11 @@ export async function runDocumentAction(
 ): Promise<ActionExecutionOutcome> {
   const record: AuxiliaryRecordPort = {
     ...createLoopRecord(),
-    helpers: {
-      messageOf,
-      escapeBody,
-      renderEventsBlock,
-    },
+    helpers: await createAuxiliaryLoopHelpers(
+      deps.host,
+      'document',
+      () => deps.files.readDocumentRules(),
+    ),
   };
   record.captureDocument = documentDraftHook(deps, ctx, record);
   return runAuxiliary('document', action.intent, {

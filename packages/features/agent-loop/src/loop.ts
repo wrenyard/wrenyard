@@ -21,6 +21,7 @@ import type {
   CallRunRequest,
   CallRunResult,
   CallsPort,
+  LedgerEvent,
   LedgerEventDraft,
   LoopHelpers,
   Message as ModelMessage,
@@ -328,13 +329,79 @@ export function errorResult(code: string, message: string): string {
 
 // ─── User message ───────────────────────────────────────────────────────────
 
+/** Token reserve for wy-info, wy-intent and surrounding tags in the auxiliary user message. */
+const AUXILIARY_USER_TAG_INFO_TOKEN_RESERVE = 1024;
+
+function omittedConversationEventsMarker(droppedCount: number): string {
+  return `(${droppedCount} older conversation events omitted for context limit)`;
+}
+
+/**
+ * Keep the contiguous newest suffix of whole items whose summed {@link costOf}
+ * fits within {@link budget}. Preserves item order within the suffix.
+ */
+export function keepNewestWithinBudget<T>(
+  items: readonly T[],
+  budget: number,
+  costOf: (item: T) => number,
+): { kept: readonly T[]; droppedCount: number } {
+  if (items.length === 0 || budget <= 0) {
+    return { kept: [], droppedCount: items.length };
+  }
+  const kept: T[] = [];
+  let total = 0;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const cost = costOf(items[index]!);
+    if (total + cost > budget) break;
+    total += cost;
+    kept.unshift(items[index]!);
+  }
+  return { kept, droppedCount: items.length - kept.length };
+}
+
+function renderAuxiliaryEventsBlock(
+  events: readonly LedgerEvent[],
+  intent: string,
+  helpers: LoopHelpers,
+): string {
+  const { estimateTokens, renderEvent, conversationTokenBudget } = helpers;
+  if (
+    estimateTokens === undefined
+    || renderEvent === undefined
+    || conversationTokenBudget === undefined
+  ) {
+    return helpers.renderEventsBlock(events);
+  }
+  const effectiveBudget = conversationTokenBudget
+    - estimateTokens(intent)
+    - AUXILIARY_USER_TAG_INFO_TOKEN_RESERVE;
+  if (effectiveBudget <= 0) {
+    const dropped = events.length;
+    if (dropped === 0) return '<events>\n</events>';
+    const marker = `${omittedConversationEventsMarker(dropped)}\n`;
+    return `<events>\n${marker}</events>`;
+  }
+  const rendered = events
+    .map((event) => ({ event, text: renderEvent(event) }))
+    .filter((entry): entry is { event: LedgerEvent; text: string } => entry.text !== undefined);
+  const { kept, droppedCount } = keepNewestWithinBudget(
+    rendered,
+    effectiveBudget,
+    (entry) => estimateTokens(entry.text),
+  );
+  const lines = kept.map((entry) => entry.text);
+  const marker = droppedCount > 0 ? `${omittedConversationEventsMarker(droppedCount)}\n` : '';
+  const body = lines.length === 0 && marker === '' ? '' : `\n${marker}${lines.join('\n')}`;
+  return `<events>${body}\n</events>`;
+}
+
 /**
  * Build the one user message of an auxiliary request: the whole conversation
  * under `<wy-ctx><wy-conversation>`, the call's facts (time, device and the
  * registered projects) under `<wy-info>`, and the intent under `<wy-intent>`.
  */
 export function buildAuxiliaryUser(ctx: ActionRunContext, intent: string, helpers: LoopHelpers): string {
-  const conversation = helpers.renderEventsBlock(ctx.currentEvents());
+  const conversation = renderAuxiliaryEventsBlock(ctx.currentEvents(), intent, helpers);
   const projects = ctx.projects.length === 0
     ? '(none)'
     : ctx.projects.map((project) => {

@@ -40,6 +40,7 @@ export {
   errorCodeOf,
   errorResult,
   jsonResult,
+  keepNewestWithinBudget,
   protocolTools,
   recordWorkspaceUpdate,
   runAuxiliaryLoop,

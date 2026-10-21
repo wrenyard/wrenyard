@@ -13,8 +13,7 @@
 
 import { runAuxiliary, type AuxiliaryRecordPort, createLoopRecord } from '@wrenyard/agent-loop';
 
-import { escapeBody, renderEventsBlock } from '../context/render.ts';
-import { messageOf } from '../errors.ts';
+import { createAuxiliaryLoopHelpers } from './shared.ts';
 import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';
 
 /** Start one project session for a parsed action. */
@@ -25,11 +24,7 @@ export async function runProjectAction(
 ): Promise<ActionExecutionOutcome> {
   const record: AuxiliaryRecordPort = {
     ...createLoopRecord(),
-    helpers: {
-      messageOf,
-      escapeBody,
-      renderEventsBlock,
-    },
+    helpers: await createAuxiliaryLoopHelpers(deps.host, 'project'),
   };
   return runAuxiliary('project', action.intent, {
     catalog: deps.host,
