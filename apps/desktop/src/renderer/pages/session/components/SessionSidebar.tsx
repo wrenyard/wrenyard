@@ -12,7 +12,7 @@ import {
   SquarePen,
   Trash2,
 } from 'lucide-react';
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { SessionGroupBy, SessionSortBy, SessionStatusFilter } from '@/shell-contract';
 import {
   SESSION_GROUP_BY_DEFAULT,
@@ -163,6 +163,11 @@ interface SessionRowProps {
 /**
  * One conversation row: the select button (or an inline rename editor) plus the
  * accessible `...` menu offering archive, pin, rename and delete.
+ *
+ * The row action is absolutely positioned over the right 1.5rem of the item, so
+ * the select button keeps that whole strip clear of content whenever the action
+ * is rendered: the title, the running indicator and the action never overlap
+ * visually or in hit area, at any sidebar width and with any title length.
  */
 function SessionRow({
   session,
@@ -178,9 +183,22 @@ function SessionRow({
   indent,
 }: SessionRowProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  /** Set once this edit's save or cancel is under way, so one submit wins. */
   const settled = useRef(false);
+  /** Tracks IME composition so the Enter that commits it never saves. */
+  const composing = useRef(false);
   const archived = session.archived === true;
   const pinned = session.pinned === true;
+
+  // One edit starts clean. The row component is keyed by session id and is
+  // reused for every later rename, so the guard must be cleared when the
+  // editor opens: otherwise the cancel or saved rename of a previous edit
+  // leaves it set and every following rename returns before any request.
+  useEffect(() => {
+    if (!editing) return;
+    settled.current = false;
+    composing.current = false;
+  }, [editing]);
 
   const commit = async (): Promise<void> => {
     if (settled.current) return;
@@ -198,8 +216,10 @@ function SessionRow({
       await onRename(trimmed);
       onCancelRename();
     } catch {
-      // The failure is surfaced by the rename handler; keep editing.
+      // The failure is surfaced by the rename handler; keep the editor open
+      // with the typed value so the same title can be submitted again.
       settled.current = false;
+      inputRef.current?.focus();
     }
   };
 
@@ -214,6 +234,9 @@ function SessionRow({
           className="h-8 w-full min-w-0 rounded-xl bg-sidebar-accent px-2 text-sm text-sidebar-accent-foreground outline-none ring-sidebar-ring focus-visible:ring-2"
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
+              // The Enter that confirms a Chinese IME composition must never
+              // save: it carries a half-composed value.
+              if (event.nativeEvent.isComposing || composing.current) return;
               event.preventDefault();
               void commit();
             } else if (event.key === 'Escape') {
@@ -222,6 +245,8 @@ function SessionRow({
               onCancelRename();
             }
           }}
+          onCompositionStart={() => { composing.current = true; }}
+          onCompositionEnd={() => { composing.current = false; }}
           onBlur={() => {
             void commit();
           }}
@@ -230,12 +255,12 @@ function SessionRow({
         <SidebarMenuButton
           isActive={selected}
           onClick={onSelect}
-          className={`group-has-data-[sidebar=menu-action]/menu-item:pr-3 group-has-data-[sidebar=menu-action]/menu-item:group-hover/menu-item:pr-8 group-has-data-[sidebar=menu-action]/menu-item:group-focus-within/menu-item:pr-8${indent ? ' ml-4 border-l border-sidebar-border pl-2' : ''}`}
+          className={`group-has-data-[sidebar=menu-action]/menu-item:pr-8!${indent ? ' ml-4 border-l border-sidebar-border pl-2' : ''}`}
         >
           <SessionDot status={sessionStatusOf(session, seen)} />
           <span className="min-w-0 flex-1 [text-overflow:clip]! [mask-image:linear-gradient(to_right,#000_calc(100%_-_2rem),transparent)]">{session.title}</span>
           {session.running === true && (
-            <Spinner className="size-3 shrink-0 text-muted-foreground group-has-data-[sidebar=menu-action]/menu-item:group-hover/menu-item:hidden group-has-data-[sidebar=menu-action]/menu-item:group-focus-within/menu-item:hidden" />
+            <Spinner className="size-3 shrink-0 text-muted-foreground" />
           )}
         </SidebarMenuButton>
       )}

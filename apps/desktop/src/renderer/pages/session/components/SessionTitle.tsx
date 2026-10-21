@@ -189,7 +189,13 @@ export function SessionTitle({ title, session, draft, onRename, onRegenerate }: 
           }
         }}
         onCompositionStart={() => { composing.current = true; }}
-        onCompositionEnd={() => { composing.current = false; }}
+        onCompositionEnd={() => {
+          // Chromium dispatches the confirming Enter keydown while the
+          // composition is still open, but engines that dispatch it after
+          // `compositionend` must not save either: clear the flag on the next
+          // task so that keydown is still treated as part of the composition.
+          window.setTimeout(() => { composing.current = false; }, 0);
+        }}
         onBlur={() => { void commit(); }}
       />
       )}
