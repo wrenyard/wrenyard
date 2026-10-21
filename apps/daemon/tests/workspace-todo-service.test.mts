@@ -273,10 +273,16 @@ test('the disposable SQLite index rebuilds from the Markdown files alone', async
     assert.equal((await rebuilt.getTodo(dependent.id)).status, 'in_progress')
     assert.equal((await rebuilt.readIndex()).find((record) => record.id === dependent.id)?.status, 'in_progress')
 
-    // A malformed file fails explicitly instead of leaving a valid index.
+    // A malformed file is skipped so the rest of the store keeps working.
     writeRawTodo(root, 'broken.md', '# A heading without front matter\n')
-    await rejectsWithCode(rebuilt.listTodos(), 'malformed')
-    await rejectsWithCode(rebuilt.rebuildIndex(), 'malformed')
+    const listedAfterBroken = await rebuilt.listTodos()
+    assert.ok(listedAfterBroken.some((todo) => todo.id === dependent.id))
+    const skipped = rebuilt.getLastSkippedTodoFiles()
+    assert.equal(skipped.length, 1)
+    assert.equal(skipped[0]?.file, 'broken.md')
+    assert.match(skipped[0]?.reason ?? '', /front matter/i)
+    await rebuilt.rebuildIndex()
+    assert.equal((await rebuilt.readIndex()).some((record) => record.id === dependent.id), true)
   } finally {
     rmSync(root, { recursive: true, force: true })
     rmSync(indexRoot, { recursive: true, force: true })
