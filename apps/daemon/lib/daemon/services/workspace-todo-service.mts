@@ -132,6 +132,12 @@ interface IndexFileSignature {
   wal: FileSignature | null
 }
 
+/** One file skipped during a scan because it could not be parsed. */
+export interface SkippedTodoFile {
+  file: string
+  reason: string
+}
+
 /** Input for {@link WorkspaceTodoService.createTodo}. */
 export interface TodoCreateInput {
   title: string
@@ -183,6 +189,8 @@ export class WorkspaceTodoService {
    * that snapshot is still a trustworthy diff baseline.
    */
   private indexSignature: IndexFileSignature | null = null
+  /** Files that failed to parse during the most recent scan. */
+  private skippedFiles: SkippedTodoFile[] = []
 
   constructor(workspaceRoot: string, indexDbPath?: string) {
     // Resolve the supplied root once, ensure it exists, then canonicalize to
@@ -196,7 +204,7 @@ export class WorkspaceTodoService {
     this.indexDbPath = indexDbPath === undefined ? undefined : resolve(indexDbPath)
   }
 
-  /** Every todo currently on disk, ordered by id. Malformed files are errors. */
+  /** Every todo currently on disk, ordered by id. Unparseable files are skipped. */
   async listTodos(params: TodoListParams = {}): Promise<Todo[] | TodoCompact[]> {
     const fields = params.fields ?? 'compact'
     const todos = await this.withLock(async () => {
@@ -213,6 +221,11 @@ export class WorkspaceTodoService {
     }
     if (fields === 'full') return filtered.map(cloneTodo)
     return filtered.map(toCompactTodo)
+  }
+
+  /** Files skipped during the most recent directory scan because they could not be parsed. */
+  getLastSkippedTodoFiles(): SkippedTodoFile[] {
+    return [...this.skippedFiles]
   }
 
   /** One todo by id; a missing or non-regular target is an error. */
@@ -434,6 +447,7 @@ export class WorkspaceTodoService {
     }
     const next = new Map<string, CachedTodo>()
     const todos: Todo[] = []
+    const skipped: SkippedTodoFile[] = []
     let processed = 0
     for (const name of names) {
       const filePath = join(this.todosDir, name)
@@ -455,7 +469,12 @@ export class WorkspaceTodoService {
           todo = parseTodoFile(filePath, await readFile(filePath, 'utf-8'))
         } catch (error) {
           if (isNotFound(error)) continue
-          throw error
+          // Skip the file instead of failing the whole store read; the file
+          // keeps its stale cache entry out of `next` so it is retried later.
+          const reason = error instanceof Error ? error.message : String(error)
+          skipped.push({ file: name, reason })
+          console.warn(`Skipping todo file ${name}: ${reason}`)
+          continue
         }
       }
       next.set(name, { signature, todo })
@@ -465,6 +484,7 @@ export class WorkspaceTodoService {
     }
     this.parseCache.clear()
     for (const [name, entry] of next) this.parseCache.set(name, entry)
+    this.skippedFiles = skipped
     todos.sort((a, b) => a.id.localeCompare(b.id))
     return todos
   }
@@ -876,25 +896,31 @@ function parseTodoFile(filePath: string, content: string): Todo {
     throw new WorkspaceTodoError('malformed', `Todo ${id}: front matter must be a mapping`)
   }
   const record = decoded as Record<string, unknown>
+  // The core schema turns unquoted numeric-looking scalars into numbers, so a
+  // second parse under the failsafe schema recovers the original scalar text
+  // for fields that must stay strings (id and every depends_on entry).
+  const failsafeDecoded = parseYaml(front, { schema: 'failsafe' }) as Record<string, unknown>
   for (const key of Object.keys(record)) {
     if (!FRONT_MATTER_KEYS.has(key)) {
       throw new WorkspaceTodoError('unknown_field', `Todo ${id}: unknown front matter field: ${key}`)
     }
   }
-  const rawId = record.id
-  const declaredId =
-    typeof rawId === 'number' &&
-    (Number.isFinite(rawId) || rawId === Infinity || rawId === -Infinity) &&
-    ID_RE.test(id)
-      ? id
-      : requireTodoId(rawId, `Todo ${id}`)
+  const declaredId = requireTodoId(failsafeDecoded.id, `Todo ${id}`)
   if (declaredId !== id) {
     throw new WorkspaceTodoError('bad_id', `Todo ${id}: front matter id "${declaredId}" does not match the file name`)
   }
   const title = requireTitle(record.title, id)
   const status = readStatus(record.status, id)
   const project = record.project === undefined ? undefined : requireProject(record.project, id)
-  const depends_on = requireDependencies(record.depends_on, id)
+  const failsafeDependsOn = failsafeDecoded.depends_on
+  const dependsOnSource =
+    record.depends_on !== null &&
+    Array.isArray(record.depends_on) &&
+    Array.isArray(failsafeDependsOn) &&
+    failsafeDependsOn.length === record.depends_on.length
+      ? failsafeDependsOn
+      : record.depends_on
+  const depends_on = requireDependencies(dependsOnSource, id)
   const created = requireTimestamp(record.created, id, 'created')
   const updated = requireTimestamp(record.updated, id, 'updated')
   const sections = parseBodySections(body)

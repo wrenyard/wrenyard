@@ -26,6 +26,7 @@ import { mapServiceError } from './project.mts'
 
 export interface WorkspaceTodoHandlerService {
   listTodos(params?: TodoListParams): Promise<TodoListResult['todos']>
+  getLastSkippedTodoFiles(): NonNullable<TodoListResult['skipped']>
   getTodo(id: string): Promise<Todo>
   createTodo(input: TodoCreateInput): Promise<Todo>
   updateTodo(input: TodoUpdateInput): Promise<Todo>
@@ -51,7 +52,11 @@ export function registerWorkspaceTodoHandlers(router: RpcRouter, service?: Works
   // rather than an opaque INTERNAL_ERROR.
   router.register('todo.list', async (params: TodoListParams = {}) => {
     try {
-      return { todos: await service.listTodos(params) } satisfies TodoListResult
+      const todos = await service.listTodos(params)
+      const skipped = service.getLastSkippedTodoFiles()
+      const result: TodoListResult = { todos }
+      if (skipped.length > 0) result.skipped = skipped
+      return result
     } catch (error) {
       throw mapServiceError(error, 'workspace-todo', 'todo_error')
     }

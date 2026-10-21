@@ -72,6 +72,8 @@ export interface TodoListParams {
 
 export interface TodoListResult {
   todos: Todo[] | TodoCompact[]
+  /** Files skipped by the last scan because they could not be parsed. */
+  skipped?: { file: string; reason: string }[]
 }
 
 // ─── todo.get ──────────────────────────────────────────────────────
