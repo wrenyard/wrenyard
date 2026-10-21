@@ -1,6 +1,7 @@
 /**
- * Transcript view of the session ledger: one item per folded turn, followed by
- * the optimistic pending sends. Each turn delegates to {@link TranscriptTurn};
+ * Transcript view of the session ledger: one timeline of user messages and
+ * reply blocks, followed by the optimistic pending sends and the still open
+ * blocks of running turns. Blocks come from {@link transcriptTimeline};
  * the scroller, composer and page chrome stay with the session page.
  */
 import { memo } from 'react';
@@ -12,7 +13,9 @@ import type { TurnWaitingState } from '../../model/describe.js';
 import type { DraftAttachment, ModelEntry, TurnModel } from '../../model/types.js';
 import type { PendingTurn } from '../../state/session-reducer.js';
 import { MediaAttachments, fromDraftAttachment } from '../MediaAttachments.js';
-import { TranscriptTurn } from './TranscriptTurn.js';
+import { ReplyQuote } from './ReplyQuote.js';
+import { TranscriptBody, TranscriptUserMessage } from './TranscriptTurn.js';
+import { transcriptTimeline } from './transcript-timeline.js';
 
 export interface TranscriptViewProps {
   /** Folded turns, rendered in input order. */
@@ -35,7 +38,7 @@ export interface TranscriptViewProps {
   waiting?: ReadonlyMap<number, TurnWaitingState>;
 }
 
-/** The transcript view: the ledger rendered inline as chronological turn cards. */
+/** The transcript view: the ledger rendered as one timeline of messages and reply blocks. */
 export const TranscriptView = memo(function TranscriptView({
   turns,
   pending,
@@ -47,25 +50,41 @@ export const TranscriptView = memo(function TranscriptView({
   onRemove,
   waiting,
 }: TranscriptViewProps) {
+  const { timeline, open } = transcriptTimeline(turns, pending.length > 0);
   return (
     <>
-      {turns.map((turn) => (
-        <MessageScrollerItem
-          key={`transcript:${turn.id}`}
-          messageId={`transcript:${turn.id}`}
-          data-turn-id={turn.id}
-          className={cn('flex flex-col gap-3', turn.status === 'running' && '[content-visibility:visible]')}
-        >
-          <TranscriptTurn
-            turn={turn}
-            sessionId={sessionId}
-            models={models}
-            botNames={botNames}
-            onCancelTask={onCancelTask}
-            waiting={waiting?.get(turn.id)}
-          />
-        </MessageScrollerItem>
-      ))}
+      {timeline.map((item) =>
+        item.kind === 'user' ? (
+          <MessageScrollerItem
+            key={`transcript-user:${item.turn.id}`}
+            messageId={`transcript-user:${item.turn.id}`}
+            data-turn-id={item.turn.id}
+          >
+            <div data-lightbox-root>
+              <TranscriptUserMessage turn={item.turn} sessionId={sessionId} botNames={botNames} />
+            </div>
+          </MessageScrollerItem>
+        ) : (
+          <MessageScrollerItem
+            key={`transcript-block:${item.turn.id}:${item.index}`}
+            messageId={`transcript-block:${item.turn.id}:${item.index}`}
+            className="flex flex-col gap-3"
+          >
+            <div className="relative flex flex-col gap-3" data-lightbox-root>
+              {item.quote && <ReplyQuote turn={item.turn} />}
+              <TranscriptBody
+                turn={item.turn}
+                entries={item.entries}
+                live={false}
+                sessionId={sessionId}
+                models={models}
+                botNames={botNames}
+                onCancelTask={onCancelTask}
+              />
+            </div>
+          </MessageScrollerItem>
+        ),
+      )}
       {pending.map((item) => (
         <MessageScrollerItem
           key={`transcript-pending:${item.localId}`}
@@ -107,6 +126,27 @@ export const TranscriptView = memo(function TranscriptView({
                 )}
               </span>
             </MessageFooter>
+          </div>
+        </MessageScrollerItem>
+      ))}
+      {open.map((block) => (
+        <MessageScrollerItem
+          key={`transcript-block:${block.turn.id}:${block.index}`}
+          messageId={`transcript-block:${block.turn.id}:${block.index}`}
+          className={cn('flex flex-col gap-3', '[content-visibility:visible]')}
+        >
+          <div className="relative flex flex-col gap-3" data-lightbox-root>
+            {block.quote && <ReplyQuote turn={block.turn} />}
+            <TranscriptBody
+              turn={block.turn}
+              entries={block.entries}
+              live={true}
+              waiting={waiting?.get(block.turn.id)}
+              sessionId={sessionId}
+              models={models}
+              botNames={botNames}
+              onCancelTask={onCancelTask}
+            />
           </div>
         </MessageScrollerItem>
       ))}

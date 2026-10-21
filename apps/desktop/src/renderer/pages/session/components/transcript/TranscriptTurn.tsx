@@ -1,8 +1,8 @@
 /**
- * One turn of the session rendered as an agent transcript, composed of the
- * right-aligned user-message component and the body component: replies as
- * plain prose, each stretch of agent work folded into one muted summary line,
- * visible errors, the running line and a per-message hover footer.
+ * The pieces of one session turn: the right-aligned user-message component and
+ * the body component: replies as plain prose, each stretch of agent work
+ * folded into one muted summary line, visible errors, the running line and a
+ * per-message hover footer.
  */
 import type { ReactNode } from 'react';
 import { Activity, TriangleAlert } from 'lucide-react';
@@ -28,22 +28,7 @@ import { splitReplyQuote } from '../conversation/UserMessage.js';
 import { Ellipsis, WorkingDots } from '../live-indicators.js';
 import { MorphText } from '../morph-text.js';
 import { ActivityGroup, groupId, type GroupActivityItem } from './ActivityGroup.js';
-import { transcriptEntries, type TranscriptEntry } from './transcript-timeline.js';
-
-export interface TranscriptTurnProps {
-  /** The folded turn to render. */
-  turn: TurnModel;
-  /** Ledger session id, forwarded to attachment media. */
-  sessionId?: string;
-  /** Model catalog, used to show a reply's model display name. */
-  models?: readonly ModelEntry[];
-  /** Bot display names, keyed by immutable bot id. */
-  botNames?: ReadonlyMap<string, string>;
-  /** Cancel one dispatched task run; rejects when the daemon refuses. */
-  onCancelTask: (taskRunId: string) => Promise<void>;
-  /** Live recovery waiting state of this turn, when it has one. */
-  waiting?: TurnWaitingState;
-}
+import type { TranscriptEntry } from './transcript-timeline.js';
 
 /** The public id of the turn's reasoning model: the configured model, else the latest finished reason call's serving model. */
 function reasoningModelId(turn: TurnModel): string | undefined {
@@ -194,7 +179,19 @@ export function TranscriptUserMessage({ turn, sessionId, botNames }: { turn: Tur
   );
 }
 
-export interface TranscriptBodyProps extends TranscriptTurnProps {
+export interface TranscriptBodyProps {
+  /** The folded turn the body belongs to. */
+  turn: TurnModel;
+  /** Ledger session id, forwarded to attachment media. */
+  sessionId?: string;
+  /** Model catalog, used to show a reply's model display name. */
+  models?: readonly ModelEntry[];
+  /** Bot display names, keyed by immutable bot id. */
+  botNames?: ReadonlyMap<string, string>;
+  /** Cancel one dispatched task run; rejects when the daemon refuses. */
+  onCancelTask: (taskRunId: string) => Promise<void>;
+  /** Live recovery waiting state of this turn, when it has one. */
+  waiting?: TurnWaitingState;
   /** Chronological entries the body is built from. */
   entries: readonly TranscriptEntry[];
   /** Whether the running line is shown under the body. */
@@ -273,24 +270,5 @@ export function TranscriptBody({ turn, sessionId, models, botNames, onCancelTask
 
       {live && <LiveLine turn={turn} sessionId={sessionId} waiting={waiting} />}
     </>
-  );
-}
-
-/** One turn as a chronological transcript. */
-export function TranscriptTurn({ turn, sessionId, models, botNames, onCancelTask, waiting }: TranscriptTurnProps) {
-  return (
-    <div className="relative flex flex-col gap-3" data-lightbox-root>
-      <TranscriptUserMessage turn={turn} sessionId={sessionId} botNames={botNames} />
-      <TranscriptBody
-        turn={turn}
-        sessionId={sessionId}
-        models={models}
-        botNames={botNames}
-        onCancelTask={onCancelTask}
-        waiting={waiting}
-        entries={transcriptEntries(turn)}
-        live={turn.status === 'running'}
-      />
-    </div>
   );
 }
