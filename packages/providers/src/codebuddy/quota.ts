@@ -17,31 +17,36 @@ function binding(providerId: string, modelId: string, pools: readonly ReturnType
   return Object.freeze({ providerId, modelId, pools: Object.freeze(pools.slice()) });
 }
 
-const HY_FAMILY_POOL = quotaPool('codebuddy/hy-family');
+const HY3_POOL = { ...quotaPool('codebuddy/hy3'), displayName: 'HY3' };
+const HY4_PREVIEW_POOL = { ...quotaPool('codebuddy/hy4-preview'), displayName: 'HY4 Preview' };
 const MONTHLY_POOL = { ...quotaPool('codebuddy/monthly'), displayName: '1mo' };
 /** iOA exposes no monthly usage: the same monthly resource is pay-as-you-go with unknown usage. */
 const IOA_MONTHLY_POOL = { ...MONTHLY_POOL, usageUnknown: true as const };
 
-/** HY3 and HY4 Preview draw jointly on the family allowance. Offerings carry the
- * canonical registry ids, never the product-file wire spellings. */
-function isHyFamilyModel(modelId: string): boolean {
-  return modelId === 'hunyuan-hy3' || modelId === 'hunyuan-hy4-preview';
+/** Upstream counts HY3 and HY4 Preview separately, so each keeps its own pool:
+ * a rate limit or exhaustion on one must never poison the other. Offerings carry
+ * the canonical registry ids, never the product-file wire spellings. */
+function hyPoolForModel(modelId: string) {
+  if (modelId === 'hunyuan-hy3') return HY3_POOL;
+  if (modelId === 'hunyuan-hy4-preview') return HY4_PREVIEW_POOL;
+  return undefined;
 }
 
 /**
- * Exact CodeBuddy quota applicability. HY models draw jointly on the family
- * allowance and the account monthly allowance; remaining models use monthly
- * only. iOA exposes no measured monthly usage, so there the monthly pool is
- * pay-as-you-go with usage unknown by design, and the family allowance is
- * excluded.
+ * Exact CodeBuddy quota applicability. HY3 and HY4 Preview each draw on their
+ * own per-model allowance plus the account monthly allowance; remaining models
+ * use monthly only. iOA exposes no measured monthly usage, so there the monthly
+ * pool is pay-as-you-go with usage unknown by design, and the per-model
+ * allowances are excluded.
  */
 export function codeBuddyQuotaBindings(definition: ProviderDefinition, environment?: string) {
   const monthly = environment === 'ioa' ? IOA_MONTHLY_POOL : MONTHLY_POOL;
-  return definition.models.map((model) => (
-    isHyFamilyModel(model.id)
-      ? binding('codebuddy', model.id, [HY_FAMILY_POOL, monthly])
-      : binding('codebuddy', model.id, [monthly])
-  ));
+  return definition.models.map((model) => {
+    const pool = hyPoolForModel(model.id);
+    return pool
+      ? binding('codebuddy', model.id, [pool, monthly])
+      : binding('codebuddy', model.id, [monthly]);
+  });
 }
 
 /** Provider-default pools covering discovered CodeBuddy models not listed above. */
@@ -54,7 +59,8 @@ export function codeBuddyDefaultPools(environment?: string) {
  * pool list one model id draws on. */
 export function codeBuddyPoolsForModel(modelId: string, environment?: string) {
   const monthly = environment === 'ioa' ? IOA_MONTHLY_POOL : MONTHLY_POOL;
-  return Object.freeze(isHyFamilyModel(modelId) ? [HY_FAMILY_POOL, monthly] : [monthly]);
+  const pool = hyPoolForModel(modelId);
+  return Object.freeze(pool ? [pool, monthly] : [monthly]);
 }
 
 export function createCodeBuddyQuota(definition: ProviderDefinition): ProviderQuota {
@@ -76,7 +82,7 @@ function normalizeCodeBuddyQuota(raw: unknown, now = Date.now()): QuotaSnapshot 
             message: exhausted
                 ? 'CodeBuddy 本月额度已耗尽，重置后将自动恢复。'
                 : '按量计费 · 用量未知',
-            not_applicable_windows: ['hy-family'],
+            not_applicable_windows: ['hy3', 'hy4-preview'],
         };
     }
     if (row.exhausted !== true || row.reason_code !== 'quota_exhausted' || !reset || Date.parse(reset) <= now)
