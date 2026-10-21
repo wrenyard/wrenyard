@@ -130,6 +130,8 @@ export interface ActionModel {
   startedAt: string;
   endedAt?: string;
   parsed?: unknown;
+  /** Submitted task input from the dispatch task span, when recorded. */
+  taskInput?: unknown;
   result?: string;
   taskRunId?: string;
   task?: SessionBridgeTaskBrief;

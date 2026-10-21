@@ -68,15 +68,27 @@ export interface ActionRowProps {
   onCancelTask: (taskRunId: string) => Promise<void>;
 }
 
-/** Pretty-printed compiled task input, or the compile call's own output. */
-function compiledInput(action: ActionModel, compile: CallModel | undefined): string {
-  if (action.parsed !== undefined) return JSON.stringify(action.parsed, null, 2);
-  return compile?.output ?? '';
+type TaskInputView =
+  | { kind: 'snapshot'; text: string }
+  | { kind: 'pending' }
+  | { kind: 'unavailable' };
+
+function taskInputView(action: ActionModel): TaskInputView {
+  if (action.taskInput !== undefined) {
+    return { kind: 'snapshot', text: JSON.stringify(action.taskInput, null, 2) };
+  }
+  if (action.taskRunId === undefined) {
+    return action.status === 'running' ? { kind: 'pending' } : { kind: 'unavailable' };
+  }
+  return { kind: 'unavailable' };
 }
 
-/** A dispatch's input: the full prompt and the compiled task input, collapsed. */
+const TASK_INPUT_PENDING = '等待任务创建…';
+const TASK_INPUT_UNAVAILABLE = '不可用';
+
+/** A dispatch's input: the full prompt and the submitted task input, collapsed. */
 function DispatchInput({ action, compile, contextItems }: { action: ActionModel; compile: CallModel | undefined; contextItems?: readonly ContextItem[] }) {
-  const input = compiledInput(action, compile);
+  const taskInput = taskInputView(action);
   const name = compile === undefined
     ? ''
     : stepName({ kind: 'call', call: compile }, { contextItems, actionTitle: () => action.title || undefined });
@@ -102,12 +114,16 @@ function DispatchInput({ action, compile, contextItems }: { action: ActionModel;
             <OutputBox>{action.prompt}</OutputBox>
           </>
         )}
-        {input !== '' && (
-          <>
-            <p className="text-xs text-muted-foreground">编译后的任务输入</p>
-            <OutputBox>{input}</OutputBox>
-          </>
-        )}
+        <>
+          <p className="text-xs text-muted-foreground">编译后的任务输入</p>
+          {taskInput.kind === 'snapshot' ? (
+            <OutputBox>{taskInput.text}</OutputBox>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {taskInput.kind === 'pending' ? TASK_INPUT_PENDING : TASK_INPUT_UNAVAILABLE}
+            </p>
+          )}
+        </>
         {compile?.error !== undefined && <p className="text-destructive">{compile.error}</p>}
       </ActivityRow>
     </div>

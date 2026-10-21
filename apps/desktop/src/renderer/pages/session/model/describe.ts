@@ -47,7 +47,7 @@ export const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
   reason: '主推理',
   'memory-search': '记忆检索',
   search: '检索',
-  dispatch: '编译派发输入',
+  dispatch: '编译任务指令',
   reply: '沟通',
   title: '标题',
   document: '文档',

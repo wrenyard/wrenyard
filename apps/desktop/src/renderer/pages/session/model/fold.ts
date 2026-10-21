@@ -803,7 +803,14 @@ function buildActions(
   const started = new Map<string, ActionStartedEvent>();
   const finished = new Map<string, ActionFinishedEvent>();
   const titles = new Map<string, string>();
-  const taskSpans = new Map<string, { task: string; project?: string; taskRunId: string; at: string }>();
+  const taskSpans = new Map<string, {
+    task: string;
+    project?: string;
+    worktree?: string;
+    taskRunId: string;
+    input?: unknown;
+    at: string;
+  }>();
   const writes = new Map<string, {
     path: string;
     change: WorkspaceChangedEvent['change'];
@@ -890,6 +897,7 @@ function buildActions(
       startedAt: runStartedAt ?? start?.at ?? end?.at ?? '',
       ...(end?.at === undefined ? {} : { endedAt: end.at }),
       ...(start?.input === undefined ? {} : { parsed: start.input }),
+      ...(taskSpan?.input === undefined ? {} : { taskInput: taskSpan.input }),
       ...(end?.result === undefined ? {} : { result: end.result }),
       ...(taskRunId === undefined ? {} : { taskRunId }),
       ...(taskRunId === undefined || tasks[taskRunId] === undefined ? {} : { task: tasks[taskRunId] }),

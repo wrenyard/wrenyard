@@ -370,6 +370,8 @@ export interface TaskSpanRequest {
   project?: string;
   worktree?: string;
   taskRunId: string;
+  /** Effective task input submitted when the run was created. */
+  input?: unknown;
 }
 
 /** Summary of a finished agent task, copied from the task system. */

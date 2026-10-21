@@ -339,6 +339,7 @@ type DispatchCreateResult = {
   project: ProjectInfo;
   title: string;
   worktree?: string;
+  effectiveInput: unknown;
 };
 
 function createDispatchCatalog(
@@ -481,6 +482,7 @@ async function createTaskRunFromTool(
         taskId,
         project,
         title,
+        effectiveInput,
         ...(worktree === undefined ? {} : { worktree }),
       },
     };
@@ -599,6 +601,7 @@ export async function runDispatchAction(
   let dispatchedTaskId = '';
   let dispatchedProject: ProjectInfo | undefined;
   let dispatchedWorktree: string | undefined;
+  let dispatchedInput: unknown;
   const record: AuxiliaryRecordPort = {
     ...createLoopRecord(),
     helpers: {
@@ -614,6 +617,7 @@ export async function runDispatchAction(
     dispatchedTaskId = created.taskId;
     dispatchedProject = created.project;
     dispatchedWorktree = created.worktree;
+    dispatchedInput = created.effectiveInput;
     if (created.title !== '') ctx.onTitle?.(created.title);
   });
   const loopDeps = {
@@ -662,6 +666,7 @@ export async function runDispatchAction(
       project: project.id,
       ...(dispatchedWorktree === undefined ? {} : { worktree: dispatchedWorktree }),
       taskRunId,
+      ...(dispatchedInput === undefined ? {} : { input: dispatchedInput }),
     },
   });
 
