@@ -7,6 +7,9 @@ export const definition = defineProvider({
     model('glm-5.3-flash', 1_048_576, 32_768, undefined, REASONING_LOW_HIGH_MAX),
   ],
   protocols: [openAI('https://open.bigmodel.cn/api/coding/paas/v4/chat/completions'), anthropic('https://open.bigmodel.cn/api/anthropic/v1/messages')],
+  // GLM often answers in plain text when a tool call is forced, so selection
+  // must never route a forced tool choice here.
+  supportsForcedToolChoice: false,
   convertReasoningEffort: (_modelId, effort, protocol) => {
     if (protocol === 'openai_responses') return { reasoning: { effort } };
     if (protocol === 'anthropic_messages') return { thinking: { type: 'enabled' }, output_config: { effort } };

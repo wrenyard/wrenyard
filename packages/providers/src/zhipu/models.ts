@@ -12,6 +12,9 @@ export const definition = defineProvider({
     model('glm-5.2', 1_048_576, 32_768, undefined, ['none', 'high', 'max']),
   ],
   protocols: [openAI('https://open.bigmodel.cn/api/paas/v4/chat/completions')],
+  // GLM often answers in plain text when a tool call is forced, so selection
+  // must never route a forced tool choice here.
+  supportsForcedToolChoice: false,
   // GLM-5.2 can disable reasoning entirely: `none` maps to a disabled thinking
   // block; every other level is sent as the `reasoning_effort` field.
   convertReasoningEffort: (_modelId, effort, protocol) => {
