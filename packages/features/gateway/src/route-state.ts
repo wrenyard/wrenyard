@@ -261,6 +261,19 @@ export class RouteStateStore {
     }
   }
 
+  /**
+   * Drop every fault scope of one provider whose account was deliberately
+   * switched: provider, route and pool scoped blocks alike stop blocking the
+   * newly bound account immediately. Each removal advances the scope's
+   * generation exactly like a recovery, so a failure captured before the
+   * switch can never rebuild a cleared fault.
+   */
+  clearProvider(provider: string): void {
+    for (const [key, block] of [...this.blocks]) {
+      if (block.provider === provider) this.remove(key, 'credential_changed');
+    }
+  }
+
   close(): void {
     for (const block of this.blocks.values()) clearTimeout(block.timer);
     this.blocks.clear();

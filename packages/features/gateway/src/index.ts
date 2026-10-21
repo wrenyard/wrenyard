@@ -90,6 +90,8 @@ export interface ModelGateway {
    * upstream-stated reset instant.
    */
   reportNativeRouteFault(provider: string, model: string, failure: MarkableFailure, guard?: RouteGuard): void;
+  /** Drop every route/pool fault scope of one provider after an explicit account switch. */
+  clearProviderFaults(provider: string): void;
   /** Passive per-route health figures from recent completions; does not affect routing. */
   health(): GatewayHealthSnapshot;
   /** Replay one persisted completion into the passive health store (daemon backfill). */
@@ -236,6 +238,10 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
     routeStates.reportNativeRouteFault(provider, model, failure, guard);
   };
 
+  const clearProviderFaults = (provider: string): void => {
+    routeStates.clearProvider(provider);
+  };
+
   /**
    * Credential-backed public models, each annotated with its current route
    * state. Without a protocol the complete, protocol-independent directory is
@@ -318,6 +324,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
     admitRoute,
     completeRouteSuccess,
     reportNativeRouteFault,
+    clearProviderFaults,
     handle: (request, response) => pipeline.handle(request, response),
 
     async connection(origin) {

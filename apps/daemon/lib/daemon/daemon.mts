@@ -95,7 +95,6 @@ import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRun
 import {
   classifyWorkBuddyAccountIdentity,
   defaultProviderContext,
-  deletePersistedAuth,
   pollWorkBuddyBrowserToken,
   readDesktopAuth,
   resolveWorkBuddySession,
@@ -1873,29 +1872,46 @@ async function createForemanDaemonResources(
         const { kind } = classifyWorkBuddyAccountIdentity(auth)
         return auth.domain ? { kind, domain: auth.domain } : { kind }
       }
-      // An explicit account switch discards the stored login and every cache
-      // derived from it before a new login starts, so the new login type's
-      // quota source and validation path are used and no credential, renewal
-      // entry or quota evidence of the previous type survives the switch.
-      if (params.switchAccount === true) {
-        await deletePersistedAuth(store)
+      // An explicit account switch is transactional: the stored login is
+      // replaced only when the replacement is actually obtained (a usable
+      // desktop import or a completed browser login), and only then is the
+      // previous account's derived state dropped — its routing evidence,
+      // observed pool exhaustion, gateway route faults, catalog and readiness
+      // views. A failed or cancelled switch never reaches that point, so the
+      // previous login, its caches and its quota policy stay fully bound.
+      const bindSwitchedAccount = async (): Promise<void> => {
         provider.resetAccount()
         // The previous account's measured credit windows must not survive:
         // without a retained row a missing or failed read cannot rebuild the
         // switch-away account's constraints during the grace period.
         autoRoutingQuotaSnapshots.invalidateProviderEvidence(providerId)
-        // An exhaustion fault observed for the previous account must not be
-        // inherited by the newly bound one. Both WorkBuddy builds are covered.
+        // A pool exhaustion or route fault observed for the previous account
+        // must not be inherited by the newly bound one. Both WorkBuddy builds
+        // are covered and each stays scoped to its own provider id.
         const exhaustionPrefix = `${providerId}|`
         for (const key of [...observedPoolExhaustionByPool.keys()]) {
           if (key.startsWith(exhaustionPrefix)) observedPoolExhaustionByPool.delete(key)
         }
+        gateway.clearProviderFaults(providerId)
         invalidateProviderReadiness()
         providerService.invalidateList()
+        try {
+          // Re-fetch the catalog for the new account. The switch itself is
+          // already committed; a failed re-fetch keeps the safe retry backoff
+          // instead of failing the whole switch.
+          await provider.refreshModels()
+        } catch {
+          // The next credential read retries the catalog through ensureCatalog.
+        }
+        invalidateProviderReadiness()
+        providerService.invalidateList()
+      }
+      if (params.switchAccount === true) {
         if (params.source === 'desktop') {
-          // Desktop re-import: the native client's own login becomes the bound
-          // account, so it is re-read and persisted instead of opening a
-          // browser login. A missing or unreadable native login fails cleanly.
+          // Desktop re-import reads the native client's own login first and
+          // persists it only when usable: the atomic replace of the stored
+          // login is the switch's single commit point. A missing or unreadable
+          // native login fails before anything is discarded.
           const desktop = await readDesktopAuth(store)
           if (desktop.kind !== 'ok') {
             throw new Error(desktop.kind === 'encrypted'
@@ -1903,9 +1919,7 @@ async function createForemanDaemonResources(
               : 'No WorkBuddy desktop login is available')
           }
           await writePersistedAuth(store, desktop.auth)
-          await provider.refreshModels()
-          invalidateProviderReadiness()
-          providerService.invalidateList()
+          await bindSwitchedAccount()
           return { authUrl: '', alreadySignedIn: true, account: accountSummaryOf(desktop.auth) }
         }
       }
@@ -1916,6 +1930,7 @@ async function createForemanDaemonResources(
         return { authUrl: '', alreadySignedIn: true, account: accountSummaryOf(existing) }
       }
       const { state, authUrl } = await startWorkBuddyBrowserAuth(store, AbortSignal.timeout(30_000))
+      const switching = params.switchAccount === true
       void (async () => {
         try {
           const auth = await pollWorkBuddyBrowserToken(
@@ -1924,6 +1939,11 @@ async function createForemanDaemonResources(
             AbortSignal.timeout(AUTH_POLL_TIMEOUT_MS + 5_000),
           )
           if (auth === undefined) return
+          if (switching) {
+            // The browser login completed and was persisted: commit the switch.
+            await bindSwitchedAccount()
+            return
+          }
           await provider.refreshModels()
           invalidateProviderReadiness()
           providerService.invalidateList()

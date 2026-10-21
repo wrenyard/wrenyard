@@ -1606,8 +1606,10 @@ export interface WrenyardShellApi {
   openProviderKeyPage(providerId: string): Promise<void>;
   /**
    * Start (or re-bind) a provider's native login through the daemon's
-   * `provider.signIn` method. `switchAccount` discards the stored login and its
-   * derived caches before binding a new one; `source` picks browser
+   * `provider.signIn` method. `switchAccount` replaces the stored login only
+   * after the replacement is actually obtained (a completed browser login or a
+   * usable desktop re-import): a failed or cancelled switch keeps the previous
+   * login and its derived caches bound; `source` picks browser
    * re-authentication (default) or a re-import of the desktop client's own
    * login. Resolves with the daemon's own result: an auth URL to open when the
    * account is not bound yet, and an `alreadySignedIn` flag that marks an

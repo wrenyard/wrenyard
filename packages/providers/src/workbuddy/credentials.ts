@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { resolveWrenyardStateRoot } from '@wrenyard/paths';
@@ -173,15 +173,6 @@ function refreshExpired(auth: WorkBuddyStoredAuth, nowMs: number): boolean {
 export function resetWorkBuddyAuthCaches(): void {
   renewingByRefreshToken.clear();
   renewedByRefreshToken.clear();
-}
-
-export async function deletePersistedAuth(store: WorkBuddyCredentialStore): Promise<void> {
-  try {
-    await unlink(persistencePath(store.context, store.build.id));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
 }
 
 export async function readPersistedAuth(store: WorkBuddyCredentialStore): Promise<WorkBuddyStoredAuth | undefined> {
