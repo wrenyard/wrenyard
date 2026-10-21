@@ -193,13 +193,15 @@ function isIgnorableWindowsChmodError(error: unknown): boolean {
 }
 
 function applyPragmas(database: ForemanDatabase, freshFile: boolean): void {
+  // Set the page layout before WAL initializes the file header; afterwards a
+  // NONE database needs a full VACUUM to adopt incremental reclamation.
+  if (freshFile) {
+    database.pragma('auto_vacuum = INCREMENTAL')
+  }
   database.pragma('journal_mode = WAL')
   database.pragma('synchronous = NORMAL')
   database.pragma('foreign_keys = ON')
   database.pragma('busy_timeout = 5000')
-  if (freshFile) {
-    database.pragma('auto_vacuum = INCREMENTAL')
-  }
   const mode = database.pragma('auto_vacuum', { simple: true })
   detectedAutoVacuumMode = typeof mode === 'number' ? mode : undefined
 }
