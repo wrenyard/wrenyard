@@ -795,6 +795,29 @@ export class AutoRoutingQuotaSnapshotService {
   }
 
   /**
+   * Drops one provider's measured quota evidence after its account changed.
+   *
+   * The retained last-usable row of that provider is deleted, so a missing,
+   * failed or stale read has no credit window of the previous account left to
+   * fall back on inside the grace period, and every cached or in-flight
+   * snapshot whose private context was built with that provider is dropped, so
+   * a refresh started before the switch cannot keep or write back the previous
+   * account's measured windows. Only that provider is affected; every other
+   * provider keeps its retained row and existing grace behaviour.
+   */
+  invalidateProviderEvidence(providerId: string): void {
+    this.lastUsableRows.delete(providerId);
+    // Context keys carry providers as JSON keys of the login-type map.
+    const marker = `"${providerId}"`;
+    for (const key of [...this.cachedByContext.keys()]) {
+      if (key.includes(marker)) this.cachedByContext.delete(key);
+    }
+    for (const key of [...this.inFlightByContext.keys()]) {
+      if (key.includes(marker)) this.inFlightByContext.delete(key);
+    }
+  }
+
+  /**
    * Resolves one request-bound routing bundle. The active snapshot is loaded
    * exactly once, then the same immutable object is returned for readiness,
    * free-supply and canonical-to-wire evaluation while its scope/environment

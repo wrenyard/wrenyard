@@ -1880,10 +1880,15 @@ async function createForemanDaemonResources(
       if (params.switchAccount === true) {
         await deletePersistedAuth(store)
         provider.resetAccount()
+        // The previous account's measured credit windows must not survive:
+        // without a retained row a missing or failed read cannot rebuild the
+        // switch-away account's constraints during the grace period.
+        autoRoutingQuotaSnapshots.invalidateProviderEvidence(providerId)
         // An exhaustion fault observed for the previous account must not be
-        // inherited by the newly bound one.
+        // inherited by the newly bound one. Both WorkBuddy builds are covered.
+        const exhaustionPrefix = `${providerId}|`
         for (const key of [...observedPoolExhaustionByPool.keys()]) {
-          if (key.startsWith('workbuddy|')) observedPoolExhaustionByPool.delete(key)
+          if (key.startsWith(exhaustionPrefix)) observedPoolExhaustionByPool.delete(key)
         }
         invalidateProviderReadiness()
         providerService.invalidateList()
