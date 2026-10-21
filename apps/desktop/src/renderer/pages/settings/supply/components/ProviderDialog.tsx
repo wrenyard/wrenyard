@@ -3,6 +3,12 @@ import { cn } from 'cn';
 import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/renderer/components/ui/dropdown-menu';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -22,6 +28,7 @@ import {
   providerKeyPageUrl,
   type DisplayCurrency,
   type ProviderCatalogSnapshot,
+  type QuotaProviderSnapshot,
   type QuotaSnapshot,
 } from '@/shell-contract';
 import { buildModelListRows } from '../model/models.js';
@@ -46,6 +53,41 @@ import { useConfigureProviderKey, useQuotaRefresh } from '../queries.js';
 
 const WORKBUDDY_PROVIDER_IDS = new Set(['workbuddy', 'workbuddy-ai']);
 const WORKBUDDY_SIGN_IN_LABEL = '登录';
+const WORKBUDDY_SWITCH_ACCOUNT_LABEL = '切换账户';
+const WORKBUDDY_SWITCH_BROWSER_LABEL = '浏览器重新登录';
+const WORKBUDDY_SWITCH_DESKTOP_LABEL = '从桌面端导入';
+
+/** Identity provider value that marks an enterprise single-sign-on login. */
+const WORKBUDDY_IOA_IDP = 'ioa_auth';
+/** Account types that mark an enterprise login when `idp` is not the
+ * enterprise single-sign-on marker. */
+const WORKBUDDY_ENTERPRISE_ACCOUNT_TYPES = new Set(['sso', 'enterprise', 'corporate']);
+/** Account types that mark a personal login. */
+const WORKBUDDY_PERSONAL_ACCOUNT_TYPES = new Set(['personal', 'individual']);
+
+/**
+ * Login identity the daemon reports on a provider quota observation. The Desktop
+ * projection does not declare both fields yet, so they are read as optional
+ * extras; an absent value renders as 身份未知 instead of a guess.
+ */
+interface WorkBuddyIdentityFields {
+  accountType?: string;
+  idp?: string;
+}
+
+/**
+ * Chinese label of the bound WorkBuddy login, derived only from the provider's
+ * own `accountType` / `idp`. It never renders a token, uid or enterprise id.
+ */
+function workBuddyIdentityLabel(quota: QuotaProviderSnapshot | undefined): string {
+  const identity = quota as (QuotaProviderSnapshot & WorkBuddyIdentityFields) | undefined;
+  const type = typeof identity?.accountType === 'string' ? identity.accountType.trim().toLowerCase() : '';
+  const idp = typeof identity?.idp === 'string' ? identity.idp.trim().toLowerCase() : '';
+  if (idp === WORKBUDDY_IOA_IDP) return '企业账号 · 按量计费';
+  if (WORKBUDDY_ENTERPRISE_ACCOUNT_TYPES.has(type)) return '企业账号';
+  if (WORKBUDDY_PERSONAL_ACCOUNT_TYPES.has(type)) return '个人账号';
+  return '身份未知';
+}
 
 const DISCARD_TITLE = '放弃未保存的密钥？';
 const DISCARD_KEEP_LABEL = '继续编辑';
@@ -113,6 +155,10 @@ export function ProviderDialog({ entry, snapshot, displayCurrency, onClose, onSa
   const name = entry.label || entry.id;
   const keyPageAvailable = providerKeyPageUrl(entry.id) !== null;
   const pending = configure.isPending || openingPage;
+  const isWorkBuddy = WORKBUDDY_PROVIDER_IDS.has(entry.id);
+  const identityLabel = isWorkBuddy
+    ? workBuddyIdentityLabel(entry.quota ?? snapshot?.providers.find((item) => item.id === entry.id))
+    : '';
 
   const handleSave = (): void => {
     const value = key.trim();
@@ -147,14 +193,38 @@ export function ProviderDialog({ entry, snapshot, displayCurrency, onClose, onSa
     setOpeningPage(true);
     void (async () => {
       try {
-        const bridge = shell as typeof shell & {
-          signInProvider?: (providerId: string) => Promise<{ authUrl: string; alreadySignedIn: boolean }>;
-        };
-        if (bridge.signInProvider === undefined) throw new Error('登录不可用');
-        const result = await bridge.signInProvider(entry.id);
+        if (shell.signInProvider === undefined) throw new Error('登录不可用');
+        const result = await shell.signInProvider(entry.id);
         if (!result.alreadySignedIn && result.authUrl.length > 0) {
           await shell.openExternal(result.authUrl);
         }
+        void quotaRefresh.mutate();
+      } catch (cause: unknown) {
+        setError(errorMessage(cause) || KEY_PAGE_ERROR);
+      } finally {
+        setOpeningPage(false);
+      }
+    })();
+  };
+
+  /**
+   * Deliberate account switch: the same `provider.signIn` IPC, but with
+   * `switchAccount` so an existing login no longer short-circuits the request.
+   * Browser re-authentication opens the returned auth URL; desktop re-import
+   * re-reads the desktop client's login instead.
+   */
+  const handleSwitchAccount = (source: 'browser' | 'desktop'): void => {
+    setError('');
+    setOpeningPage(true);
+    void (async () => {
+      try {
+        if (shell.signInProvider === undefined) throw new Error('登录不可用');
+        const result = await shell.signInProvider(entry.id, { switchAccount: true, source });
+        if (!result.alreadySignedIn && result.authUrl.length > 0) {
+          await shell.openExternal(result.authUrl);
+        }
+        // One refresh covers the provider list and the quota snapshot: the
+        // catalog and every quota row come from the same snapshot read.
         void quotaRefresh.mutate();
       } catch (cause: unknown) {
         setError(errorMessage(cause) || KEY_PAGE_ERROR);
@@ -203,6 +273,30 @@ export function ProviderDialog({ entry, snapshot, displayCurrency, onClose, onSa
             <strong>{name}</strong>
             <code className="text-muted-foreground">{entry.id}</code>
           </div>
+
+          {isWorkBuddy && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">当前登录</span>
+              <span className="text-sm">{identityLabel}</span>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={(
+                    <Button type="button" variant="outline" size="sm" disabled={pending}>
+                      {WORKBUDDY_SWITCH_ACCOUNT_LABEL}
+                    </Button>
+                  )}
+                />
+                <DropdownMenuContent align="start" className="min-w-44">
+                  <DropdownMenuItem disabled={pending} onClick={() => handleSwitchAccount('browser')}>
+                    {WORKBUDDY_SWITCH_BROWSER_LABEL}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={pending} onClick={() => handleSwitchAccount('desktop')}>
+                    {WORKBUDDY_SWITCH_DESKTOP_LABEL}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
 
           {apiKeyMode && (
             <Field>

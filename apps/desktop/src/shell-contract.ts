@@ -56,6 +56,7 @@ import type { DailyBucket as StatsDailySnapshot } from '@wrenyard/protocol/stats
 import type {
   ProviderListModel,
   ProviderListModelPricing as ProviderModelPricingSnapshot,
+  ProviderSignInResult,
 } from '@wrenyard/protocol/provider';
 import type { StorageUsageResult as StorageUsageSnapshot } from '@wrenyard/protocol/storage';
 import type {
@@ -966,6 +967,15 @@ export interface QuotaProviderSnapshot {
   displayLine?: string;
   message?: string;
   code?: string;
+  /**
+   * Verified login type the provider reported for this observation (for example
+   * an enterprise single-sign-on login); absent when it reports none. Carried verbatim
+   * from the protocol snapshot, never derived from quota numbers.
+   */
+  accountType?: string;
+  /** Verified identity provider of that login (e.g. `ioa_auth`); absent when
+   * the provider reports none. */
+  idp?: string;
 }
 
 /**
@@ -1594,6 +1604,20 @@ export interface WrenyardShellApi {
   setQuotaFocus?(focus: QuotaFocus | null): Promise<void>;
   configureProviderKey(providerId: string, key: string): Promise<QuotaSnapshot>;
   openProviderKeyPage(providerId: string): Promise<void>;
+  /**
+   * Start (or re-bind) a provider's native login through the daemon's
+   * `provider.signIn` method. `switchAccount` discards the stored login and its
+   * derived caches before binding a new one; `source` picks browser
+   * re-authentication (default) or a re-import of the desktop client's own
+   * login. Resolves with the daemon's own result: an auth URL to open when the
+   * account is not bound yet, and an `alreadySignedIn` flag that marks an
+   * existing login. Optional on the facade so a preload without the handler
+   * stays type-compatible.
+   */
+  signInProvider?(
+    providerId: string,
+    options?: { switchAccount?: boolean; source?: 'browser' | 'desktop' },
+  ): Promise<ProviderSignInResult>;
   getUpdate(): Promise<UpdateSnapshot>;
   checkUpdate(): Promise<UpdateSnapshot>;
   requestInstall(): Promise<UpdateSnapshot>;

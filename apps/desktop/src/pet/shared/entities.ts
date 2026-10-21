@@ -73,6 +73,12 @@ export interface QuotaProviderState {
   label: string;
   /** Explicit provider-reported account plan name; absent means unknown. */
   plan?: string;
+  /** Sanitized login type the provider reported (e.g. `sso`); absent when the
+   *  provider reports no login identity. Never derived from quota numbers. */
+  accountType?: string;
+  /** Sanitized identity provider of that login (e.g. `ioa_auth`); absent when
+   *  the provider reports no login identity. */
+  idp?: string;
   displayLine: string | null;
   error: string | null;
   status: QuotaProviderStatus;

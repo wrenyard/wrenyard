@@ -1,7 +1,13 @@
 import { BrandIcon } from '@/renderer/components/brand-icon';
 import { QueryError } from '@/renderer/components/query-error';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
-import { QuotaBar, QUOTA_POOL_STATE_LABEL, quotaPoolStateTone } from '@/renderer/components/usage/QuotaBar';
+import {
+  isUsageUnknown,
+  QuotaBar,
+  QUOTA_POOL_STATE_LABEL,
+  quotaPoolStateTone,
+  unknownUsageNote,
+} from '@/renderer/components/usage/QuotaBar';
 import { providerBrand } from '@/renderer/lib/model-brand';
 import { useDisplayCurrency, useQuotaQuery } from '@/renderer/lib/queries';
 import { reorderProviders } from '@/provider-order';
@@ -97,6 +103,9 @@ function ProviderUsageCard({ entry, now, currency }: { entry: ProviderCatalogSna
         <span className="truncate text-xs text-muted-foreground">{providerStatus(entry, now)}</span>
       </div>
       <span className="text-xs text-muted-foreground">套餐：{quota?.plan || '未知'}</span>
+      {quota !== undefined && isUsageUnknown(quota) && (
+        <span className="text-xs text-muted-foreground">{unknownUsageNote(quota.message)}</span>
+      )}
       {hasDetail && (
         <div className="flex flex-col gap-3">
           {quota.windows.map((window) => {

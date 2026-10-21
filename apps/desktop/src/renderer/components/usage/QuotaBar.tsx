@@ -33,6 +33,32 @@ const FILL_CLASS: Record<QuotaLevel, string> = {
 /** Reset-pending copy shown on a quota bar while a refresh has not arrived. */
 export const RESET_PENDING_LABEL = '等待刷新';
 
+/** Copy for a provider that measures no usage at all, e.g. an enterprise
+ * single-sign-on login whose usage is not measured. It matches the session
+ * quota ring's `unknown_by_design` wording. */
+export const UNKNOWN_USAGE_MESSAGE = '按量计费 · 用量未知';
+
+/**
+ * Note for a readable snapshot that reports no usage: the provider's own message
+ * when it has one, otherwise the standard unknown-usage copy. A surface with
+ * nothing measurable shows this instead of a bar or a percentage.
+ */
+export function unknownUsageNote(message?: string): string {
+  const text = typeof message === 'string' ? message.trim() : '';
+  return text.length > 0 ? text : UNKNOWN_USAGE_MESSAGE;
+}
+
+/**
+ * True when a provider snapshot is readable but carries no window and no balance
+ * to draw — the usage-unknown case. A failed or pending read is not
+ * unknown by design and keeps its own copy.
+ */
+export function isUsageUnknown(
+  snapshot: Pick<QuotaProviderSnapshot, 'status' | 'windows' | 'balances'>,
+): boolean {
+  return snapshot.status === 'ok' && snapshot.windows.length === 0 && snapshot.balances.length === 0;
+}
+
 /** Chinese label of each four-level pool state. */
 export const QUOTA_POOL_STATE_LABEL: Readonly<Record<QuotaPoolState, string>> = {
   abundant: '充裕',
@@ -260,6 +286,20 @@ export function QuotaBar({
         : 'bg-background/80'
     : FILL_CLASS[level];
   const mutedClass = inverse ? 'text-background/60' : 'text-muted-foreground';
+  // Without a measured remaining percentage there is nothing to draw: an
+  // unmeasured quota must never be rendered as a floored `0%` and `已用 100%`.
+  if (!Number.isFinite(remainingPct)) {
+    return (
+      <div
+        className={cn('flex items-center gap-2 text-xs', stale && 'opacity-60', className)}
+        data-slot="quota-bar"
+        data-quota-usage="unknown"
+      >
+        <span className={cn('min-w-0 truncate', mutedClass)}>{label}</span>
+        <span className="shrink-0">{unknownUsageNote()}</span>
+      </div>
+    );
+  }
   const markerLeft = expectedRemainingPct !== null
     ? `${Math.max(0, Math.min(100, 100 - expectedRemainingPct))}%`
     : null;

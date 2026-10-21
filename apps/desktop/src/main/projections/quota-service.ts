@@ -19,6 +19,10 @@ interface RawQuotaEntry {
   label?: string;
   /** Explicit provider-reported account plan name; absent when unknown. */
   plan?: string;
+  /** Verified login type the provider reported; absent when it reports none. */
+  accountType?: string;
+  /** Verified identity provider of that login; absent when it reports none. */
+  idp?: string;
   status?: string;
   error?: string;
   code?: string;
@@ -340,6 +344,13 @@ export function parseQuotaJson(raw: string, now = Date.now()): QuotaProviderStat
     // absent rather than a plan label inferred from message or quota amounts.
     const plan = typeof e.plan === 'string' && e.plan.trim().length > 0 ? e.plan.trim() : undefined;
 
+    // Sanitized login identity the provider reported. Only these two strings
+    // cross the boundary; no token, uid or enterprise id is ever read here.
+    const accountType = typeof e.accountType === 'string' && e.accountType.trim().length > 0
+      ? e.accountType.trim()
+      : undefined;
+    const idp = typeof e.idp === 'string' && e.idp.trim().length > 0 ? e.idp.trim() : undefined;
+
     // Passive provider code metadata (e.g. `authentication_pending`). Preserved
     // generically; status/message/error stay independent and code never
     // triggers provider-specific behavior.
@@ -364,6 +375,8 @@ export function parseQuotaJson(raw: string, now = Date.now()): QuotaProviderStat
       id,
       label,
       ...(plan !== undefined ? { plan } : {}),
+      ...(accountType !== undefined ? { accountType } : {}),
+      ...(idp !== undefined ? { idp } : {}),
       displayLine,
       error,
       status,

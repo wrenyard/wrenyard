@@ -239,7 +239,15 @@ function projectProvider(id: string, provider: QuotaProviderState, lastSuccessAt
     ? sanitizeQuotaText(provider.displayLine)
     : undefined;
   const plan = typeof provider.plan === 'string' ? sanitizeQuotaText(provider.plan) : undefined;
-  return {
+  // Sanitized login identity the provider reported. Providers that report none
+  // keep both fields absent, so the renderer shows no identity for them.
+  const accountType = typeof provider.accountType === 'string' && provider.accountType.length > 0
+    ? sanitizeQuotaText(provider.accountType)
+    : undefined;
+  const idp = typeof provider.idp === 'string' && provider.idp.length > 0
+    ? sanitizeQuotaText(provider.idp)
+    : undefined;
+  const snapshot: QuotaProviderSnapshot = {
     id,
     label: sanitizeQuotaText(provider.label || id),
     ...(plan ? { plan } : {}),
@@ -253,6 +261,11 @@ function projectProvider(id: string, provider: QuotaProviderState, lastSuccessAt
     ...(provider.code ? { code: sanitizeQuotaText(provider.code) } : {}),
     ...(provider.estimatedSpend ? { estimatedSpend: provider.estimatedSpend } : {}),
   };
+  const identity = {
+    ...(accountType ? { accountType } : {}),
+    ...(idp ? { idp } : {}),
+  };
+  return { ...snapshot, ...identity };
 }
 
 function projectCatalog(
