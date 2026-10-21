@@ -215,7 +215,10 @@ export class RouteStateStore {
     const current = this.generations.get(key) ?? this.retiredFloor;
     // Stale-failure guard: the scope changed (a newer fault, or a recovery) after
     // the caller captured it, so a late in-flight failure must not rebuild it.
-    if (guard !== undefined && current > (guard.generations.get(key) ?? 0)) {
+    const providerKey = this.scopeKey(provider, 'provider');
+    const providerGeneration = this.generations.get(providerKey) ?? this.retiredFloor;
+    if (guard !== undefined && (current > (guard.generations.get(key) ?? 0)
+      || providerGeneration > (guard.generations.get(providerKey) ?? 0))) {
       return previous === undefined ? undefined : this.statusOf(previous);
     }
     if (previous) clearTimeout(previous.timer);
@@ -269,9 +272,12 @@ export class RouteStateStore {
    * switch can never rebuild a cleared fault.
    */
   clearProvider(provider: string): void {
+    // Fence every in-flight request, including scopes that have no fault yet.
+    this.advanceGeneration(this.scopeKey(provider, 'provider'));
     for (const [key, block] of [...this.blocks]) {
       if (block.provider === provider) this.remove(key, 'credential_changed');
     }
+    this.pruneGenerations();
   }
 
   close(): void {
