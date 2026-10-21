@@ -101,12 +101,14 @@ function codeOf(body: unknown): string | undefined {
  *   category.
  */
 function genericFailure(status: number, headers: Headers, body: unknown, nowMs: number): RouteFailureOutcome | undefined {
+  const reset = retryAfter(headers.get('retry-after'), nowMs) ?? rateLimitReset(headers.get('x-ratelimit-reset'), nowMs);
   if (status === 429) {
-    const reset = retryAfter(headers.get('retry-after'), nowMs) ?? rateLimitReset(headers.get('x-ratelimit-reset'), nowMs);
     if (reset === undefined) return { nonPoisoning: true, status, category: 'client_error' };
     return { state: 'rate_limited', scope: 'pool', faultKind: 'rate_limited', until: new Date(reset).toISOString() };
   }
-  if (status === 402) return { state: 'quota_exhausted', scope: 'pool', faultKind: 'quota_exhausted' };
+  if (status === 402) {
+    return { state: 'quota_exhausted', scope: 'pool', faultKind: 'quota_exhausted', ...(reset === undefined ? {} : { until: new Date(reset).toISOString() }) };
+  }
   if (status === 401) return { state: 'auth_failed', scope: 'provider', faultKind: 'auth_failed' };
   if (status === 403) return { state: 'access_denied', scope: 'provider', faultKind: 'access_denied' };
   if (status === 404) return { state: 'model_unavailable', scope: 'route', faultKind: 'model_unavailable' };
