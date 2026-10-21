@@ -29,7 +29,7 @@ export function isSupplyTabId(value: unknown): value is SupplyTabId {
 /** Legacy sidebar category ids map to a supply sub-tab when opening 模型供应. */
 const LEGACY_CATEGORY_SUPPLY_TAB: Readonly<Record<string, SupplyTabId>> = {
   providers: 'providers',
-  usage: 'providers',
+  usage: 'usage',
   catalog: 'providers',
   routingTest: 'routing',
   models: 'routing',
