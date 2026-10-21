@@ -8,6 +8,7 @@
 export type {
   ProviderConfigureParams,
   ProviderConfigureResult,
+  ProviderEstimatedSpend,
   ProviderListEntry,
   ProviderListModel,
   ProviderListModelPricing,

@@ -251,6 +251,7 @@ function projectProvider(id: string, provider: QuotaProviderState, lastSuccessAt
     ...(message ? { message } : {}),
     ...(displayLine ? { displayLine } : {}),
     ...(provider.code ? { code: sanitizeQuotaText(provider.code) } : {}),
+    ...(provider.estimatedSpend ? { estimatedSpend: provider.estimatedSpend } : {}),
   };
 }
 

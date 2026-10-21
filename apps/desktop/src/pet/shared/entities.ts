@@ -84,6 +84,12 @@ export interface QuotaProviderState {
   bars?: QuotaProviderBars;
   /** Structured monetary balances, distinct from percentage windows. */
   balances?: QuotaBalanceRow[];
+  /**
+   * Daemon-computed estimated USD spend per quota window (Devin only):
+   * `{ window, models, totalUsd }` records keyed to a window name. Absent for
+   * other providers and when no traffic was recorded.
+   */
+  estimatedSpend?: { window: string; models: Record<string, number>; totalUsd: number }[];
 }
 
 /** A single monetary quota balance row, separate from percentage bars. */

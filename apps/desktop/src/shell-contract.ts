@@ -933,6 +933,16 @@ export interface QuotaBalanceSnapshot {
   state?: QuotaPoolState;
 }
 
+/** Estimated spend inside one named quota window (daemon-computed, display-only). */
+export interface QuotaSpendEstimate {
+  /** Quota window `name` this estimate covers. */
+  window: string;
+  /** USD per public model id (e.g. `devin/swe-2`), estimated from recorded token usage. */
+  models: Record<string, number>;
+  /** Total estimated USD across all models in the window. */
+  totalUsd: number;
+}
+
 export interface QuotaProviderSnapshot {
   id: string;
   label: string;
@@ -948,6 +958,11 @@ export interface QuotaProviderSnapshot {
   lastSuccessAt?: number;
   windows: QuotaWindowSnapshot[];
   balances: QuotaBalanceSnapshot[];
+  /**
+   * Daemon-computed per-window estimated USD spend, keyed to a window `name`
+   * (Devin only). Absent for other providers and when no traffic was recorded.
+   */
+  estimatedSpend?: QuotaSpendEstimate[];
   displayLine?: string;
   message?: string;
   code?: string;

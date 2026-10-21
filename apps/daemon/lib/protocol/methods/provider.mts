@@ -138,6 +138,13 @@ export const providerQuotaResultSchema = {
           }, additionalProperties: false,
         } },
         not_applicable_windows: { type: 'array', maxItems: 64, items: { type: 'string', maxLength: 120 } },
+        estimatedSpend: { type: 'array', maxItems: 64, items: {
+          type: 'object', required: ['window', 'models', 'totalUsd'], properties: {
+            window: { type: 'string', minLength: 1, maxLength: 120 },
+            models: { type: 'object', additionalProperties: { type: 'number', minimum: 0 } },
+            totalUsd: { type: 'number', minimum: 0 },
+          }, additionalProperties: false,
+        } },
       }, additionalProperties: false,
     } },
     fetchedAt: { type: 'number' },

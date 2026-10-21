@@ -1824,7 +1824,16 @@ async function createForemanDaemonResources(
         invalidateProviderReadiness()
         providerService.invalidateList()
       }
-      return providerService.quotaSnapshot(params)
+      const result = await providerService.quotaSnapshot(params)
+      // Devin only: price each quota window's recorded gateway usage at the
+      // catalog's USD-per-million tuple so the snapshot carries an estimated
+      // spend beside its remaining-percentage windows.
+      for (const snapshot of result.providers) {
+        if (snapshot.provider === 'devin' && snapshot.windows !== undefined && snapshot.windows.length > 0) {
+          attachDevinEstimatedSpend(snapshot, catalog, runtime.db)
+        }
+      }
+      return result
     },
     providerSignIn: async (params) => {
       const providerId = params.provider
@@ -2664,6 +2673,97 @@ async function readClientReadiness(client: AgentClient | undefined): Promise<Nat
   } catch {
     return undefined
   }
+}
+
+/**
+ * Per-model estimated USD spend inside one Devin quota window. Aggregates the
+ * persisted `gateway.request.completed` events bounded by the window's
+ * `created_at` span — the same created_at-bounded pattern the TPS sampler
+ * uses — and prices each public model's token sums at the catalog's
+ * [cached, input, output] USD-per-million tuple. The usage `input` figure
+ * already includes `cachedInput`, so the priced non-cached share is
+ * `input - cachedInput`; a recorded `cachedInput` above `input` (a counter
+ * that never includes its cache share) is clamped to `input` so the
+ * non-cached share never prices below zero. Returns undefined when the window
+ * recorded no traffic on a model with a known catalog price, so the snapshot
+ * omits the field rather than reporting a zero.
+ */
+function devinWindowEstimatedSpend(
+  database: ForemanDatabase,
+  devinProvider: import('@wrenyard/providers/catalog').ProviderDefinition | undefined,
+  window: import('@wrenyard/protocol/provider').ProviderQuotaWindow,
+): import('@wrenyard/protocol/provider').ProviderEstimatedSpend | undefined {
+  if (devinProvider === undefined || window.resets_at === undefined) return undefined
+  const resetMs = Date.parse(window.resets_at)
+  if (!Number.isFinite(resetMs) || !Number.isFinite(window.window_minutes) || window.window_minutes <= 0) {
+    return undefined
+  }
+  const windowStart = new Date(resetMs - window.window_minutes * 60_000).toISOString()
+  const rows = database.prepare<unknown[], { data: string | null }>(
+    `SELECT data FROM events
+     WHERE likely(type = 'gateway.request.completed') AND created_at >= ? AND created_at < ?
+       AND json_extract(data, '$.data.provider') = 'devin'`,
+  ).all(windowStart, window.resets_at)
+  const usageByModel = new Map<string, { input: number; output: number; cached: number }>()
+  for (const row of rows) {
+    if (row.data === null) continue
+    let payload: unknown
+    try { payload = JSON.parse(row.data) } catch { continue }
+    const inner = (payload as { data?: unknown }).data
+    if (inner === undefined || typeof inner !== 'object') continue
+    const publicModel = (inner as { publicModel?: unknown }).publicModel
+    if (typeof publicModel !== 'string' || !publicModel.startsWith('devin/')) continue
+    const usage = (inner as { usage?: unknown }).usage
+    if (usage === undefined || typeof usage !== 'object') continue
+    const input = (usage as { input?: unknown }).input
+    const output = (usage as { output?: unknown }).output
+    const cached = (usage as { cachedInput?: unknown }).cachedInput
+    if (typeof input !== 'number' || !Number.isFinite(input) || input < 0
+      || typeof output !== 'number' || !Number.isFinite(output) || output < 0) continue
+    if (input === 0 && output === 0) continue
+    const cachedTokens = typeof cached === 'number' && Number.isFinite(cached) && cached > 0
+      ? Math.min(cached, input)
+      : 0
+    const current = usageByModel.get(publicModel) ?? { input: 0, output: 0, cached: 0 }
+    current.input += input
+    current.output += output
+    current.cached += cachedTokens
+    usageByModel.set(publicModel, current)
+  }
+  if (usageByModel.size === 0) return undefined
+  const models: Record<string, number> = {}
+  let totalUsd = 0
+  for (const [publicModel, usage] of usageByModel) {
+    const modelId = publicModel.slice('devin/'.length)
+    const pricing = devinProvider.models.find((model) => model.id === modelId)?.pricing
+    // Unknown catalog price: omit the model rather than fabricate a figure.
+    // A known price of zero (a catalog free model) stays in at $0.
+    if (pricing === undefined) continue
+    const [cachedPrice, inputPrice, outputPrice] = pricing
+    const usd = ((usage.input - usage.cached) * inputPrice + usage.cached * cachedPrice + usage.output * outputPrice) / 1e6
+    if (!Number.isFinite(usd) || usd < 0) continue
+    models[publicModel] = usd
+    totalUsd += usd
+  }
+  if (Object.keys(models).length === 0) return undefined
+  return { window: window.name, models, totalUsd }
+}
+
+/**
+ * Attaches `estimatedSpend` to a Devin quota snapshot: one entry per quota
+ * window whose recorded traffic priced against the catalog. Other providers
+ * and windows with no priced traffic keep the field absent.
+ */
+function attachDevinEstimatedSpend(
+  snapshot: import('@wrenyard/protocol/provider').ProviderQuotaSnapshot,
+  catalog: import('@wrenyard/providers/catalog').Catalog,
+  database: ForemanDatabase,
+): void {
+  const devinProvider = catalog.provider('devin')
+  const estimatedSpend = (snapshot.windows ?? [])
+    .map((window) => devinWindowEstimatedSpend(database, devinProvider, window))
+    .filter((entry): entry is import('@wrenyard/protocol/provider').ProviderEstimatedSpend => entry !== undefined)
+  if (estimatedSpend.length > 0) snapshot.estimatedSpend = estimatedSpend
 }
 
 interface ForemanDaemonRuntime {

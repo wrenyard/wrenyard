@@ -43,6 +43,12 @@ interface RawQuotaEntry {
     currency?: unknown;
     amount?: unknown;
   }>;
+  /** Daemon-computed estimated spend per quota window (Devin only). */
+  estimatedSpend?: Array<{
+    window?: unknown;
+    models?: unknown;
+    totalUsd?: unknown;
+  }>;
 }
 
 function isFiniteZeroToOneHundred(v: unknown): v is number {
@@ -194,6 +200,32 @@ function parseBalances(e: RawQuotaEntry): QuotaProviderState['balances'] {
   return rows.length > 0 ? rows : undefined;
 }
 
+/**
+ * Parse the daemon `estimatedSpend` array defensively into structured
+ * per-window spend rows. Entries without a string window name, a finite
+ * non-negative totalUsd, or a plain models record of finite non-negative
+ * numbers are dropped; an entirely malformed value yields `undefined`.
+ */
+function parseEstimatedSpend(e: RawQuotaEntry): QuotaProviderState['estimatedSpend'] {
+  if (!Array.isArray(e.estimatedSpend) || e.estimatedSpend.length === 0) return undefined;
+  const rows: NonNullable<QuotaProviderState['estimatedSpend']> = [];
+  for (const entry of e.estimatedSpend) {
+    if (!entry || typeof entry !== 'object') continue;
+    const window = entry.window;
+    const totalUsd = entry.totalUsd;
+    if (typeof window !== 'string' || window.length === 0) continue;
+    if (typeof totalUsd !== 'number' || !Number.isFinite(totalUsd) || totalUsd < 0) continue;
+    const models: Record<string, number> = {};
+    if (entry.models !== null && typeof entry.models === 'object' && !Array.isArray(entry.models)) {
+      for (const [model, usd] of Object.entries(entry.models as Record<string, unknown>)) {
+        if (typeof usd === 'number' && Number.isFinite(usd) && usd >= 0) models[model] = usd;
+      }
+    }
+    rows.push({ window, models, totalUsd });
+  }
+  return rows.length > 0 ? rows : undefined;
+}
+
 /** Integer pace delta label (`(+N%)`/`(-N%)`) for the anchor window. */
 function paceLabel(window: QuotaWindowRow): string | null {
   if (window.expectedRemainingPct === null) return null;
@@ -322,6 +354,7 @@ export function parseQuotaJson(raw: string, now = Date.now()): QuotaProviderStat
 
     const bars = parseWindowBars(e, now);
     const balances = parseBalances(e);
+    const estimatedSpend = parseEstimatedSpend(e);
     // The wire retires `display_line`; rebuild the subtitle projection from the
     // structured window/balance rows so the Provider page and Pet tips keep the
     // previously displayed window, pace and reset details.
@@ -338,6 +371,7 @@ export function parseQuotaJson(raw: string, now = Date.now()): QuotaProviderStat
       code,
       bars,
       balances,
+      ...(estimatedSpend !== undefined ? { estimatedSpend } : {}),
     });
   }
 

@@ -102,6 +102,23 @@ export interface ProviderQuotaSnapshot {
   error?: string
   windows?: readonly ProviderQuotaWindow[]
   not_applicable_windows?: readonly string[]
+  /**
+   * Estimated per-model USD spend inside each quota window, priced from the
+   * catalog's [cached, input, output] USD-per-million tuple. Present only for
+   * providers whose gateway traffic is recorded (Devin) and only for windows
+   * that observed traffic; never fabricated.
+   */
+  estimatedSpend?: readonly ProviderEstimatedSpend[]
+}
+
+/** Estimated spend inside one named quota window. */
+export interface ProviderEstimatedSpend {
+  /** Quota window `name` this estimate covers. */
+  window: string
+  /** USD per public model id (e.g. `devin/swe-2`), estimated from recorded token usage. */
+  models: Record<string, number>
+  /** Total estimated USD across all models in the window. */
+  totalUsd: number
 }
 
 /** One monetary balance row. */

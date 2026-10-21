@@ -99,18 +99,28 @@ function ProviderUsageCard({ entry, now, currency }: { entry: ProviderCatalogSna
       <span className="text-xs text-muted-foreground">套餐：{quota?.plan || '未知'}</span>
       {hasDetail && (
         <div className="flex flex-col gap-3">
-          {quota.windows.map((window) => (
-            <QuotaBar
-              key={window.name}
-              name={window.name}
-              poolLabel={window.poolLabel}
-              remainingPct={window.remainingPct}
-              expectedRemainingPct={window.expectedRemainingPct}
-              resetsAt={window.resetsAt}
-              state={window.state}
-              stale={quota.stale}
-            />
-          ))}
+          {quota.windows.map((window) => {
+            const spend = quota.estimatedSpend?.find((entry) => entry.window === window.name);
+            return (
+              <div key={window.name} className="flex flex-col gap-1">
+                <QuotaBar
+                  name={window.name}
+                  poolLabel={window.poolLabel}
+                  remainingPct={window.remainingPct}
+                  expectedRemainingPct={window.expectedRemainingPct}
+                  resetsAt={window.resetsAt}
+                  state={window.state}
+                  stale={quota.stale}
+                />
+                {spend !== undefined && (
+                  <span className="text-sm tabular-nums text-muted-foreground">
+                    预估 ${spend.totalUsd.toFixed(2)}
+                    {Object.entries(spend.models).map(([modelId, usd]) => ` · ${modelId} $${usd.toFixed(2)}`)}
+                  </span>
+                )}
+              </div>
+            );
+          })}
           {quota.balances.map((balance) => (
             <span
               key={`${balance.currency}:${balance.display}`}
