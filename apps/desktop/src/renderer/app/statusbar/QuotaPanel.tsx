@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ChevronRight, RotateCw } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/renderer/components/ui/button';
+import { UsageCardSkeletonBody } from '@/renderer/components/usage/UsageCard';
 import { QuotaProviderBlock } from '@/renderer/components/usage/QuotaProviderBlock';
 import { quotaQuery, useQuotaRefresh } from '@/renderer/lib/queries';
 import type { ProviderOrderSnapshot, QuotaPoolState, QuotaProviderSnapshot } from '@/shell-contract';
@@ -68,8 +69,11 @@ export interface QuotaPanelProps {
   scrollProviderId?: string;
 }
 
+const QUOTA_READ_FAILED = '额度读取失败';
+const RETRY_LABEL = '重试';
+
 export function QuotaPanel({ firstProviderId, scrollProviderId }: QuotaPanelProps = {}) {
-  const { data } = useQuery(quotaQuery);
+  const { data, isPending, isError, refetch, isFetching } = useQuery(quotaQuery);
   const providers = useMemo(() => {
     const ordered = orderProviders(data?.providers ?? [], data?.providerOrder ?? []);
     if (firstProviderId === undefined) return ordered;
@@ -106,15 +110,36 @@ export function QuotaPanel({ firstProviderId, scrollProviderId }: QuotaPanelProp
     }
   }, [scrollProviderId, providers, othersExpanded, others]);
 
+  if (isPending && data === undefined) {
+    return (
+      <div className="flex w-full min-w-0 flex-col gap-2.5">
+        <UsageCardSkeletonBody />
+      </div>
+    );
+  }
+
   return (
-    <div className="flex w-full min-w-0 flex-col gap-3">
-      {providers.length === 0 ? (
+    <div className="flex w-full min-w-0 flex-col gap-2.5">
+      {isError && data === undefined ? (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span>{QUOTA_READ_FAILED}</span>
+          <Button
+            type="button"
+            variant="link"
+            size="xs"
+            disabled={isFetching}
+            onClick={() => void refetch()}
+          >
+            {RETRY_LABEL}
+          </Button>
+        </div>
+      ) : providers.length === 0 ? (
         <p className="py-10 text-center text-xs text-muted-foreground">暂无额度数据</p>
       ) : (
-        <div ref={listRef} className="flex flex-col gap-3">
+        <div ref={listRef} className="flex flex-col gap-2.5">
           {primary.map((provider) => renderProviderRow(provider))}
           {others.length > 0 ? (
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2.5">
               <button
                 type="button"
                 className="flex h-6 w-full min-w-0 items-center gap-1.5 text-xs"
@@ -132,7 +157,7 @@ export function QuotaPanel({ firstProviderId, scrollProviderId }: QuotaPanelProp
                 <span className="tabular-nums text-muted-foreground">{others.length}</span>
               </button>
               {othersExpanded ? (
-                <div id={othersPanelId} className="flex flex-col gap-3">
+                <div id={othersPanelId} className="flex flex-col gap-2.5">
                   {others.map((provider) => renderProviderRow(provider))}
                 </div>
               ) : null}

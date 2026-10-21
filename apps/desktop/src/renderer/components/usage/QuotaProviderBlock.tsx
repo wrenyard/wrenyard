@@ -41,7 +41,7 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
       </div>
 
       {failed ? (
-        <div className="flex flex-wrap items-center gap-2 text-xs text-destructive">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <span>{provider.message ?? NO_DATA_NOTE}</span>
           <Button
             type="button"

@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from 'cn';
+import { Skeleton } from '@/renderer/components/ui/skeleton';
 
 export interface UsageCardProps {
   id: string;
@@ -31,7 +32,7 @@ export function UsageCard({ id, title, children, actions, footer, defaultOpen = 
   });
 
   return (
-    <section className={cn('flex flex-col rounded-xl border bg-card px-4 py-3', className)} data-slot="usage-card">
+    <section className={cn('flex flex-col rounded-xl border bg-card px-4 py-2.5', className)} data-slot="usage-card">
       <div className="flex h-7 items-center gap-2">
         <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-medium" aria-expanded={open} onClick={toggle}>
           <ChevronDown className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform duration-fast', !open && '-rotate-90')} aria-hidden="true" />
@@ -39,9 +40,18 @@ export function UsageCard({ id, title, children, actions, footer, defaultOpen = 
         </button>
         {actions}
       </div>
-      {open && <div className="flex flex-col gap-2">{children}</div>}
+      {open && <div className="flex flex-col gap-1.5">{children}</div>}
       {open && footer !== undefined && <div className="mt-2 flex items-center justify-between gap-2">{footer}</div>}
     </section>
+  );
+}
+
+export function UsageCardSkeletonBody() {
+  return (
+    <div className="flex flex-col gap-1.5" data-slot="usage-card-skeleton">
+      <Skeleton className="h-6 w-full" />
+      <Skeleton className="h-6 w-full" />
+    </div>
   );
 }
 

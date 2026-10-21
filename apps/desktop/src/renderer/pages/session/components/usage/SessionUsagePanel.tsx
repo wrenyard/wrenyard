@@ -137,7 +137,7 @@ export function SessionUsagePanel({ clusters, groups, rootRef, currency }: Sessi
   const segments = tokenSegments(totals.total - totals.output, totals.output, totals.cached);
 
   return (
-    <div ref={rootRef} tabIndex={-1} className="flex flex-col gap-2 text-sm tabular-nums outline-none" data-slot="session-usage-panel">
+    <div ref={rootRef} tabIndex={-1} className="flex flex-col gap-1.5 text-sm tabular-nums outline-none" data-slot="session-usage-panel">
       <div className="flex items-baseline gap-2">
         <span className="font-medium">共 {formatTokenCount(totals.total)} tokens</span>
         <span className="flex-1" />

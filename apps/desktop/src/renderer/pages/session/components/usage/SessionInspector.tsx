@@ -4,7 +4,7 @@ import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { TitleBarAuxiliary } from '@/renderer/components/page';
-import { UsageCard } from '@/renderer/components/usage/UsageCard';
+import { UsageCard, UsageCardSkeletonBody } from '@/renderer/components/usage/UsageCard';
 import { QuotaCardActions, QuotaPanel } from '@/renderer/app/statusbar/QuotaPanel';
 import { shell } from '@/renderer/lib/desktop';
 import { useQuotaFocus } from '@/renderer/lib/quota-focus';
@@ -47,21 +47,25 @@ export function SessionInspectorToggle() {
   );
 }
 
-function SessionInspectorUsageBody() {
+function SessionInspectorUsageBody({ hydrating }: { hydrating: boolean }) {
   const { turns } = useSessionUsage();
   const data = useSessionUsagePanelData({ turns });
   const panelRef = useRef<HTMLDivElement | null>(null);
   const note = taskNoteOf(data.runningTasks, data.missingTasks);
 
   return (
-    <div className="flex flex-col gap-3" data-slot="usage-session-section">
+    <div className="flex flex-col gap-2.5" data-slot="usage-session-section">
       <UsageCard id="context" title="上下文">
-        <ContextBreakdown
-          roles={data.roles}
-          budget={data.budget}
-          groups={data.groups}
-          modelName={data.models.find((entry) => entry.publicId === data.modelId)?.displayName}
-        />
+        {hydrating ? (
+          <UsageCardSkeletonBody />
+        ) : (
+          <ContextBreakdown
+            roles={data.roles}
+            budget={data.budget}
+            groups={data.groups}
+            modelName={data.models.find((entry) => entry.publicId === data.modelId)?.displayName}
+          />
+        )}
       </UsageCard>
       <UsageCard
         id="session"
@@ -76,18 +80,22 @@ function SessionInspectorUsageBody() {
           </>
         )}
       >
-        <SessionUsagePanel
-          clusters={data.clusters}
-          groups={{ reason: data.callGroups.reason, aux: data.callGroups.aux, task: data.taskGroups }}
-          rootRef={panelRef}
-          currency={data.currency}
-        />
+        {hydrating ? (
+          <UsageCardSkeletonBody />
+        ) : (
+          <SessionUsagePanel
+            clusters={data.clusters}
+            groups={{ reason: data.callGroups.reason, aux: data.callGroups.aux, task: data.taskGroups }}
+            rootRef={panelRef}
+            currency={data.currency}
+          />
+        )}
       </UsageCard>
     </div>
   );
 }
 
-export function SessionInspector({ draft }: { draft: boolean }) {
+export function SessionInspector({ draft, usageHydrating = false }: { draft: boolean; usageHydrating?: boolean }) {
   const { open } = useSessionInspectorState();
   const focus = useQuotaFocus();
   const asideRef = useRef<HTMLElement | null>(null);
@@ -131,8 +139,8 @@ export function SessionInspector({ draft }: { draft: boolean }) {
         )}
         data-slot="session-inspector"
       >
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
-          {draft ? null : <SessionInspectorUsageBody />}
+        <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
+          {draft ? null : <SessionInspectorUsageBody hydrating={usageHydrating} />}
           <UsageCard
             id="quota"
             title="额度"

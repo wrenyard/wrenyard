@@ -404,7 +404,7 @@ export function SessionPage() {
               </>
             )}
           </div>
-          {!mini && <SessionInspector draft={draft} />}
+          {!mini && <SessionInspector draft={draft} usageHydrating={hydrating} />}
         </div>
         {!mini && <SessionInspectorToggle />}
         <SessionSearch
