@@ -291,6 +291,10 @@ export interface TaskRoutingTestRow {
   /** Short Chinese reason: a free-tier note on a qualified confirmed-free row,
    *  null on a qualified paid row, and the rejection reason on a rejected row. */
   reason: string | null
+  /** True when the route's last-1h health window fails the configured
+   *  error-rate threshold (`shouldAvoidRouteForHealth`); absent when no health
+   *  data was available to evaluate. */
+  unhealthy?: boolean
 }
 
 export interface TaskRoutingTestResult {

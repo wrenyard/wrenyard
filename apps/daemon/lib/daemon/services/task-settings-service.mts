@@ -2,6 +2,7 @@ import {
   quotaStateOf,
   deepSeekAutomaticPricingOf,
   rankAutomaticTaskCandidates,
+  shouldAvoidRouteForHealth,
   type DeepSeekAutomaticPricing,
   type GatewayHealthWindowLike,
   type RouteHealthDecision,
@@ -510,7 +511,16 @@ function buildRoutingFormRows(
   trace: AutomaticSelectionTrace,
   resolver: TaskDispatchResolver,
   requirements: ConfigTaskDispatchRequirements,
+  health: {
+    routeHealth: ReadonlyMap<string, GatewayHealthWindowLike>
+    thresholdPercent: number
+  },
 ): TaskRoutingTestRow[] {
+  const unhealthyOf = (provider: string, model: string): boolean | undefined => {
+    const window = health.routeHealth.get(`${provider}/${model}`)
+    if (window === undefined) return undefined
+    return shouldAvoidRouteForHealth(window, health.thresholdPercent)
+  }
   const pairs = collapseRoutingFormPairs(baselineChoices)
   const rankedByRuntime = new Map(trace.ranked.map((entry) => [entry.canonicalId, entry]))
   const rankedByPair = new Map<string, (typeof trace.ranked)[number]>()
@@ -532,6 +542,7 @@ function buildRoutingFormRows(
     const runtime = pair.exactAgentRuntime
 
     const pairKey = `${pair.provider}/${pair.model}`
+    const unhealthy = unhealthyOf(pair.provider, pair.model)
     const ranked = rankedByRuntime.get(runtime) ?? (pair.admitted ? rankedByPair.get(pairKey) : undefined)
     const choice = collapsedByRuntime.get(runtime)
     const labels = resolver.displayLabels({ provider: pair.provider, model: pair.model })
@@ -554,6 +565,7 @@ function buildRoutingFormRows(
         score: ranked.score,
         rank: ranked.rank,
         reason: ranked.tier === 'abundant' ? '额度充足，优先于受限路线' : null,
+        ...(unhealthy === undefined ? {} : { unhealthy }),
       })
       continue
     }
@@ -615,6 +627,7 @@ function buildRoutingFormRows(
       score: null,
       rank: null,
       reason,
+      ...(unhealthy === undefined ? {} : { unhealthy }),
     })
   }
   rows.sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model))
@@ -1224,7 +1237,12 @@ export class TaskSettingsService {
       healthErrorRateThreshold: effective.healthErrorRateThreshold,
     }, previewMemo, trace)
 
-    return { rows: buildRoutingFormRows(availableChoices, trace, this.resolver, requirements) }
+    return {
+      rows: buildRoutingFormRows(availableChoices, trace, this.resolver, requirements, {
+        routeHealth: await this.gatewayHealthRouteMap(),
+        thresholdPercent: effective.healthErrorRateThreshold,
+      }),
+    }
   }
 
   /** Lists the EFFECTIVE automatic configuration of ALL valid builtin and

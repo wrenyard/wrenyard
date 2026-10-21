@@ -82,6 +82,9 @@ export interface ModelOption {
   intelligence?: 'low' | 'mid' | 'high' | 'premium';
   /** Automatic routing preview score; absent when unrated. */
   routingScore?: number;
+  /** True when this route's recent health window fails the configured
+   *  error-rate threshold; the hint itself rides `routeNotice`. */
+  routeDegraded?: boolean;
   /** Short label shown when this route is currently faulted. */
   routeNotice?: string;
   /** Explicit free supply: keeps the free badge and normal placement. */
@@ -113,6 +116,13 @@ function routeFaulted(option: ModelOption): boolean {
   return option.routeNotice !== undefined;
 }
 
+/** Route tier in picker order: healthy, then degraded by health record, then
+ *  routes with an open fault. An open fault keeps priority over a health hint. */
+function routeTier(option: ModelOption): number {
+  if (option.routeDegraded === true) return 1;
+  return routeFaulted(option) ? 2 : 0;
+}
+
 /** Scored routes rank above unrated ones; higher scores rank first within each tier. */
 function compareRoutingScore(left: ModelOption, right: ModelOption): number {
   const leftScored = left.routingScore !== undefined;
@@ -122,13 +132,13 @@ function compareRoutingScore(left: ModelOption, right: ModelOption): number {
   return 0;
 }
 
-/** Stable picker order: route health → routing score → intelligence → quota → input order. */
+/** Stable picker order: route tier → routing score → intelligence → quota → input order. */
 function orderPickerItems(items: readonly ModelOption[]): ModelOption[] {
   return items
     .map((option, index) => ({ option, index }))
     .sort(
       (left, right) =>
-        Number(routeFaulted(left.option)) - Number(routeFaulted(right.option))
+        routeTier(left.option) - routeTier(right.option)
         || compareRoutingScore(left.option, right.option)
         || intelligenceTier(left.option) - intelligenceTier(right.option)
         || quotaTier(left.option) - quotaTier(right.option)
@@ -263,7 +273,7 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
         const b = right.group.items[0];
         if (a === undefined || b === undefined) return left.index - right.index;
         return (
-          Number(routeFaulted(a)) - Number(routeFaulted(b))
+          routeTier(a) - routeTier(b)
           || compareRoutingScore(a, b)
           || intelligenceTier(a) - intelligenceTier(b)
           || quotaTier(a) - quotaTier(b)

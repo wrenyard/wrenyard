@@ -424,7 +424,11 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
       ...(entry.routeState !== undefined && entry.routePhase === 'open'
         && entry.routeUntil !== undefined && Date.parse(entry.routeUntil) > Date.now()
         ? { routeNotice: routeUnavailableLabel(entry) }
-        : {}),
+        : entry.unhealthy === true
+          // A route the health record marks as failing is only hinted, never
+          // faulted: the same notice channel carries the label.
+          ? { routeDegraded: true, routeNotice: '近期错误率偏高' }
+          : {}),
       intelligence: entry.intelligence,
       ...(entry.routingScore !== undefined ? { routingScore: entry.routingScore } : {}),
       label: isProbeEligible(entry) ? entry.displayName + RETRY_MARKER : entry.displayName,

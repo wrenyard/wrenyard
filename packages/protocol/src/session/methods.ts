@@ -158,6 +158,9 @@ export interface SessionModelEntry {
   intelligence?: 'low' | 'mid' | 'high' | 'premium'
   /** Automatic routing preview score for this provider/model; absent when unrated. */
   routingScore?: number
+  /** True when the route's recent health window exceeds the configured
+   *  error-rate threshold; absent when no health data was available. */
+  unhealthy?: boolean
   /** Circuit state of this model's own route; absent while the route is healthy. */
   routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'access_denied' | 'model_unavailable'
   /** Phase of the route: `open` while a fault blocks it. */

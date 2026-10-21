@@ -529,15 +529,23 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     const rows = routingTest?.rows;
     if (rows === undefined || rows.length === 0) return entries;
     const scoreByRoute = new Map<string, number>();
+    const unhealthyRoutes = new Set<string>();
     for (const row of rows) {
       if (typeof row.score === 'number' && Number.isFinite(row.score)) {
         scoreByRoute.set(`${row.provider}/${row.model}`, row.score);
       }
+      if (row.unhealthy === true) unhealthyRoutes.add(`${row.provider}/${row.model}`);
     }
-    if (scoreByRoute.size === 0) return entries;
+    if (scoreByRoute.size === 0 && unhealthyRoutes.size === 0) return entries;
     return entries.map((entry) => {
       const routingScore = scoreByRoute.get(entry.publicId);
-      return routingScore === undefined ? entry : { ...entry, routingScore };
+      const unhealthy = unhealthyRoutes.has(entry.publicId);
+      if (routingScore === undefined && !unhealthy) return entry;
+      return {
+        ...entry,
+        ...(routingScore === undefined ? {} : { routingScore }),
+        ...(unhealthy ? { unhealthy: true } : {}),
+      };
     });
   });
   handle(SESSION_CHANNELS.context, (_event, value) =>
