@@ -2,6 +2,7 @@ import type { ProviderQuota, QuotaSnapshot } from '../base/index.ts';
 import { quotaPool, quotaWindow } from '../base/quota-helpers.ts';
 import { number, object, observation, time } from '../base/quota-parsing.ts';
 
+const DEVIN_PAID_POOL = quotaPool('devin/paid', []);
 const DEVIN_DAILY_POOL = quotaPool('devin/1d', [
   quotaWindow('1d', 'full_cycle', 'provider_parser', 'packages/providers/src/devin/quota.ts'),
 ]);
@@ -10,7 +11,7 @@ const DEVIN_WEEKLY_POOL = quotaPool('devin/7d', [
 ]);
 
 export const quota: ProviderQuota = {
-  bindings: [], defaultPools: [DEVIN_DAILY_POOL, DEVIN_WEEKLY_POOL],
+  bindings: [], defaultPools: [DEVIN_PAID_POOL, DEVIN_DAILY_POOL, DEVIN_WEEKLY_POOL],
   async read(source): Promise<QuotaSnapshot> {
     const raw = observation(await source.read());
     const root = object(raw.data);

@@ -113,7 +113,7 @@ export function createDevin(options: DevinOptions = {}): DevinProvider {
       }
       if (error.code !== 'failed_precondition') return undefined;
       if (typeof error.message !== 'string' || !/quota|exhausted/i.test(error.message)) return undefined;
-      return { state: 'quota_exhausted', scope: 'pool' };
+      return { state: 'quota_exhausted', scope: 'pool', quotaPoolId: 'devin/paid' };
     },
     async executeRequest(context) {
       const snapshot = bound.get(context.credential);
