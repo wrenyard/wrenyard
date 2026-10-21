@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { WrenyardGatewayConnection } from '@wrenyard/control'
 import type { ProviderDefinition } from '@wrenyard/providers'
-import type { ToolCall, ToolSpec } from '@wrenyard/agent-loop'
+import type { ToolCall, ToolChoice, ToolSpec } from '@wrenyard/agent-loop'
 import type { GatewayRouteStatus } from '@wrenyard/providers/base'
 import {
   createCallRunner,
@@ -15,6 +15,7 @@ export type TaskOutputModelCallPort = (
   request: {
     messages: readonly Message[]
     tools: readonly ToolSpec[]
+    toolChoice?: ToolChoice
     signal?: AbortSignal
   },
 ) => Promise<{ text: string; toolCalls: ToolCall[] }>
@@ -57,6 +58,7 @@ export function createTaskOutputModelCallPort(options: {
       messages: request.messages,
       layers: {},
       tools: request.tools,
+      ...(request.toolChoice === undefined ? {} : { toolChoice: request.toolChoice }),
       signal,
     })
     return { text: result.text, toolCalls: result.toolCalls }

@@ -116,6 +116,7 @@ export type {
   RetryAfterSource,
   ToolCall,
   ToolCallObservation,
+  ToolChoice,
   ToolContractRecord,
   ToolDiagnosis,
   ToolSpec,

@@ -3,21 +3,27 @@ import Ajv from 'ajv'
 import type { TaskRunFacts } from '@wrenyard/protocol/task'
 
 import { errorResult } from './loop.ts'
-import type { CallRunResult, Message, ToolCall, ToolSpec } from './ports.ts'
+import type { CallRunResult, Message, ToolCall, ToolChoice, ToolSpec } from './ports.ts'
 
 /** The only round bound for task-output compilation. */
 export const TASK_OUTPUT_COMPILE_MAX_ROUNDS = 6
 
-const submitTool: ToolSpec = {
-  name: 'submit',
-  description: 'Submit the compiled output as a JSON value matching the schema.',
-  parameters: {
-    type: 'object',
-    properties: { output: {} },
-    required: ['output'],
-    additionalProperties: false,
-  },
+/** The submit tool carries the real task output schema as its `output` property. */
+function submitTool(outputSchema: Record<string, unknown> | boolean): ToolSpec {
+  return {
+    name: 'submit',
+    description: 'Submit the compiled output as a JSON value matching the schema.',
+    parameters: {
+      type: 'object',
+      properties: { output: outputSchema },
+      required: ['output'],
+      additionalProperties: false,
+    },
+  }
 }
+
+/** Force the submit tool on every compile call; nothing else is ever offered. */
+const submitToolChoice: ToolChoice = { name: 'submit' }
 
 export interface TaskOutputCompileOptions {
   outputSchema: Record<string, unknown> | boolean
@@ -28,6 +34,7 @@ export interface TaskOutputCompileOptions {
   call(request: {
     messages: readonly Message[]
     tools: readonly ToolSpec[]
+    toolChoice?: ToolChoice
     signal?: AbortSignal
   }): Promise<Pick<CallRunResult, 'text' | 'toolCalls'>>
 }
@@ -82,6 +89,68 @@ function toolMessage(call: ToolCall, content: string): Message {
   return { role: 'tool', toolCallId: call.id, content }
 }
 
+/** Extract one JSON value from text: first fenced ```json block, else the first balanced object/array. */
+function extractJsonFromText(text: string): unknown | undefined {
+  const fenced = /```json\s*\n([\s\S]*?)\n?\s*```/i.exec(text)
+  const candidate = fenced ? fenced[1] : undefined
+  if (candidate !== undefined) {
+    try {
+      return JSON.parse(candidate)
+    } catch {
+      // Fall through to the balanced-scan over the full text.
+    }
+  }
+  const start = text.search(/[{[]/)
+  if (start === -1) return undefined
+  const open = text[start]
+  const close = open === '{' ? '}' : ']'
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') { inString = true; continue }
+    if (char === open) depth += 1
+    else if (char === close) {
+      depth -= 1
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, index + 1))
+        } catch {
+          return undefined
+        }
+      }
+    }
+  }
+  return undefined
+}
+
+/**
+ * Validate one extracted value exactly like a tool submission: the fixed
+ * fields overwrite model values before the schema check. Returns the compiled
+ * output on success, or the failure message to feed back to the model.
+ */
+function validateExtracted(
+  extracted: unknown,
+  fixedSnapshot: Record<string, unknown>,
+  validate: ReturnType<Ajv['compile']>,
+): { ok: true; output: unknown } | { ok: false; message: string } {
+  if (Object.keys(fixedSnapshot).length > 0 && !isPlainObject(extracted)) {
+    return { ok: false, message: 'Output must be an object when fixed output fields are mapped.' }
+  }
+  const output = isPlainObject(extracted)
+    ? { ...extracted, ...structuredClone(fixedSnapshot) }
+    : extracted
+  if (validate(output)) return { ok: true, output }
+  return { ok: false, message: schemaErrors(validate.errors) }
+}
+
 /** Compile one task report using an isolated, single-submit model loop. */
 export async function runTaskOutputCompile(
   options: TaskOutputCompileOptions,
@@ -129,7 +198,8 @@ export async function runTaskOutputCompile(
     try {
       const request = {
         messages: structuredClone(messages),
-        tools: structuredClone([submitTool]),
+        tools: [submitTool(schema)],
+        toolChoice: submitToolChoice,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       }
       result = await options.call(request)
@@ -147,6 +217,14 @@ export async function runTaskOutputCompile(
       }),
     })
     if (calls.length === 0) {
+      // Text fallback: a model that ignored the forced choice may still carry
+      // the JSON in its text; the extracted value goes through the same
+      // fixed-fields overwrite and schema validation as a tool submission.
+      const extracted = extractJsonFromText(result.text)
+      if (extracted !== undefined) {
+        const validated = validateExtracted(extracted, fixedSnapshot, validate)
+        if (validated.ok) return { ok: true, output: validated.output, report, facts: originalFacts }
+      }
       messages.push({ role: 'user', content: 'Submit the compiled output using the submit tool.' })
       continue
     }
@@ -157,11 +235,15 @@ export async function runTaskOutputCompile(
         continue
       }
       let args: unknown
-      try {
-        args = JSON.parse(call.arguments)
-      } catch (error) {
-        messages.push(toolMessage(call, errorResult('invalid_arguments', `Malformed submit arguments: ${error instanceof Error ? error.message : String(error)}`)))
-        continue
+      if (typeof call.arguments === 'string') {
+        try {
+          args = JSON.parse(call.arguments)
+        } catch (error) {
+          messages.push(toolMessage(call, errorResult('invalid_arguments', `Malformed submit arguments: ${error instanceof Error ? error.message : String(error)}`)))
+          continue
+        }
+      } else {
+        args = call.arguments
       }
       if (!isPlainObject(args) || Object.keys(args).length !== 1 || !Object.hasOwn(args, 'output')) {
         messages.push(toolMessage(call, errorResult('invalid_arguments', 'submit arguments must contain exactly the required output field.')))

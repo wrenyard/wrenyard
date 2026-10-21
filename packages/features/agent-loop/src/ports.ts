@@ -81,6 +81,9 @@ export interface MessageToolCall {
   arguments: string;
 }
 
+/** How the caller wants tools used; mirrors the session ToolChoice shape. */
+export type ToolChoice = 'auto' | 'none' | 'required' | { name: string };
+
 /** One message of a request, in protocol-neutral form. */
 export interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -270,6 +273,7 @@ export interface CallRunRequest {
   messages: readonly Message[];
   layers: Record<string, number>;
   tools?: readonly ToolSpec[];
+  toolChoice?: ToolChoice;
   signal: AbortSignal;
 }
 
