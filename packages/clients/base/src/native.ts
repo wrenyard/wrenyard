@@ -15,7 +15,7 @@ export function finishedEvent(
     sessionId: string | undefined,
     output: string,
     failed = false,
-    error?: Record<string, unknown>,
+    error?: Record<string, unknown> | string,
 ): AgentEvent {
     return {
         type: 'output',

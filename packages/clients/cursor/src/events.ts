@@ -29,6 +29,7 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: s
     let usage: Record<string, unknown> | undefined;
     let terminal: { signal: string | undefined; record: Record<string, unknown> } | undefined;
     let endReason = '';
+    let stderrTail = '';
     const flushMessage = (): AgentEvent | undefined => {
         if (!message)
             return undefined;
@@ -39,7 +40,9 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: s
     };
     for await (const item of readNativeRecords(events)) {
         if (item.kind === 'event') {
-            if (item.event.type === 'error' && !endReason)
+            if (item.event.type === 'stderr')
+                stderrTail = (stderrTail + item.event.text).slice(-4096);
+            else if (item.event.type === 'error' && !endReason)
                 endReason = item.event.message ?? 'cursor execution failed';
             else if (item.event.type === 'exit' && !endReason && item.event.exitCode !== 0 && item.event.exitCode !== null)
                 endReason = `cursor exited with code ${item.event.exitCode}`;
@@ -53,10 +56,19 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: s
                 if (usage)
                     yield { type: 'output', record: turnUsageRecord(withSample(usage, sampler, model)) };
                 const failed = endReason !== '' || !terminal || terminal.signal !== undefined;
-                const structuredError = failed && terminal?.signal !== undefined
-                    ? cursorTerminalError(terminal.signal, terminal.record)
-                    : undefined;
-                yield finishedEvent('cursor', sessionId, output, failed, structuredError);
+                let runError: Record<string, unknown> | string | undefined;
+                if (failed) {
+                    if (terminal?.signal !== undefined)
+                        runError = cursorTerminalError(terminal.signal, terminal.record);
+                    else if (endReason !== '')
+                        runError = endReason;
+                    else {
+                        const stderrLine = lastNonEmptyStderrLine(stderrTail, 600);
+                        if (stderrLine !== '')
+                            runError = `stderr: ${stderrLine}`;
+                    }
+                }
+                yield finishedEvent('cursor', sessionId, output, failed, runError);
             }
             yield item.event;
             continue;
@@ -258,6 +270,17 @@ function terminalFailureSignal(type: string, record: Record<string, unknown>): s
     if (CURSOR_TERMINAL_FAILURE_VALUES.has(normalizedStatus))
         return `status=${status}`;
     return undefined;
+}
+
+/** Last non-empty line of accumulated stderr, trimmed and capped for run_finished attribution. */
+function lastNonEmptyStderrLine(stderrTail: string, maxChars: number): string {
+    const lines = stderrTail.split(/\r?\n/);
+    for (let index = lines.length - 1; index >= 0; index--) {
+        const trimmed = lines[index]!.trim();
+        if (trimmed !== '')
+            return trimmed.length > maxChars ? trimmed.slice(0, maxChars) : trimmed;
+    }
+    return '';
 }
 
 /** Structured terminal error for run_finished, preserving Cursor's own message text. */
