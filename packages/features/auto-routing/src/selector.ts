@@ -403,6 +403,7 @@ function createSelector(
       };
     });
     const healthThreshold = settings?.healthErrorRateThreshold ?? DEFAULT_HEALTH_ERROR_RATE_THRESHOLD_PERCENT;
+    let healthAllAvoidedFallback = false;
     if (port.gatewayRouteHealth !== undefined) {
       const healthOrdering = applyHealthAwareRouteOrdering(admitted, {
         thresholdPercent: healthThreshold,
@@ -410,6 +411,20 @@ function createSelector(
         routeKeyOf: (entry) => entry.model,
       });
       admitted = healthOrdering.ordered;
+      healthAllAvoidedFallback = healthOrdering.allAvoidedFallback;
+    }
+    const toSelectorRoute = ({ model, levels }: { model: string; levels: readonly ReasoningEffort[] }) => ({
+      model,
+      reasoningEffort: requirements.minimumReasoningEffort !== undefined
+        ? resolveReasoningEffort(requirements.minimumReasoningEffort, levels)
+        : lowestReasoningEffort(levels),
+    });
+    if (healthAllAvoidedFallback) {
+      const available = admitted.filter(({ quotaState }) => quotaState !== 'exhausted');
+      if (!available.length) {
+        throw new Error(`${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
+      }
+      return available.map(toSelectorRoute);
     }
     const ladder = requirements.ladder;
     if (ladder !== undefined) {
@@ -429,20 +444,10 @@ function createSelector(
         return true;
       }));
       if (!ladderPool.length) throw new Error(`${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
-      return ladderPool.map(({ model, levels }) => ({
-        model,
-        reasoningEffort: requirements.minimumReasoningEffort !== undefined
-          ? resolveReasoningEffort(requirements.minimumReasoningEffort, levels)
-          : lowestReasoningEffort(levels),
-      }));
+      return ladderPool.map(toSelectorRoute);
     }
     if (!admitted.length) throw new Error(`${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
-    return admitted.map(({ model, levels }) => ({
-      model,
-      reasoningEffort: requirements.minimumReasoningEffort !== undefined
-        ? resolveReasoningEffort(requirements.minimumReasoningEffort, levels)
-        : lowestReasoningEffort(levels),
-    }));
+    return admitted.map(toSelectorRoute);
   };
 }
 

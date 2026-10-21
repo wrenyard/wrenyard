@@ -427,17 +427,18 @@ function normalizeDispatch(
  * it is never silently replaced by scorer defaults.
  */
 export function assertHealthErrorRateThresholdPercent(value: unknown, scope: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    fail(scope, 'healthErrorRateThreshold must be a finite number')
-  }
-  const rounded = Math.round(value)
-  if (rounded < MIN_HEALTH_ERROR_RATE_THRESHOLD_PERCENT || rounded > MAX_HEALTH_ERROR_RATE_THRESHOLD_PERCENT) {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < MIN_HEALTH_ERROR_RATE_THRESHOLD_PERCENT ||
+    value > MAX_HEALTH_ERROR_RATE_THRESHOLD_PERCENT
+  ) {
     fail(
       scope,
-      `healthErrorRateThreshold must be an integer from ${MIN_HEALTH_ERROR_RATE_THRESHOLD_PERCENT} to ${MAX_HEALTH_ERROR_RATE_THRESHOLD_PERCENT}`,
+      `healthErrorRateThreshold must be a safe integer between ${MIN_HEALTH_ERROR_RATE_THRESHOLD_PERCENT} and ${MAX_HEALTH_ERROR_RATE_THRESHOLD_PERCENT}, got ${String(value)}`,
     )
   }
-  return rounded
+  return value
 }
 
 export function normalizeRoutingWeights(raw: unknown, scope: string): TaskRoutingWeights {

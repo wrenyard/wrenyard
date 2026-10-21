@@ -517,7 +517,7 @@ const taskSettingsNullableRoutingWeightsSchema = {
 } as const satisfies JsonSchema
 
 const taskSettingsHealthErrorRateThresholdSchema = {
-  type: 'number',
+  type: 'integer',
   minimum: 1,
   maximum: 100,
 } as const satisfies JsonSchema
