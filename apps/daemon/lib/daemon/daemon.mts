@@ -1,5 +1,7 @@
 import { createRoutingAvailability, createAuxiliaryAvailability } from './services/model-routing-availability.mts'
-import { createAuxiliarySelector, excludedModelIdsFor, selectRoutesByRequirementKey, type SelectorInputPort } from '@wrenyard/auto-routing'
+import { excludedModelIdsFor, selectRoutesByRequirement, type SelectorInputPort } from '@wrenyard/auto-routing'
+import { ROLE_ROUTE_REQUIREMENTS } from '@wrenyard/session'
+import { BOT_ROUTING_REQUIREMENT } from './services/bot-agents/routing.mts'
 import { readAuxiliaryRoutingSettings } from '../config/task-settings.mts'
 import { timingSafeEqual, randomBytes, createHash } from 'node:crypto'
 import { appendFileSync, mkdirSync } from 'node:fs'
@@ -1245,7 +1247,7 @@ async function createForemanDaemonResources(
     // reasoning level); each ranked `provider/model` route is split into the
     // explicit model session.send needs.
     const selectModels = async (): Promise<readonly AgentModelRoute[]> => {
-      const routes = await selectRoutesByRequirementKey(auxiliaryRoutingOptions, 'bot')
+      const routes = await selectRoutesByRequirement(auxiliaryRoutingOptions, BOT_ROUTING_REQUIREMENT, 'bot')
       return routes.map(route => {
         const separator = route.model.indexOf('/')
         if (separator <= 0) return { provider: route.model, model: route.model, reasoningEffort: route.reasoningEffort }
@@ -1286,7 +1288,12 @@ async function createForemanDaemonResources(
       beginRouteAttempt: (publicModel, attemptId) => gateway.beginRouteAttempt(publicModel, attemptId),
       reportRouteFault: (publicModel, attemptId, kind: 'transport') => gateway.reportRouteFault(publicModel, attemptId, kind),
       completeRouteAttempt: (publicModel, attemptId) => gateway.completeRouteAttempt(publicModel, attemptId),
-      selectAuxiliary: createAuxiliarySelector(auxiliaryRoutingOptions),
+      selectAuxiliary: (role, input) => selectRoutesByRequirement(
+        auxiliaryRoutingOptions,
+        ROLE_ROUTE_REQUIREMENTS[role],
+        role,
+        input,
+      ),
       // A bot-originated turn may move down the same ranked ladder the bot
       // selects from, and an open wait must observe routing.exclude even when
       // the Gateway has no fault state for the route.

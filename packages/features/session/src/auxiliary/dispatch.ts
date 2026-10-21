@@ -7,7 +7,15 @@
  * artifacts and returns the rendered result as a deferred draft set.
  */
 
+import type { LadderStep } from '@wrenyard/auto-routing';
 import { existsSync } from 'node:fs';
+
+/** The dispatch compiler tries mid models first, then low models, then the ordinary ranked order over the rest. */
+export const DISPATCH_LADDER: readonly LadderStep[] = [
+  { intelligence: ['mid'] },
+  { intelligence: ['low'] },
+  { intelligence: ['low', 'mid', 'high', 'premium'] },
+];
 
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 

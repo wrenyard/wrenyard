@@ -11,11 +11,8 @@ import type { CandidateInput, RequiredQuotaConstraint } from './types.ts';
 import { AutoRouter } from './auto-router.ts';
 import {
   DEEPSEEK_PRICING_LOOKAHEAD_MS,
-  BOT_REQUIREMENT,
-  ROLE_REQUIREMENTS,
   TASK_REQUIREMENT,
   supportsSession,
-  type AuxiliaryCallRole,
   type RoleReasoningRequirement,
 } from './requirements.ts';
 import { deepSeekAutomaticPricingOf, effectiveRoutingCap, toAutomaticCandidateInput, type ModelRoutingEntry } from './selector-inputs.ts';
@@ -327,13 +324,9 @@ function createSelector(
       // Ladder mode pools the admitted candidates by the shared four-state
       // quota model, in ladder order, preserving the AutoRouter ranking inside
       // each pool. Exhausted routes are never used. A candidate can match only
-      // one step's quotaState, but the mid step has no state restriction, so
-      // each route is emitted at most once, at its first matching step. The
-      // global effort layer below is intentionally skipped: it could drop every
-      // auxiliary model that lacks the bot's preferred effort. Auxiliary routes
-      // use their model's lowest declared level; only bots use high-or-above.
-      // Candidates matching no step
-      // are dropped defensively.
+      // one step's quotaState, but a step with no state restriction can match
+      // any quota tier, so each route is emitted at most once, at its first
+      // matching step. Candidates matching no step are dropped defensively.
       const emitted = new Set<string>();
       const ladderPool = ladder.flatMap(step => admitted.filter(({ model, tier, quotaState }) => {
         if (quotaState === 'exhausted') return false;
@@ -343,50 +336,52 @@ function createSelector(
         emitted.add(model);
         return true;
       }));
-      if (!ladderPool.length) throw new Error(`Auxiliary role ${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
+      if (!ladderPool.length) throw new Error(`${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
       return ladderPool.map(({ model, levels }) => ({
         model,
-        // The high-or-above rule is bot-only; auxiliary ladders use the model's
-        // lowest declared level.
-        reasoningEffort: requirements.reasoningEffortRule === 'high-or-above'
-          ? resolveReasoningEffort('high', levels)
+        reasoningEffort: requirements.minimumReasoningEffort !== undefined
+          ? resolveReasoningEffort(requirements.minimumReasoningEffort, levels)
           : lowestReasoningEffort(levels),
       }));
     }
-    // Effort is a post-selection parameter: every admitted route is returned at
-    // its own lowest declared level, so the candidate set is no longer narrowed
-    // by reasoning-effort tier. The bot ladder above keeps its own high-or-above
-    // rule.
-    if (!admitted.length) throw new Error(`Auxiliary role ${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
-    return admitted.map(({ model, levels }) => ({ model, reasoningEffort: lowestReasoningEffort(levels) }));
+    if (!admitted.length) throw new Error(`${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
+    return admitted.map(({ model, levels }) => ({
+      model,
+      reasoningEffort: requirements.minimumReasoningEffort !== undefined
+        ? resolveReasoningEffort(requirements.minimumReasoningEffort, levels)
+        : lowestReasoningEffort(levels),
+    }));
   };
 }
 
 /**
- * Request facts the auxiliary selector needs beyond the role: the call's
- * `tool_choice`, or a caller-derived forced flag. `'required'` and a named tool
- * object force a tool call; `'auto'`, `'none'` and an absent value do not.
+ * Optional facts beyond the requirement: the call's `tool_choice`, or a
+ * caller-derived forced flag. `'required'` and a named tool object force a tool
+ * call; `'auto'`, `'none'` and an absent value do not.
  */
-export interface AuxiliarySelectorInput {
+export interface RequirementSelectorInput {
   toolChoice?: 'auto' | 'none' | 'required' | { readonly name: string };
   /** Pre-derived forced flag; when supplied it takes precedence over `toolChoice`. */
   forcedToolChoice?: boolean;
 }
 
-function toolChoiceIsForced(toolChoice: AuxiliarySelectorInput['toolChoice']): boolean {
+function toolChoiceIsForced(toolChoice: RequirementSelectorInput['toolChoice']): boolean {
   return toolChoice === 'required'
     || (typeof toolChoice === 'object' && toolChoice !== null && typeof toolChoice.name === 'string');
 }
 
-/** Fresh ranked routes on each invocation; no session state or result cache. */
-export function createAuxiliarySelector(port: SelectorInputPort) {
-  return async (
-    role: AuxiliaryCallRole,
-    input: AuxiliarySelectorInput = {},
-  ): Promise<SelectorRoute[]> => {
-    const forced = input.forcedToolChoice ?? toolChoiceIsForced(input.toolChoice);
-    return createSelector(port, ROLE_REQUIREMENTS[role], role, role, forced)();
-  };
+/**
+ * Rank routes for one caller-owned requirement. Fresh on each invocation; no
+ * session state or result cache.
+ */
+export async function selectRoutesByRequirement(
+  port: SelectorInputPort,
+  requirement: RoleReasoningRequirement,
+  label: string,
+  input: RequirementSelectorInput = {},
+): Promise<SelectorRoute[]> {
+  const forced = input.forcedToolChoice ?? toolChoiceIsForced(input.toolChoice);
+  return createSelector(port, requirement, label, label, forced)();
 }
 
 /**
@@ -406,29 +401,3 @@ export function createRequirementSelector(port: SelectorInputPort) {
   };
 }
 
-/**
- * Rank routes from one requirement key: `bot` uses the bot requirement and
- * `auxiliary:<role>` an auxiliary role's requirement. An unknown key is a
- * caller bug and throws naming the key.
- */
-export async function selectRoutesByRequirementKey(
-  port: SelectorInputPort,
-  key: string,
-): Promise<SelectorRoute[]> {
-  if (key === 'bot') {
-    return createSelector(
-      port,
-      BOT_REQUIREMENT,
-      `requirements(${BOT_REQUIREMENT.intelligenceMin}/${BOT_REQUIREMENT.intelligenceExpected})`,
-      'bot',
-    )();
-  }
-  const prefix = 'auxiliary:';
-  if (key.startsWith(prefix)) {
-    const role = key.slice(prefix.length) as AuxiliaryCallRole;
-    const requirements = ROLE_REQUIREMENTS[role];
-    if (requirements === undefined) throw new Error(`Unknown auxiliary role in routing requirement key: ${key}`);
-    return createSelector(port, requirements, role, role)();
-  }
-  throw new Error(`Unknown routing requirement key: ${key}`);
-}

@@ -88,8 +88,9 @@ export {
   resolveModelMetadata,
   sanitizeMessagesForRole,
 } from './model/request.ts';
-export type { AuxiliaryCallRole, RoleReasoningRequirement } from './model/roles.ts';
+export type { AuxiliaryCallRole } from './model/roles.ts';
 export { AUXILIARY_ROLE_ORDER } from './model/roles.ts';
+export { ROLE_ROUTE_REQUIREMENTS, AUXILIARY_LADDER, AUXILIARY_SCORE_WEIGHTS } from './model/route-requirements.ts';
 export type { AuxiliaryRoutePreview } from './model/roles.ts';
 export type { AttachmentInput, SessionFile, TaskArtifact } from './media.ts';
 export { FileStore, MEDIA_LIMITS } from './media.ts';

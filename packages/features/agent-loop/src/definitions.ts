@@ -24,7 +24,6 @@ export interface DefinitionPorts {
 /** One auxiliary task, as data plus its prompt builder. */
 export interface AuxiliaryDefinition {
   role: AuxiliaryDefinitionId;
-  requirementKey: `auxiliary:${AuxiliaryDefinitionId}`;
   /** The protocol methods this definition's tools expose and allow. */
   methods: readonly string[];
   /** The workspace change each method records after a successful call. */
@@ -277,7 +276,6 @@ function projectSystemPrompt(): string {
 export const AUXILIARY_DEFINITIONS: Readonly<Record<AuxiliaryDefinitionId, AuxiliaryDefinition>> = {
   document: {
     role: 'document',
-    requirementKey: 'auxiliary:document',
     methods: DOCUMENT_METHODS,
     effects: DOCUMENT_EFFECTS,
     maxRounds: DOCUMENT_MAX_ROUNDS,
@@ -286,7 +284,6 @@ export const AUXILIARY_DEFINITIONS: Readonly<Record<AuxiliaryDefinitionId, Auxil
   },
   todo: {
     role: 'todo',
-    requirementKey: 'auxiliary:todo',
     methods: TODO_METHODS,
     effects: {},
     maxRounds: TODO_MAX_ROUNDS,
@@ -295,7 +292,6 @@ export const AUXILIARY_DEFINITIONS: Readonly<Record<AuxiliaryDefinitionId, Auxil
   },
   vcs: {
     role: 'vcs',
-    requirementKey: 'auxiliary:vcs',
     methods: VCS_METHODS,
     effects: VCS_EFFECTS,
     maxRounds: VCS_MAX_ROUNDS,
@@ -304,7 +300,6 @@ export const AUXILIARY_DEFINITIONS: Readonly<Record<AuxiliaryDefinitionId, Auxil
   },
   project: {
     role: 'project',
-    requirementKey: 'auxiliary:project',
     methods: PROJECT_METHODS,
     effects: PROJECT_EFFECTS,
     maxRounds: PROJECT_MAX_ROUNDS,

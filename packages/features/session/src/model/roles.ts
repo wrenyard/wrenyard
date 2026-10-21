@@ -1,16 +1,6 @@
-/** Auxiliary selection tuning data; no IO or selection logic. */
-import type { IntelligenceTier, ModelCapability, ReasoningEffort } from '@wrenyard/models';
+/** Auxiliary role identifiers; no IO or selection logic. */
 import type { SessionRoutesPreviewRole } from '@wrenyard/protocol';
 export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch' | 'document' | 'todo' | 'vcs' | 'project' | 'reply' | 'status' | 'suggestion';
-export interface RoleReasoningRequirement {
-  intelligenceMin: IntelligenceTier;
-  intelligenceExpected: IntelligenceTier;
-  expectedTps: number;
-  minimumContextWindow: number;
-  requiredCapabilities: readonly ModelCapability[];
-  /** Ordered preference: selection keeps the routes supporting the first level any route supports. */
-  expectedReasoningEffort: readonly ReasoningEffort[];
-}
 /** Auxiliary roles in the fixed order the route preview lists them. */
 export const AUXILIARY_ROLE_ORDER: readonly AuxiliaryCallRole[] = [
   'reply',
