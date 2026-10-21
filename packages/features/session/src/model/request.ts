@@ -8,11 +8,9 @@
  * invocation. The runner keeps no session state, never parses JSON output and
  * never repairs schemas — those belong to `actions.ts` / `engine.ts`.
  *
- * The transport owns the only same-route retry and the protocol adapters. The
- * runner performs no failover for a user-chosen model; an auxiliary call uses
- * the single route the selector ranked first. A main reasoning
- * turn whose model was selected automatically may move to the next ranked
- * automatic route when the held route is exhausted or excluded.
+ * Every call sends one request on one route: the transport never retries and
+ * the runner never fails over. An auxiliary call uses the route the selector
+ * ranked first; a bot turn moves to another model only through the bot kernel.
  */
 import { randomUUID } from 'node:crypto';
 import { getEncoding } from 'js-tiktoken';
@@ -77,13 +75,7 @@ export interface ReasonSelection {
   reasoningEffort: ReasoningEffort;
   /** Explicit Fast preference: true on, false off, absent no preference. */
   fast?: boolean;
-  /**
-   * True when automatic routing selected this model (a bot dispatcher turn or a
-   * session a bot opened). Such a turn moves to the next ranked route within the
-   * same turn; a hand-picked model ends the turn at once with the quota message
-   * when a quota exhaustion with a known reset appears during a wait, rather
-   * than sleeping out to the reset.
-   */
+  /** True when automatic routing selected this model; recorded, not used for failover. */
   automatic?: boolean;
 }
 
