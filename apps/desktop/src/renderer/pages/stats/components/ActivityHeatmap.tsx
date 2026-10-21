@@ -2,7 +2,7 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/renderer
 import { Empty, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { cn } from 'cn';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { StatsDailySnapshot } from '@/shell-contract';
 import {
   HEATMAP_EMPTY,
@@ -74,6 +74,14 @@ export function ActivityHeatmap({ daily, todayKey }: { daily: StatsDailySnapshot
   const model = buildActivityHeatmap(daily.slice(-365), { endAt: new Date() });
   const containerRef = useRef<HTMLDivElement>(null);
   const [weeks, setWeeks] = useState(1);
+
+  // Measure once before paint so the first frame already spans the width.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const fit = Math.floor((el.clientWidth + GAP_PX) / (CELL_PX + GAP_PX));
+    setWeeks(Math.max(1, Math.min(fit, model.weekCount)));
+  }, [model.weekCount]);
 
   useEffect(() => {
     const el = containerRef.current;

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { clipboard, dialog, ipcMain, nativeImage, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { WrenyardIpcClient, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control';
-import type { ReasoningEffort } from '@wrenyard/models';
+import { REASONING_EFFORT_NAMES, type ReasoningEffort } from '@wrenyard/models';
 import type { ProviderListResult, ProviderQuotaResult } from '@wrenyard/protocol/provider';
 import type { SessionEventsResult } from '@wrenyard/protocol/session';
 import type { TaskRunCancelResult } from '@wrenyard/protocol/task';
@@ -192,7 +192,10 @@ function taskRuntimeLabel(value: unknown): string | undefined {
     ?? readString(resolved.client) ?? readString(resolved.provider_display_name) ?? readString(resolved.provider);
   const model = readString(resolved.model_display_name) ?? readString(resolved.model);
   const effort = readString(resolved.clientReasoningEffort) ?? readString(resolved.reasoningEffort);
-  const suffix = effort !== undefined ? ` · ${effort}` : '';
+  const effortLabel = effort !== undefined
+    ? REASONING_EFFORT_NAMES[effort as ReasoningEffort] ?? effort
+    : undefined;
+  const suffix = effortLabel !== undefined ? ` · ${effortLabel}` : '';
   if (client !== undefined && model !== undefined) return `${client} · ${model}${suffix}`;
   const recorded = typeof record.recorded === 'object' && record.recorded !== null
     ? record.recorded as Record<string, unknown>

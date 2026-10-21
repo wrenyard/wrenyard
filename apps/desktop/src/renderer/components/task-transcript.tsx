@@ -28,6 +28,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/renderer/
 import { Message, MessageContent, MessageHeader } from '@/renderer/components/ui/message';
 import { Spinner } from '@/renderer/components/ui/spinner';
 import { Markdown } from '@/renderer/components/markdown';
+import { Elapsed } from '@/renderer/components/elapsed';
 import { elapsedBetween, formatClockSeconds, formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
 import type { SafeTaskRunEventsResult, SafeTranscriptEventData, TranscriptRunInfo } from '@/pet/shared/taskgraph';
 import {
@@ -572,7 +573,7 @@ interface RunHeaderView {
   name: string;
   status?: { label: string; tone: string };
   runtime: string;
-  time: string;
+  time: ReactNode;
   tokens?: string;
 }
 
@@ -587,7 +588,7 @@ function runHeader(run: TranscriptRunInfo | null | undefined): RunHeaderView | n
   const start = run.started_at ?? run.created_at;
   const time = start === undefined
     ? '—'
-    : formatElapsedMs(elapsedBetween(start, run.ended_at, Date.now()));
+    : <Elapsed start={start} end={run.ended_at} />;
   return {
     name: run.task_name ?? '任务对话',
     ...(status === undefined ? {} : { status: { label: status.label, tone: status.tone } }),
