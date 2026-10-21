@@ -85,6 +85,11 @@ const MEMORY_METHOD_INFOS: readonly MethodInfo[] = [
 
 // ─── Lexical memory recall ──────────────────────────────────────────────────
 
+/** Project memories with an updated age beyond this are stale for recall ranking. */
+const STALE_AFTER_DAYS = 30;
+const STALE_AFTER_MS = STALE_AFTER_DAYS * 24 * 60 * 60 * 1000;
+const STALE_SCORE_FACTOR = 0.5;
+
 /** At most this many eligible BM25 paths are offered to the LLM selector. */
 const LEXICAL_SHORTLIST_MAX = 8;
 /** Eligible BM25 scores must be at least this floor. */
@@ -121,6 +126,10 @@ interface LexicalMemoryDoc {
   contentVersion: string;
   /** Tokens from the index line plus parsed name and description only. */
   metadataTokens: Set<string>;
+  memoryType: string;
+  createdAt: string;
+  updatedAt: string;
+  stale: boolean;
 }
 
 interface LexicalCorpus {
@@ -302,6 +311,29 @@ function sectionHeadingsForShortlist(body: string): string[] {
   return headings;
 }
 
+function memoryTypeFromFrontmatter(frontmatter: string): string {
+  const inline = /metadata:\s*\{[^}]*type:\s*([^,}\s]+)/u.exec(frontmatter);
+  if (inline !== null) return inline[1]!.trim();
+  const block = /metadata:\s*\n(?:[ \t]+.*\n)*?[ \t]+type:\s*(\S+)/mu.exec(frontmatter);
+  return block === null ? '' : block[1]!.trim();
+}
+
+function parseMemoryTimestamps(frontmatter: string, mtimeIso: string): { createdAt: string; updatedAt: string } {
+  const created = frontmatterField(frontmatter, 'created');
+  const updated = frontmatterField(frontmatter, 'updated');
+  return {
+    createdAt: created === '' ? mtimeIso : created,
+    updatedAt: updated === '' ? mtimeIso : updated,
+  };
+}
+
+function isStaleProjectMemory(memoryType: string, updatedAt: string, nowMs: number): boolean {
+  if (memoryType !== 'project') return false;
+  const updatedMs = Date.parse(updatedAt);
+  if (!Number.isFinite(updatedMs)) return false;
+  return nowMs - updatedMs > STALE_AFTER_MS;
+}
+
 function parsedMemoryFields(indexLine: string, fileContent: string): {
   title: string;
   description: string;
@@ -334,6 +366,9 @@ function lexicalMemoryDoc(
   indexLine: string,
   rawContent: string,
   fields: { title: string; description: string; body: string; lexicalText: string },
+  timestamps: { createdAt: string; updatedAt: string },
+  memoryType: string,
+  nowMs: number,
 ): LexicalMemoryDoc {
   const termFreq = new Map<string, number>();
   let tokenCount = 0;
@@ -342,6 +377,7 @@ function lexicalMemoryDoc(
     termFreq.set(token, (termFreq.get(token) ?? 0) + 1);
   }
   const metadataTokens = new Set(recallTokens(`${indexLine}\n${fields.title}\n${fields.description}`));
+  const stale = isStaleProjectMemory(memoryType, timestamps.updatedAt, nowMs);
   return {
     path,
     termFreq,
@@ -351,6 +387,10 @@ function lexicalMemoryDoc(
     body: fields.body,
     contentVersion: contentVersion(rawContent),
     metadataTokens,
+    memoryType,
+    createdAt: timestamps.createdAt,
+    updatedAt: timestamps.updatedAt,
+    stale,
   };
 }
 
@@ -419,7 +459,10 @@ function lexicalCorpusForRecall(
         if (memoryRecallExcluded(content)) continue;
         const indexLine = lineByPath.get(path) ?? '';
         const fields = parsedMemoryFields(indexLine, content);
-        docs.push(lexicalMemoryDoc(path, indexLine, content, fields));
+        const frontmatter = content.match(MEMORY_FRONTMATTER)?.[1] ?? '';
+        const memoryType = memoryTypeFromFrontmatter(frontmatter);
+        const timestamps = parseMemoryTimestamps(frontmatter, entry.updatedAt);
+        docs.push(lexicalMemoryDoc(path, indexLine, content, fields, timestamps, memoryType, Date.now()));
       } catch {
         incomplete = true;
       }
@@ -458,7 +501,11 @@ function lexicalCorpusForRecall(
     if (memoryRecallExcluded(content)) continue;
     const indexLine = lineByPath.get(path) ?? '';
     const fields = parsedMemoryFields(indexLine, content);
-    docs.push(lexicalMemoryDoc(path, indexLine, content, fields));
+    const frontmatter = content.match(MEMORY_FRONTMATTER)?.[1] ?? '';
+    const memoryType = memoryTypeFromFrontmatter(frontmatter);
+    const mtimeIso = new Date().toISOString();
+    const timestamps = parseMemoryTimestamps(frontmatter, mtimeIso);
+    docs.push(lexicalMemoryDoc(path, indexLine, content, fields, timestamps, memoryType, Date.now()));
   }
   const stats = corpusDocumentFrequencies(docs);
   const corpus: LexicalCorpus = { docs, ...stats };
@@ -513,7 +560,8 @@ function buildShortlistMemoryIndex(
   for (const path of shortlist) {
     const doc = docByPath.get(path);
     const title = doc === undefined ? '' : sanitizeShortlistText(doc.title);
-    const label = title !== '' ? title : shortlistLinkLabel(path);
+    const baseLabel = title !== '' ? title : shortlistLinkLabel(path);
+    const label = baseLabel + (doc?.stale === true ? ' (stale)' : '');
     lines.push(`- [${label}](${path})`);
     if (doc !== undefined && doc.description !== '') lines.push(sanitizeShortlistText(doc.description));
     const excerpt = doc === undefined ? '' : bodyExcerptNearQuery(doc.body, query, SHORTLIST_BODY_EXCERPT);
@@ -628,7 +676,10 @@ function evaluateLexicalRecall(
   const query = recallQueryTokens(input);
   if (query.length === 0) return { kind: 'empty' };
   const docByPath = new Map(corpus.docs.map((doc) => [doc.path, doc]));
-  const scores = bm25Scores(query, corpus);
+  const scores = bm25Scores(query, corpus).map((score, index) => {
+    const doc = corpus.docs[index];
+    return doc?.stale === true ? score * STALE_SCORE_FACTOR : score;
+  });
   const ranked = scores
     .map((score, index) => ({ score, path: corpus.docs[index]!.path }))
     .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path));

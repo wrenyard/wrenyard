@@ -42,7 +42,7 @@ import type {
   WorkspaceSwitchResult,
 } from '../protocol/registry.mts'
 import { TaskService, isTaskRunRejection } from '../core/task/service.mts'
-import { createSession, resolveModelMetadata, type Session } from '@wrenyard/session'
+import { createSession, createWorkspaceMemory, resolveModelMetadata, type Session } from '@wrenyard/session'
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
 import { createScheduler, type Scheduler } from './services/scheduler.mts'
@@ -229,6 +229,8 @@ interface ForemanDaemonResources {
    * it reuses the same assembly code as startup instead of duplicating it.
    */
   rebindWorkspace: (requestedRoot: string) => Promise<WorkspaceSwitchResult>
+  /** The workspace root sessions use; updates after an in-process switch. */
+  currentWorkspaceRoot: () => string
 }
 
 interface LowDiskState { status: 'ok' | 'low' | 'unavailable'; availableBytes: number | null; minimumBytes: number; error: string | null }
@@ -291,6 +293,8 @@ export class ForemanDaemon implements RunningForemanDaemon {
   private lowDiskState: LowDiskState = lowDiskStateForProcess
   private lowDiskTimer: ReturnType<typeof setInterval> | undefined
   private dbCleanupTimer: ReturnType<typeof setInterval> | undefined
+  private memoryConsolidationInitialTimer: ReturnType<typeof setTimeout> | undefined
+  private memoryConsolidationTimer: ReturnType<typeof setInterval> | undefined
   private stopEventLoopMonitor: (() => void) | undefined
 
   private shutdownRequestedFlag = false
@@ -412,7 +416,10 @@ export class ForemanDaemon implements RunningForemanDaemon {
       throw error
     }
     const resources = this.resources
-    if (resources) void this.broadcastSuiteVersionChange().catch(() => {})
+    if (resources) {
+      this.scheduleWorkspaceMemoryConsolidation(() => resources.currentWorkspaceRoot())
+      void this.broadcastSuiteVersionChange().catch(() => {})
+    }
     if (resources && this.onStarted) this.onStarted({ ipcPath: resources.ipcPath })
   }
 
@@ -558,6 +565,42 @@ export class ForemanDaemon implements RunningForemanDaemon {
   }
 
   /**
+   * Non-blocking workspace memory consolidation: one delayed pass after attach,
+   * then on a fixed interval. Failures are logged only; timers are unref'd and
+   * cleared on close().
+   */
+  private scheduleWorkspaceMemoryConsolidation(workspaceRoot: () => string | undefined): void {
+    if (this.memoryConsolidationInitialTimer) clearTimeout(this.memoryConsolidationInitialTimer)
+    this.memoryConsolidationInitialTimer = undefined
+    if (this.memoryConsolidationTimer) clearInterval(this.memoryConsolidationTimer)
+    this.memoryConsolidationTimer = undefined
+
+    const runPass = (): void => {
+      const root = workspaceRoot()
+      if (root === undefined) return
+      void createWorkspaceMemory(root).consolidate().then((report) => {
+        writeDaemonLog('info', 'workspace memory consolidation', {
+          merged: report.merged.length,
+          mergedNames: report.merged.slice(0, MEMORY_CONSOLIDATION_LOG_NAME_LIMIT),
+          pruned: report.pruned.length,
+          prunedNames: report.pruned.slice(0, MEMORY_CONSOLIDATION_LOG_NAME_LIMIT),
+          indexRebuilt: report.indexRebuilt,
+        })
+      }).catch((error: unknown) => {
+        writeDaemonLog('warn', 'workspace memory consolidation failed', error)
+      })
+    }
+
+    this.memoryConsolidationInitialTimer = setTimeout(() => {
+      this.memoryConsolidationInitialTimer = undefined
+      runPass()
+    }, MEMORY_CONSOLIDATION_INITIAL_DELAY_MS)
+    this.memoryConsolidationInitialTimer.unref?.()
+    this.memoryConsolidationTimer = setInterval(runPass, MEMORY_CONSOLIDATION_INTERVAL_MS)
+    this.memoryConsolidationTimer.unref?.()
+  }
+
+  /**
    * Waits for admitted work to finish by polling isIdle() every 200ms until the
    * daemon is idle, an explicit force skips the wait, or the drain exceeds
    * SHUTDOWN_DRAIN_TIMEOUT_MS. On timeout the drain escalates to force so the
@@ -621,6 +664,10 @@ export class ForemanDaemon implements RunningForemanDaemon {
     this.lowDiskTimer = undefined
     if (this.dbCleanupTimer) clearInterval(this.dbCleanupTimer)
     this.dbCleanupTimer = undefined
+    if (this.memoryConsolidationInitialTimer) clearTimeout(this.memoryConsolidationInitialTimer)
+    this.memoryConsolidationInitialTimer = undefined
+    if (this.memoryConsolidationTimer) clearInterval(this.memoryConsolidationTimer)
+    this.memoryConsolidationTimer = undefined
     // Cut off cleanup admission, ask the in-flight serialized run to interrupt
     // itself at its next DB batch or vacuum yield boundary, and wait for the
     // chain under the shutdown drain budget before the database is released.
@@ -2212,6 +2259,7 @@ async function createForemanDaemonResources(
     taskgraphService: workspaceScoped.taskgraphService,
     restoreGatewayEnvironment,
     rebindWorkspace,
+    currentWorkspaceRoot: () => workspaceScoped.workspaceRoot,
   }
   return resources
 }
@@ -2855,6 +2903,13 @@ const SHUTDOWN_DRAIN_TIMEOUT_MS = 20_000
  * is unref'd so it never keeps the daemon alive, and close() clears it.
  */
 const DB_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000
+
+/** Delay before the first workspace memory consolidation pass after attach (60 seconds). */
+const MEMORY_CONSOLIDATION_INITIAL_DELAY_MS = 60_000
+/** Interval between workspace memory consolidation passes (24 hours). */
+const MEMORY_CONSOLIDATION_INTERVAL_MS = 24 * 60 * 60 * 1000
+/** Maximum memory names included per merge/prune field in consolidation logs. */
+const MEMORY_CONSOLIDATION_LOG_NAME_LIMIT = 20
 
 /**
  * Live daemon execution load, read from the database directly with no IPC round

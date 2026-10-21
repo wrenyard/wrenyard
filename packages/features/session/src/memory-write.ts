@@ -53,6 +53,16 @@ export interface MemoryRemoval {
   previous?: string;
 }
 
+/** Bounded summary of one serialized consolidation pass. */
+export interface MemoryConsolidationReport {
+  /** Frontmatter names whose duplicate files were merged into the keeper. */
+  merged: string[];
+  /** Frontmatter names removed during merge or prune. */
+  pruned: string[];
+  /** Whether `INDEX.md` was rewritten from the surviving memory set. */
+  indexRebuilt: boolean;
+}
+
 /** The narrow workspace memory surface the engine may use after a reply. */
 export interface WorkspaceMemoryPort {
   /** Current `memories/INDEX.md` text, or the empty string when unreadable. */
@@ -65,6 +75,13 @@ export interface WorkspaceMemoryPort {
   save(candidate: unknown, record: (change: MemoryChange) => Promise<void>): Promise<void>;
   /** Delete one memory by name and drop its index line; records both. */
   remove(candidate: unknown, record: (change: MemoryChange) => Promise<void>): Promise<void>;
+  /** Merge duplicate subjects, prune orphans, and rebuild the index; serialized per root. */
+  consolidate(): Promise<MemoryConsolidationReport>;
+}
+
+/** Normalize a memory subject for duplicate detection; kebab names collapse trivial variants. */
+export function normalizeMemorySubject(name: string): string {
+  return name.normalize('NFKC').toLowerCase().replace(/_/gu, '-').replace(/-+/gu, '-');
 }
 
 /**
@@ -284,30 +301,37 @@ export function createWorkspaceMemory(workspaceRoot: string, directoryName = 'me
     }
   };
 
-  /**
-   * The stored memory carrying one frontmatter name. Every file in the
-   * directory is validated as a direct regular file first, so a symlink or a
-   * traversal inside the memory directory is refused rather than read.
-   */
-  const findByName = (
-    name: string,
-  ): { filename: string; data: Record<string, unknown>; body: string } | undefined => {
-    if (directDirectory(directory) === undefined) return undefined;
-    const matches: { filename: string; data: Record<string, unknown>; body: string }[] = [];
+  type ParsedMemory = { filename: string; data: Record<string, unknown>; body: string };
+
+  /** Every parsed memory file in the directory, skipping malformed entries. */
+  const listParsed = (): ParsedMemory[] => {
+    if (directDirectory(directory) === undefined) return [];
+    const found: ParsedMemory[] = [];
     for (const filename of readdirSync(directory).sort()) {
       if (filename === 'INDEX.md' || !filename.endsWith('.md')) continue;
       const path = join(directory, filename);
       directFile(path);
-      let parsed: { data: Record<string, unknown>; body: string };
       try {
-        parsed = readFrontmatter(readFileSync(path, 'utf8'));
+        const parsed = readFrontmatter(readFileSync(path, 'utf8'));
+        found.push({ filename, ...parsed });
       } catch {
-        // An unrelated malformed file is left untouched, not repaired.
         continue;
       }
-      if (parsed.data.name === name) matches.push({ filename, ...parsed });
     }
-    if (matches.length > 1) throw new Error('existing memory name is ambiguous');
+    return found;
+  };
+
+  /**
+   * The stored memory for one subject. Exact frontmatter name wins; otherwise
+   * the first file whose normalized subject matches.
+   */
+  const findBySubject = (name: string): ParsedMemory | undefined => {
+    const subject = normalizeMemorySubject(name);
+    const matches = listParsed().filter((entry) => {
+      const entryName = typeof entry.data.name === 'string' ? entry.data.name : stemOf(entry.filename);
+      return entry.data.name === name || normalizeMemorySubject(entryName) === subject;
+    });
+    if (matches.length > 1) throw new Error('existing memory subject is ambiguous');
     return matches[0];
   };
 
@@ -350,7 +374,7 @@ export function createWorkspaceMemory(workspaceRoot: string, directoryName = 'me
     const candidate = parseRemoval(raw);
     // Prevalidate every path this removal may touch before the first change.
     directDirectory(directory);
-    const before = findByName(candidate.name);
+    const before = findBySubject(candidate.name);
     if (before === undefined) throw new Error(`memory ${candidate.name} does not exist`);
     if (candidate.previous !== undefined && normal(candidate.previous) !== before.body) {
       throw new Error('memory changed or was not read; supply its exact current body as previous');
@@ -374,7 +398,7 @@ export function createWorkspaceMemory(workspaceRoot: string, directoryName = 'me
     const directoryExists = directDirectory(directory) !== undefined;
     directFile(indexPath);
 
-    const before = findByName(candidate.name);
+    const before = findBySubject(candidate.name);
     // Upsert by name: keep the existing filename, never rename an existing memory.
     const filename = before?.filename ?? `${candidate.name}.md`;
     if (!FILE.test(filename) || filename.toLowerCase() === 'index.md') {
@@ -387,32 +411,34 @@ export function createWorkspaceMemory(workspaceRoot: string, directoryName = 'me
 
     const metadata = before?.data.metadata;
     const oldType = isObject(metadata) ? metadata.type : undefined;
-    const changed = before === undefined
+    const bodyChanged = before !== undefined && before.body !== candidate.content;
+    const metaChanged = before === undefined
       || before.data.description !== candidate.description
-      || oldType !== candidate.type
-      || before.body !== candidate.content;
+      || oldType !== candidate.type;
     // A changed existing fact may only be replaced when its exact current body
     // was supplied, so a stale or blind write can never drop valid content.
-    if (before !== undefined && changed
-      && (candidate.previous === undefined || normal(candidate.previous) !== before.body)) {
+    if (bodyChanged
+      && (candidate.previous === undefined || normal(candidate.previous) !== before!.body)) {
       throw new Error('memory changed or was not read; supply its exact current body as previous');
     }
 
+    const now = new Date().toISOString();
+    const created = typeof before?.data.created === 'string' ? before.data.created : now;
     const content = `---\n${stringify({
       ...(before?.data ?? {}),
       name: candidate.name,
       description: candidate.description,
+      created,
+      updated: now,
       metadata: { ...(isObject(metadata) ? metadata : {}), type: candidate.type },
     })}---\n\n${candidate.content}\n`;
     const oldIndex = directFile(indexPath) !== undefined ? readFileSync(indexPath, 'utf8') : '';
     const nextIndex = updateIndex(oldIndex, candidate.name, filename, candidate.description);
 
     if (!directoryExists) mkdirSync(directory, { recursive: true });
-    if (changed) {
-      atomicWrite(path, content);
-      await record({ path: `${directoryName}/${filename}`, content });
-    }
-    if (nextIndex.text !== oldIndex) {
+    atomicWrite(path, content);
+    await record({ path: `${directoryName}/${filename}`, content });
+    if (nextIndex.text !== oldIndex || metaChanged) {
       directDirectory(directory);
       directFile(indexPath);
       atomicWrite(indexPath, nextIndex.text);
@@ -420,10 +446,72 @@ export function createWorkspaceMemory(workspaceRoot: string, directoryName = 'me
     }
   };
 
+  const applyConsolidate = async (): Promise<MemoryConsolidationReport> => {
+    if (directDirectory(directory) === undefined) {
+      return { merged: [], pruned: [], indexRebuilt: false };
+    }
+    const merged: string[] = [];
+    const pruned: string[] = [];
+    const parsed = listParsed();
+    const bySubject = new Map<string, ParsedMemory[]>();
+    for (const entry of parsed) {
+      const entryName = typeof entry.data.name === 'string' ? entry.data.name : stemOf(entry.filename);
+      const subject = normalizeMemorySubject(entryName);
+      const group = bySubject.get(subject) ?? [];
+      group.push(entry);
+      bySubject.set(subject, group);
+    }
+    for (const group of bySubject.values()) {
+      if (group.length <= 1) continue;
+      const sorted = [...group].sort((left, right) => {
+        const leftUpdated = typeof left.data.updated === 'string' ? left.data.updated : '';
+        const rightUpdated = typeof right.data.updated === 'string' ? right.data.updated : '';
+        return rightUpdated.localeCompare(leftUpdated) || left.filename.localeCompare(right.filename);
+      });
+      const keeper = sorted[0]!;
+      const keeperName = typeof keeper.data.name === 'string' ? keeper.data.name : stemOf(keeper.filename);
+      let body = keeper.body;
+      const metadata = keeper.data.metadata;
+      const keeperType = isObject(metadata) ? metadata.type : undefined;
+      for (const duplicate of sorted.slice(1)) {
+        body = body === duplicate.body ? body : `${body}\n\n${duplicate.body}`;
+        pruned.push(typeof duplicate.data.name === 'string' ? duplicate.data.name : stemOf(duplicate.filename));
+        rmSync(join(directory, duplicate.filename));
+      }
+      if (sorted.length > 1) merged.push(keeperName);
+      const now = new Date().toISOString();
+      const created = typeof keeper.data.created === 'string' ? keeper.data.created : now;
+      const description = typeof keeper.data.description === 'string' ? keeper.data.description : keeperName;
+      const content = `---\n${stringify({
+        ...keeper.data,
+        name: keeperName,
+        description,
+        created,
+        updated: now,
+        metadata: { ...(isObject(metadata) ? metadata : {}), ...(keeperType === undefined ? {} : { type: keeperType }) },
+      })}---\n\n${body}\n`;
+      atomicWrite(join(directory, keeper.filename), content);
+    }
+    const survivors = listParsed();
+    const eol = '\n';
+    const indexLines = survivors
+      .map((entry) => {
+        const entryName = typeof entry.data.name === 'string' ? entry.data.name : stemOf(entry.filename);
+        const description = typeof entry.data.description === 'string' ? entry.data.description : entryName;
+        return indexLine(entryName, entry.filename, description);
+      })
+      .sort((left, right) => left.localeCompare(right));
+    const rebuilt = indexLines.length === 0 ? '' : `${indexLines.join(eol)}${eol}`;
+    const oldIndex = directFile(indexPath) !== undefined ? readFileSync(indexPath, 'utf8') : '';
+    const indexRebuilt = rebuilt !== oldIndex;
+    if (indexRebuilt) atomicWrite(indexPath, rebuilt);
+    return { merged, pruned, indexRebuilt };
+  };
+
   /** Run one read-modify-write at a time, so two calls cannot interleave. */
-  const enqueue = (task: () => Promise<void>): Promise<void> => {
+  const enqueue = <T>(task: () => Promise<T>): Promise<T> => {
     const previous = queues.get(root) ?? Promise.resolve();
-    const run = previous.then(task);
+    const run: Promise<T> = previous.then(() => task());
     // Keep the queue alive after a failure so later calls still run.
     const tail = run.then(
       () => undefined,
@@ -445,6 +533,9 @@ export function createWorkspaceMemory(workspaceRoot: string, directoryName = 'me
     },
     remove(raw, record) {
       return enqueue(() => applyRemove(raw, record));
+    },
+    consolidate() {
+      return enqueue(() => applyConsolidate());
     },
   };
 }
