@@ -1,5 +1,5 @@
 import { useState, type RefObject } from 'react';
-import { LegendRow } from '@/renderer/components/usage/UsageCard';
+import { LegendGap, LegendList, LegendRow } from '@/renderer/components/usage/UsageCard';
 import { TokenBar, type TokenBarSegment } from '@/renderer/components/usage/TokenBar';
 import { formatCost, formatTokenCount } from '@/renderer/lib/format';
 import type { DisplayCurrency } from '@/shell-contract';
@@ -144,18 +144,21 @@ export function SessionUsagePanel({ clusters, groups, rootRef, currency }: Sessi
         <span className="shrink-0 whitespace-nowrap text-sm tabular-nums text-muted-foreground">{costLabel(totals.cost, currency)}</span>
       </div>
       <TokenBar segments={segments} />
-      {segments.map((segment) => (
-        <LegendRow
-          key={segment.id}
-          label={segment.label}
-          swatch={segment.color}
-          value={formatTokenCount(segment.tokens)}
-          percent={sharePercent(segment.tokens, totals.total)}
-        />
-      ))}
-      <SourceLegendRow label="推理" cluster={find('reason')} groups={groups.reason} currency={currency} />
-      <SourceLegendRow label="辅助" cluster={find('aux')} groups={groups.aux} currency={currency} />
-      <SourceLegendRow label="任务" cluster={find('task')} groups={groups.task} currency={currency} />
+      <LegendList>
+        {segments.map((segment) => (
+          <LegendRow
+            key={segment.id}
+            label={segment.label}
+            swatch={segment.color}
+            value={formatTokenCount(segment.tokens)}
+            percent={sharePercent(segment.tokens, totals.total)}
+          />
+        ))}
+        <LegendGap />
+        <SourceLegendRow label="推理" cluster={find('reason')} groups={groups.reason} currency={currency} />
+        <SourceLegendRow label="辅助" cluster={find('aux')} groups={groups.aux} currency={currency} />
+        <SourceLegendRow label="任务" cluster={find('task')} groups={groups.task} currency={currency} />
+      </LegendList>
     </div>
   );
 }

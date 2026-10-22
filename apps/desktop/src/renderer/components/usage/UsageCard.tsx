@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type ComponentProps, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from 'cn';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
@@ -54,6 +54,16 @@ export function UsageCardSkeletonBody() {
   );
 }
 
+/** Shared four-column grid (icon · title · value · trailing) for a card's legend rows. */
+export function LegendList({ className, ...rest }: ComponentProps<'div'>) {
+  return <div className={cn('grid grid-cols-[--spacing(3.5)_minmax(0,1fr)_auto_auto] gap-x-2', className)} {...rest} />;
+}
+
+/** Spacer row between the legend section and the expandable section. */
+export function LegendGap() {
+  return <div className="col-span-full h-2" aria-hidden="true" />;
+}
+
 export interface LegendRowProps {
   label: ReactNode;
   value?: ReactNode;
@@ -65,21 +75,29 @@ export interface LegendRowProps {
   onToggle?: () => void;
   children?: ReactNode;
   title?: string;
+  className?: string;
 }
 
-export function LegendRow({ label, value, percent, swatch, muted = false, expandable = false, expanded = false, onToggle, children, title }: LegendRowProps) {
+export function LegendRow({ label, value, percent, swatch, muted = false, expandable = false, expanded = false, onToggle, children, title, className }: LegendRowProps) {
+  const rowClassName = cn('col-span-full grid grid-cols-subgrid h-6 items-center text-sm', muted && 'text-muted-foreground', className);
   const content = (
     <>
-      {expandable ? <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-90')} aria-hidden="true" /> : <span className="size-2.5 shrink-0 rounded-[3px]" style={swatch === undefined ? undefined : { backgroundColor: swatch }} />}
-      <span className="min-w-0 flex-1 truncate" title={title}>{label}</span>
-      {value !== undefined && <span className="w-16 shrink-0 whitespace-nowrap text-right tabular-nums text-muted-foreground">{value}</span>}
-      {percent !== undefined && <span className="w-20 shrink-0 overflow-hidden whitespace-nowrap text-right tabular-nums">{percent}</span>}
+      <span className="flex size-3.5 items-center justify-center">
+        {expandable
+          ? <ChevronRight className={cn('size-3.5 text-muted-foreground transition-transform', expanded && 'rotate-90')} aria-hidden="true" />
+          : swatch !== undefined && <span className="size-2.5 rounded-[3px]" style={{ backgroundColor: swatch }} />}
+      </span>
+      <span className="min-w-0 truncate" title={title}>{label}</span>
+      {value !== undefined ? <span className="whitespace-nowrap text-right tabular-nums text-muted-foreground">{value}</span> : <span />}
+      {percent !== undefined ? <span className="overflow-hidden whitespace-nowrap text-right tabular-nums">{percent}</span> : <span />}
     </>
   );
   return (
-    <div className={cn('text-sm', muted && 'text-muted-foreground')}>
-      {expandable ? <button type="button" className="flex h-6 w-full items-center gap-2 text-left" aria-expanded={expanded} onClick={onToggle}>{content}</button> : <div className="flex h-6 items-center gap-2">{content}</div>}
-      {expandable && expanded && children !== undefined && <div className="pl-6">{children}</div>}
-    </div>
+    <>
+      {expandable
+        ? <button type="button" className={cn(rowClassName, 'text-left')} aria-expanded={expanded} onClick={onToggle}>{content}</button>
+        : <div className={rowClassName}>{content}</div>}
+      {expandable && expanded ? children : null}
+    </>
   );
 }

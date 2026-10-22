@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
 import { TokenBar, type TokenBarSegment } from '@/renderer/components/usage/TokenBar';
-import { LegendRow } from '@/renderer/components/usage/UsageCard';
+import { LegendGap, LegendList, LegendRow } from '@/renderer/components/usage/UsageCard';
 import { usageRingLevel } from '@/renderer/components/usage/UsageRing';
 import { formatTokenCount, formatRatio } from '@/renderer/lib/format';
 import type { ContextBudgetView, RoleContextEntry, UsageGroupView } from '../../model/usage.js';
@@ -75,20 +75,6 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
         </Alert>
       )}
       <TokenBar segments={segments} window={budget.window} reserved={budget.reserved} />
-      <div className="flex flex-col">
-        {groups.map((group) => {
-          const pct = compositionTotal > 0 ? (group.tokens / compositionTotal) * 100 : 0;
-          return (
-            <LegendRow
-              key={group.id}
-              label={group.label}
-              swatch={group.color}
-              value={formatTokenCount(group.tokens)}
-              percent={`${pct.toFixed(1)}%`}
-            />
-          );
-        })}
-      </div>
     </div>
   );
 
@@ -112,8 +98,20 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
   return (
     <div className="flex flex-col gap-1.5" data-slot="context-breakdown">
       {estimateDetail}
-
-      <div className="flex flex-col">
+      <LegendList>
+        {budget !== undefined && groups.map((group) => {
+          const pct = compositionTotal > 0 ? (group.tokens / compositionTotal) * 100 : 0;
+          return (
+            <LegendRow
+              key={group.id}
+              label={group.label}
+              swatch={group.color}
+              value={formatTokenCount(group.tokens)}
+              percent={`${pct.toFixed(1)}%`}
+            />
+          );
+        })}
+        <LegendGap />
         {reason !== undefined && <RoleRow entry={reason} />}
         {auxiliary.length > 0 && (
           <LegendRow
@@ -126,7 +124,7 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
             {auxiliary.map((entry) => <RoleRow key={entry.role} entry={entry} />)}
           </LegendRow>
         )}
-      </div>
+      </LegendList>
     </div>
   );
 }
