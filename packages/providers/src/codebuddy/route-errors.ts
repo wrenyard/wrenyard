@@ -55,6 +55,20 @@ const envelope = (type: string, message: string, code?: string): Record<string, 
   error: { message, type, code: code ?? null, param: null },
 });
 
+/** Official Messages error shape: `{ type: 'error', error: { type, message } }`. */
+const messagesEnvelope = (type: string, message: string): Record<string, unknown> => ({
+  type: 'error',
+  error: { type, message },
+});
+
+/** Status -> official Messages `error.type`, matching the gateway messages.ts conventions. */
+const MESSAGES_STATUS_TYPES: Readonly<Record<number, string>> = {
+  400: 'invalid_request_error', 401: 'authentication_error', 403: 'permission_error',
+  404: 'not_found_error', 408: 'timeout_error', 413: 'request_too_large',
+  429: 'rate_limit_error', 503: 'overloaded_error',
+};
+const MESSAGES_SERVER_TYPE = 'api_error';
+
 /** The message a private CodeBuddy error carries, or a status-derived fallback. */
 function supplierMessage(row: Record<string, unknown>, status: number): string {
   const message = first(row, 'message', 'msg', 'error_message');
@@ -78,13 +92,19 @@ function supplierMessage(row: Record<string, unknown>, status: number): string {
  * `undefined` so the Gateway forwards the upstream bytes unchanged. No generic
  * error vocabulary is introduced here.
  */
-export function codeBuddyProtocolError(input: { status: number; body: unknown }): { status: number; body: Record<string, unknown> } | undefined {
+export function codeBuddyProtocolError(input: { status: number; body: unknown; protocol?: string }): { status: number; body: Record<string, unknown> } | undefined {
   const root = object(input.body);
   const error = object(root.error);
   const row = Object.keys(error).length ? error : root;
   const code = first(row, 'reason_code', 'code', 'type');
   const official = error.message !== undefined || (typeof error.code === 'string' && error.code !== '');
   const type = STATUS_TYPES[input.status] ?? (input.status >= 500 ? SERVER_TYPE : 'invalid_request_error');
+  const isMessages = input.protocol === 'anthropic_messages';
+
+  // The official Messages envelope wraps the error in `{ type: 'error',
+  // error: { type, message } }`; an official Messages body passes through
+  // verbatim. Detection mirrors the gateway's messages.ts isOfficialErrorBody.
+  const officialMessages = root.type === 'error' && Object.keys(error).length > 0;
 
   if (typeof code === 'string' && QUOTA_CODES.has(code)) {
     // Known permanent exhaustion is always restored to the fixed official
@@ -93,17 +113,26 @@ export function codeBuddyProtocolError(input: { status: number; body: unknown })
     // A body that is already the official 429 `insufficient_quota` shape is
     // left to verbatim pass-through.
     if (input.status === 429 && code === 'insufficient_quota' && official) return undefined;
-    return { status: 429, body: envelope('rate_limit_error', supplierMessage(row as Record<string, unknown>, input.status), 'insufficient_quota') };
+    return isMessages
+      ? { status: 429, body: messagesEnvelope('rate_limit_error', supplierMessage(row as Record<string, unknown>, input.status)) }
+      : { status: 429, body: envelope('rate_limit_error', supplierMessage(row as Record<string, unknown>, input.status), 'insufficient_quota') };
   }
   if (typeof code === 'string' && MODEL_CODES.has(code) && input.status !== 404) {
-    return { status: 404, body: envelope('not_found_error', supplierMessage(row as Record<string, unknown>, input.status), code) };
+    return isMessages
+      ? { status: 404, body: messagesEnvelope('not_found_error', supplierMessage(row as Record<string, unknown>, input.status)) }
+      : { status: 404, body: envelope('not_found_error', supplierMessage(row as Record<string, unknown>, input.status), code) };
   }
   // An official envelope is left to the Gateway's verbatim pass-through.
-  if (official) return undefined;
+  if (isMessages ? officialMessages : official) return undefined;
   // A private structure is wrapped onto the entry protocol's official shape.
   return {
     status: input.status,
-    body: envelope(type, supplierMessage(row as Record<string, unknown>, input.status), typeof code === 'string' ? code : undefined),
+    body: isMessages
+      ? messagesEnvelope(
+          MESSAGES_STATUS_TYPES[input.status] ?? (input.status >= 500 ? MESSAGES_SERVER_TYPE : 'invalid_request_error'),
+          supplierMessage(row as Record<string, unknown>, input.status),
+        )
+      : envelope(type, supplierMessage(row as Record<string, unknown>, input.status), typeof code === 'string' ? code : undefined),
   };
 }
 

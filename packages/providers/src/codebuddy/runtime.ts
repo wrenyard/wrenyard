@@ -142,7 +142,11 @@ export function applyCodeBuddyNativeHeaders(
   credential: CodeBuddyCredential,
   protocol: string,
 ): void {
-  if (provider.id !== 'codebuddy' || provider.credentialResolver !== 'codebuddy' || protocol !== 'openai_chat') return;
+  if (
+    provider.id !== 'codebuddy' ||
+    provider.credentialResolver !== 'codebuddy' ||
+    (protocol !== 'openai_chat' && protocol !== 'anthropic_messages')
+  ) return;
   const nativeHeaders = codeBuddyNativeHeaders.get(credential);
   if (!nativeHeaders) return;
   for (const name of CODEBUDDY_NATIVE_HEADER_NAMES) {
@@ -173,6 +177,18 @@ function codeBuddyId(): string {
  * or an assistant message that is still waiting on its tool calls - must reuse
  * the cached id.
  */
+/** True when a Messages content array carries a block of the given type. */
+function hasBlock(entry: Record<string, unknown>, type: string): boolean {
+  const content = entry.content;
+  return Array.isArray(content) && content.some(
+    (block) =>
+      block !== null &&
+      typeof block === 'object' &&
+      !Array.isArray(block) &&
+      (block as Record<string, unknown>).type === type,
+  );
+}
+
 function codeBuddyContinuesTurn(body: Record<string, unknown>): boolean {
   const messages = body.messages;
   if (!Array.isArray(messages) || messages.length === 0) return false;
@@ -181,8 +197,9 @@ function codeBuddyContinuesTurn(body: Record<string, unknown>): boolean {
   const entry = last as Record<string, unknown>;
   const role = typeof entry.role === 'string' ? entry.role : '';
   if (role === 'tool' || role === 'function') return true;
+  if (role === 'user') return hasBlock(entry, 'tool_result');
   if (role !== 'assistant') return false;
-  return Array.isArray(entry.tool_calls) || entry.function_call !== undefined;
+  return Array.isArray(entry.tool_calls) || entry.function_call !== undefined || hasBlock(entry, 'tool_use');
 }
 
 /**
@@ -204,7 +221,19 @@ function codeBuddyConversationKey(executionId: string | undefined, body: Record<
       (entry as Record<string, unknown>).role === 'user',
   );
   const prefix = messages.slice(0, firstUser >= 0 ? firstUser + 1 : 1);
-  return `prefix:${createHash('sha256').update(JSON.stringify(prefix)).digest('hex')}`;
+  // Chat and Messages bodies encode the same conversation differently (role
+  // 'tool' rows and tool_calls versus content blocks), so the digest keys on
+  // the request's shape: a Messages-shaped prefix cannot collide with the
+  // identical logical history sent through the Chat endpoint.
+  const messagesShaped = prefix.some(
+    (entry) =>
+      entry !== null &&
+      typeof entry === 'object' &&
+      !Array.isArray(entry) &&
+      Array.isArray((entry as Record<string, unknown>).content),
+  );
+  const shape = messagesShaped ? 'messages' : 'chat';
+  return `prefix:${createHash('sha256').update(`${shape}:${JSON.stringify(prefix)}`).digest('hex')}`;
 }
 
 type CodeBuddyProviderAccount = NonNullable<CodeBuddyProviderProduct['account']>;
@@ -334,9 +363,10 @@ export function createCodeBuddyRuntime(
      * never knows these headers are CodeBuddy-specific.
      */
     async beforeRequest(context: ProviderRequestHookContext): Promise<void> {
-      if (context.protocol !== 'openai_chat') return;
+      if (context.protocol !== 'openai_chat' && context.protocol !== 'anthropic_messages') return;
       // The /v2/chat/completions upstream accepts only a string tool_choice and rejects the object form.
-      if (context.body.tool_choice !== null && typeof context.body.tool_choice === 'object') {
+      // The Messages endpoint keeps its native tool_choice structure, so this rewrite stays Chat-only.
+      if (context.protocol === 'openai_chat' && context.body.tool_choice !== null && typeof context.body.tool_choice === 'object') {
         context.body.tool_choice = 'required';
       }
       if (ready?.identity) {
@@ -367,8 +397,8 @@ export function createCodeBuddyRuntime(
     },
     /** Correct only the CodeBuddy departures from the official Chat contract. */
     afterResponse(context: ProviderResponseHookContext): ProviderResponseHookResult | undefined {
-      if (context.protocol !== 'openai_chat' || context.status < 400) return undefined;
-      const mapped = codeBuddyProtocolError({ status: context.status, body: context.errorBody });
+      if ((context.protocol !== 'openai_chat' && context.protocol !== 'anthropic_messages') || context.status < 400) return undefined;
+      const mapped = codeBuddyProtocolError({ status: context.status, body: context.errorBody, protocol: context.protocol });
       return mapped === undefined ? undefined : { status: mapped.status, errorBody: mapped.body };
     },
     async credential(): Promise<CodeBuddyCredential | undefined> {

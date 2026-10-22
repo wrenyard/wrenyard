@@ -215,7 +215,7 @@ function historicalAliasesFor(offerings: readonly ModelDefinition[]): Record<str
 }
 
 function reasoningEffortMappingsFor(offerings: readonly ModelDefinition[]): NonNullable<ProviderDefinition['reasoningEffortMappings']> {
-  const mappings: Record<string, { codebuddy: ReturnType<typeof effortLadder> }> = {};
+  const mappings: Record<string, { codebuddy: ReturnType<typeof effortLadder>; claude: ReturnType<typeof effortLadder> }> = {};
   for (const entry of offerings) {
     // A route with no ladder — an endpoint row naming no registered model —
     // materializes no effort level; no ladder is inferred for it.
@@ -223,7 +223,7 @@ function reasoningEffortMappingsFor(offerings: readonly ModelDefinition[]): NonN
     if (ladder.length === 0) continue;
     // Native settings serialize effort, not the Gateway's verified disable switch.
     const nativeEfforts = ladder.filter(effort => effort !== 'none');
-    mappings[entry.id] = { codebuddy: effortLadder(nativeEfforts) };
+    mappings[entry.id] = { codebuddy: effortLadder(nativeEfforts), claude: effortLadder(nativeEfforts) };
   }
   return mappings;
 }
@@ -270,7 +270,7 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
           ...productMetadataOverrides(entry, registered.defaults.contextWindow),
           ...claudeMetadataOverrides(canonicalId),
           reasoningEfforts: codeBuddyReasoningEfforts(canonicalId, entry),
-          protocols: ['openai_chat'],
+          protocols: ['openai_chat', 'anthropic_messages'],
         },
       }),
     };
@@ -336,12 +336,20 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     // from the same private bindings the native and gateway transports use.
     // The endpoint is assigned before the snapshot validation so the offering
     // protocol check sees the registered endpoints it must match.
-    definition.protocols = [{
-      protocol: 'openai_chat',
-      endpoint: 'https://copilot.tencent.com/v2/chat/completions',
-      authScheme: 'bearer',
-      upstreamModels: state.upstreamModels,
-    }];
+    definition.protocols = [
+      {
+        protocol: 'openai_chat',
+        endpoint: 'https://copilot.tencent.com/v2/chat/completions',
+        authScheme: 'bearer',
+        upstreamModels: state.upstreamModels,
+      },
+      {
+        protocol: 'anthropic_messages',
+        endpoint: 'https://copilot.tencent.com/v1/messages',
+        authScheme: 'bearer',
+        upstreamModels: state.upstreamModels,
+      },
+    ];
     // A refreshed snapshot obeys the same registered-identity and
     // protocol-declaration contract as startup; an invalid snapshot is not
     // published.
