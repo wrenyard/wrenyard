@@ -12,6 +12,13 @@ const RESERVED_TERMINAL_EVENTS = 2;
 const TERMINATION_FALLBACK_MS = 5_000;
 /** Finite confirmation window for the child process being spawned. */
 const STARTUP_CONFIRM_MS = 15_000;
+/**
+ * Grace window between the child's `exit` and a missing `close`. A surviving
+ * descendant that inherited the stdio pipe handles can hold `close` open
+ * indefinitely on Windows, so the run is finalized shortly after `exit`
+ * instead of waiting on pipes that may never drain.
+ */
+const STDIO_DRAIN_GRACE_MS = 5_000;
 
 /**
  * Terminal result ceiling per stream. This bounds what `result.stdout`/
@@ -185,6 +192,7 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
   let inputClosed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let startedTimer: ReturnType<typeof setTimeout> | undefined;
+  let drainTimer: ReturnType<typeof setTimeout> | undefined;
   let cancelRequested = false;
   let cancelling: Promise<void> | undefined;
   let terminating: Promise<void> | undefined;
@@ -200,6 +208,7 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
   const clearTimers = () => {
     if (timer) { clearTimeout(timer); timer = undefined; }
     if (startedTimer) { clearTimeout(startedTimer); startedTimer = undefined; }
+    if (drainTimer) { clearTimeout(drainTimer); drainTimer = undefined; }
   };
   /**
    * Idempotent, bounded tree termination of the child this session spawned.
@@ -443,6 +452,29 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
     if (!started) confirmStarted(child?.pid);
     if (lastStartError && exitCode === null && signal === null) { fail(lastStartError.message); return; }
     finishExit(exitCode, signal);
+  });
+  // 'exit' precedes 'close': the process is gone but its stdio pipes may still
+  // be held open by a surviving descendant that inherited the handles, which
+  // would postpone 'close' indefinitely. Arm one short drain grace timer; if
+  // 'close' has not arrived when it fires, sever the pipes and finish with
+  // the real exit facts captured here. When 'close' arrives first the normal
+  // path is unchanged, and the terminal guard keeps every other path
+  // (cancel, kill, error) from finishing twice.
+  child.once('exit', (exitCode: number | null, signal: NodeJS.Signals | null) => {
+    if (terminal || closed || drainTimer) return;
+    childExitCode = exitCode;
+    childSignal = signal;
+    drainTimer = setTimeout(() => {
+      drainTimer = undefined;
+      if (terminal || closed) return;
+      // Forcing both streams to EOF releases the consumers blocked on pipe
+      // data so their decoders observe the end of the stream before the
+      // session publishes its terminal exit frame.
+      child?.stdout?.destroy();
+      child?.stderr?.destroy();
+      if (!started) confirmStarted(child?.pid);
+      finishExit(childExitCode, childSignal);
+    }, STDIO_DRAIN_GRACE_MS);
   });
 
   if (options.signal) {
