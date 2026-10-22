@@ -18,7 +18,7 @@ import type {
   ContextItemKind,
   ContextLayerId,
   LedgerEvent,
-} from '@wrenyard/session';
+} from '@wrenyard/protocol/session';
 import type { QuotaState } from '@wrenyard/auto-routing';
 import type {
   GatewayHealthPool,

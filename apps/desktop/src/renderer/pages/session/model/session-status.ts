@@ -3,7 +3,7 @@
  * list, the search dialog and the mini-card title bar all call
  * `sessionStatusOf` and hand the result to `SessionDot`.
  */
-import type { SessionSummary } from '@wrenyard/session';
+import type { SessionSummary } from '@wrenyard/protocol/session';
 import type { SessionSeenState } from '@/session/preload';
 
 /** The five dot states, in display priority order. */

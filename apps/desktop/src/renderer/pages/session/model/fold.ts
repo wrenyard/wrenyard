@@ -23,7 +23,7 @@ import type {
   TurnStartedEvent,
   WorkspaceChangedEvent,
   WorkspaceSnapshot,
-} from '@wrenyard/session';
+} from '@wrenyard/protocol/session';
 import { actionLabel, summarizeError } from './describe.js';
 import type {
   ActionModel,

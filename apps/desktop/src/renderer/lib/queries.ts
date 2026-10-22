@@ -1,5 +1,5 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { SessionSummary } from '@wrenyard/session';
+import type { SessionSummary } from '@wrenyard/protocol/session';
 import { shell } from '@/renderer/lib/desktop';
 import { getSessionBridge } from '@/renderer/lib/session';
 import type { DisplayCurrency, QuotaSnapshot } from '@/shell-contract';

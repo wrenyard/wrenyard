@@ -9,7 +9,7 @@
  * load, so relative labels (今天, 2 分钟前) stay correct on any capture day.
  */
 
-import type { LedgerEvent, LedgerEventDraft } from '@wrenyard/session';
+import type { LedgerEvent, LedgerEventDraft } from '@wrenyard/protocol/session';
 import {
   isPreferenceId,
   validatePreferenceValue,

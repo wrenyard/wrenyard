@@ -1,4 +1,4 @@
-import type { LedgerEvent } from '@wrenyard/session';
+import type { LedgerEvent } from '@wrenyard/protocol/session';
 import { isHiddenCallRole } from '../../session/model/describe.js';
 import type { CallModel } from '../../session/model/types.js';
 

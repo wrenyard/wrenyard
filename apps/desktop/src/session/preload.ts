@@ -28,7 +28,7 @@ import type {
   LiveCall,
   SessionFile,
   SessionSummary,
-} from '@wrenyard/session';
+} from '@wrenyard/protocol/session';
 import type { DesktopTaskBrief } from '../shell-contract.js';
 import type { SafeTaskRunEventsResult } from '../pet/shared/taskgraph.js';
 import type { SessionSeenState } from './seen-store.js';

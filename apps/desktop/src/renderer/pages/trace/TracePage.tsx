@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileText, Filter, GitBranch, Layers3, Network, RefreshCw, Search, Sparkles, Workflow } from 'lucide-react';
-import type { LedgerEvent, SessionSummary } from '@wrenyard/session';
+import type { LedgerEvent, SessionSummary } from '@wrenyard/protocol/session';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { Timestamp } from '@/renderer/components/timestamp';
 import { Button } from '@/renderer/components/ui/button';

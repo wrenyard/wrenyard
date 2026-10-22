@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { X } from 'lucide-react';
 import { cn } from 'cn';
 import { useQueryClient } from '@tanstack/react-query';
-import type { LedgerEvent } from '@wrenyard/session';
+import type { LedgerEvent } from '@wrenyard/protocol/session';
 import { Alert, AlertAction, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
 import {

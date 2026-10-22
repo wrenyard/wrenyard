@@ -33,7 +33,7 @@ import type {
   SessionFile,
   SessionSummary,
   WorkspaceSnapshot,
-} from '@wrenyard/session';
+} from '@wrenyard/protocol/session';
 
 // ─── Fixed fictional facts ─────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { LedgerEvent } from '@wrenyard/session';
+import type { LedgerEvent } from '@wrenyard/protocol/session';
 import { agentRequest, useRemoteConnection } from '@/renderer/lib/desktop';
 import type {
   AgentCreateParams,

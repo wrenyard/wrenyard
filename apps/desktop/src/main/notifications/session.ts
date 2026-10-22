@@ -1,6 +1,6 @@
 // Session producer: live turn.finished events after catch-up. Completed shows truncated reply text (the committed system "reply" action result) or a fallback title; failed shows an error summary; interrupted is ignored.
 
-import type { LedgerEvent } from '@wrenyard/session';
+import type { LedgerEvent } from '@wrenyard/protocol/session';
 import type { AppNotification, Notifier } from './notifier.js';
 
 const REPLY_TEXT_MAX = 120;

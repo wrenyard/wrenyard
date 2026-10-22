@@ -6,7 +6,7 @@ import type {
   SessionSummary,
   WorkspaceChangedEvent,
   WorkspaceSnapshot,
-} from '@wrenyard/session';
+} from '@wrenyard/protocol/session';
 import type {
   DraftAttachment,
   LiveCall,

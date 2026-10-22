@@ -5,7 +5,7 @@ import { clipboard, dialog, ipcMain, nativeImage, shell, type IpcMainInvokeEvent
 import { WrenyardIpcClient, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control';
 import { REASONING_EFFORT_NAMES, type ReasoningEffort } from '@wrenyard/models';
 import type { ProviderListResult, ProviderQuotaResult } from '@wrenyard/protocol/provider';
-import type { SessionEventsResult } from '@wrenyard/protocol/session';
+import type { LedgerEvent, LiveCall, SessionEventsResult, SessionSummary } from '@wrenyard/protocol/session';
 import type {
   TaskRoutingTestResult,
   TaskRunCancelResult,
@@ -13,7 +13,6 @@ import type {
   TaskSettingsSnapshotResult,
 } from '@wrenyard/protocol/task';
 import { TASK_SETTINGS_AUTOMATIC_KEYS } from '../main/ipc/validation.js';
-import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';
 import type { TaskRunUsage } from '../shell-contract.js';
 import {
   normalizeSafeEvent,
