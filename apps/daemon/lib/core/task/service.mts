@@ -130,6 +130,13 @@ export interface TaskWriteConflictInfo {
   taskId: string
   targets: readonly string[]
   overlap: readonly string[]
+  /** ISO timestamp the holder run's first execution actually launched. */
+  startedAt?: string
+  /** ISO timestamp of the holder run's latest recorded event, when any exist. */
+  lastActivityAt?: string
+  /** ISO timestamp the holder run's effective run time limit ends at
+   *  (startedAt + its persisted execution timeout), when both are known. */
+  timeLimitEndsAt?: string
 }
 
 export class TaskServiceError extends Error {

@@ -112,17 +112,12 @@ export interface SessionHost {
     taskId: string;
     targets: readonly string[];
     overlap: readonly string[];
-  } | null>;
-  findTaskWriteConflict(params: {
-    project: string;
-    worktree?: string;
-    task: string;
-    input: unknown;
-  }): Promise<{
-    runId: string;
-    taskId: string;
-    targets: readonly string[];
-    overlap: readonly string[];
+    /** ISO timestamp the holder run's first execution actually launched. */
+    startedAt?: string;
+    /** ISO timestamp of the holder run's latest recorded event, when any exist. */
+    lastActivityAt?: string;
+    /** ISO timestamp the holder run's effective run time limit ends at, when known. */
+    timeLimitEndsAt?: string;
   } | null>;
   createTaskRun(params: {
     task: string;

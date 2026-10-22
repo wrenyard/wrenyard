@@ -456,9 +456,10 @@ async function createTaskRunFromTool(
       ...(worktree === undefined ? {} : { worktree }),
     });
     if (conflict) {
+      const timing = renderConflictTiming(conflict);
       return {
         ok: false,
-        error: `Its write targets overlap running task run '${conflict.runId}' (task '${conflict.taskId}'): ${conflict.overlap.join(', ')}`,
+        error: `Its write targets overlap running task run '${conflict.runId}' (task '${conflict.taskId}'): ${conflict.overlap.join(', ')}${timing}`,
       };
     }
   } catch (error) {
@@ -907,6 +908,39 @@ function findMissingAbsolutePath(value: unknown): string | undefined {
     }
   }
   return undefined;
+}
+
+/** The host's write-conflict result, derived from the authoritative `SessionHost` type. */
+type WriteConflict = NonNullable<Awaited<ReturnType<ActionWorkflowDeps['host']['findTaskWriteConflict']>>>;
+
+/**
+ * The holder run's timing facts as a short suffix, e.g.
+ * ` (running 38 min, last activity 21 min ago, time limit ends 15:56)`.
+ * Unknown facts are omitted individually; an empty string means none are known.
+ */
+function renderConflictTiming(conflict: WriteConflict): string {
+  const items: string[] = [];
+  const startedMs = conflict.startedAt === undefined ? NaN : Date.parse(conflict.startedAt);
+  if (Number.isFinite(startedMs)) items.push(`running ${minutesAgo(startedMs)}`);
+  const activityMs = conflict.lastActivityAt === undefined ? NaN : Date.parse(conflict.lastActivityAt);
+  if (Number.isFinite(activityMs)) items.push(`last activity ${minutesAgo(activityMs)} ago`);
+  const limitMs = conflict.timeLimitEndsAt === undefined ? NaN : Date.parse(conflict.timeLimitEndsAt);
+  if (Number.isFinite(limitMs)) items.push(`time limit ends ${localTime(limitMs)}`);
+  return items.length === 0 ? '' : ` (${items.join(', ')})`;
+}
+
+/** Whole minutes between `thenMs` and now, floored; 0 for a future timestamp. */
+function minutesAgo(thenMs: number): string {
+  const minutes = Math.max(0, Math.floor((Date.now() - thenMs) / 60_000));
+  return `${minutes} min`;
+}
+
+/** Local wall-clock `HH:MM` of one timestamp. */
+function localTime(ms: number): string {
+  const date = new Date(ms);
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
 }
 
 function mapTaskStatus(status: string, aborted: boolean): ActionStatus {
