@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
 import { TokenBar, type TokenBarSegment } from '@/renderer/components/usage/TokenBar';
 import { LegendGap, LegendList, LegendRow } from '@/renderer/components/usage/UsageCard';
-import { usageRingLevel } from '@/renderer/components/usage/UsageRing';
 import { formatTokenCount, formatRatio } from '@/renderer/lib/format';
 import type { ContextBudgetView, RoleContextEntry, UsageGroupView } from '../../model/usage.js';
 import { cn } from 'cn';
@@ -11,9 +10,13 @@ import { cn } from 'cn';
  * Expanded detail of the ctx popover (usage spec 5.2). A Wrenyard session is
  * several separate stateless LLM conversations — reason plus auxiliary roles.
  * The forward-looking send-block estimate is shown first with its composition
- * bar and legend rows; per-role occupancy follows as compact LegendRows.
+ * bar and legend rows; auxiliary sessions follow as compact token-only rows.
  * Chinese product copy.
  */
+
+/** Swatch colours matching the TokenBar reserve hatch and free-space track. */
+const RESERVE_SWATCH = 'color-mix(in oklab, var(--muted-foreground) 25%, transparent)';
+const FREE_SWATCH = 'var(--muted)';
 
 export interface ContextBreakdownProps {
   /** Per-role context entries: the reason row first, then auxiliary roles. */
@@ -37,9 +40,6 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
   const compositionTotal = groups.reduce((sum, group) => sum + group.tokens, 0);
   const reason = roles.find((entry) => entry.role === 'reason');
   const auxiliary = roles.filter((entry) => entry.role !== 'reason');
-  const auxiliaryLevel = usageRingLevel(
-    Math.max(0, ...auxiliary.filter((entry) => entry.error === undefined).map((entry) => entry.ratio ?? 0)),
-  );
   const estimateFigure = budget === undefined
     ? undefined
     : budget.available === undefined
@@ -78,50 +78,60 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
     </div>
   );
 
-  const auxiliaryCount = auxiliary.length;
-  const auxiliaryValue = (
-    <span className="inline-flex items-center justify-end gap-1">
-      {!auxiliaryExpanded && auxiliaryLevel !== 'normal' && (
-        <span
-          className={cn(
-            'size-1.5 shrink-0 rounded-full',
-            auxiliaryLevel === 'warning' && 'bg-warning',
-            auxiliaryLevel === 'destructive' && 'bg-destructive',
-          )}
-          aria-label={auxiliaryLevel === 'destructive' ? '上下文占用过高' : '上下文占用较高'}
-        />
-      )}
-      {auxiliaryCount}
-    </span>
-  );
+  const window = budget !== undefined && budget.window !== undefined && budget.window > 0
+    ? budget.window
+    : undefined;
+  const percentDenominator = window ?? compositionTotal;
+  const reserved = budget !== undefined && window !== undefined && budget.reserved !== undefined
+    ? Math.max(0, budget.reserved)
+    : undefined;
+  const freeTokens = window !== undefined && reserved !== undefined
+    ? Math.max(0, window - compositionTotal - reserved)
+    : undefined;
+  const windowPercent = (tokens: number) =>
+    `${(percentDenominator > 0 ? (tokens / percentDenominator) * 100 : 0).toFixed(1)}%`;
 
   return (
     <div className="flex flex-col gap-1.5" data-slot="context-breakdown">
       {estimateDetail}
       <LegendList>
-        {budget !== undefined && groups.map((group) => {
-          const pct = compositionTotal > 0 ? (group.tokens / compositionTotal) * 100 : 0;
-          return (
+        {budget !== undefined && groups.map((group) => (
+          <LegendRow
+            key={group.id}
+            label={group.label}
+            swatch={group.color}
+            value={formatTokenCount(group.tokens)}
+            percent={windowPercent(group.tokens)}
+          />
+        ))}
+        {window !== undefined && reserved !== undefined && freeTokens !== undefined && (
+          <>
             <LegendRow
-              key={group.id}
-              label={group.label}
-              swatch={group.color}
-              value={formatTokenCount(group.tokens)}
-              percent={`${pct.toFixed(1)}%`}
+              muted
+              label="输出预留"
+              swatch={RESERVE_SWATCH}
+              value={formatTokenCount(reserved)}
+              percent={windowPercent(reserved)}
             />
-          );
-        })}
+            <LegendRow
+              muted
+              label="空闲"
+              swatch={FREE_SWATCH}
+              value={formatTokenCount(freeTokens)}
+              percent={windowPercent(freeTokens)}
+            />
+          </>
+        )}
         <LegendGap />
-        {reason !== undefined && <RoleRow entry={reason} />}
         {auxiliary.length > 0 && (
           <LegendRow
             expandable
             expanded={auxiliaryExpanded}
             onToggle={() => setAuxiliaryExpanded((open) => !open)}
             label="辅助会话"
-            value={auxiliaryValue}
+            percent={auxiliary.length}
           >
-            {auxiliary.map((entry) => <RoleRow key={entry.role} entry={entry} />)}
+            {auxiliary.map((entry) => <AuxiliaryRow key={entry.role} entry={entry} />)}
           </LegendRow>
         )}
       </LegendList>
@@ -129,57 +139,30 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
   );
 }
 
-interface RoleRowProps {
+interface AuxiliaryRowProps {
   entry: RoleContextEntry;
 }
 
-function RoleRow({ entry }: RoleRowProps) {
+function AuxiliaryRow({ entry }: AuxiliaryRowProps) {
   if (entry.error !== undefined) {
     return (
-      <div data-slot="context-role-row" data-role={entry.role}>
-        <LegendRow
-          muted
-          label={(
-            <span className="flex min-w-0 flex-1 items-center gap-2">
-              <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-              <span className="shrink-0 whitespace-nowrap">无可用线路</span>
-            </span>
-          )}
-        />
-      </div>
+      <LegendRow
+        muted
+        label={entry.label}
+        value="无可用线路"
+      />
     );
   }
 
-  const level = entry.ratio === undefined ? 'normal' : usageRingLevel(entry.ratio);
-  const modelPart = entry.modelLabel ?? entry.model;
-  const baseName = entry.role === 'reason' ? '主推理' : entry.label;
-  const name = modelPart !== undefined ? `${baseName} · ${modelPart}` : baseName;
   const tokens = entry.tokens === undefined ? '—' : formatTokenCount(entry.tokens);
-  const amount = entry.window === undefined
-    ? tokens
-    : `${tokens} / ${formatTokenCount(entry.window)}${entry.ratio === undefined ? '' : ` · ${formatRatio(entry.ratio)}`}`;
   const title = entry.latestReported === true ? '运行中 · 最近一次上报' : '最近一次请求';
 
   return (
-    <div data-slot="context-role-row" data-role={entry.role}>
-      <LegendRow
-        title={title}
-        label={(
-          <span className="flex min-w-0 flex-1 items-center gap-2">
-            <span className="min-w-0 flex-1 truncate">{name}</span>
-            <span
-              className={cn(
-                'shrink-0 whitespace-nowrap tabular-nums',
-                level === 'warning' && 'text-warning',
-                level === 'destructive' && 'text-destructive',
-                (level === 'normal' || entry.ratio === undefined) && 'text-muted-foreground',
-              )}
-            >
-              {amount}
-            </span>
-          </span>
-        )}
-      />
-    </div>
+    <LegendRow
+      muted
+      title={title}
+      label={entry.label}
+      value={tokens}
+    />
   );
 }
