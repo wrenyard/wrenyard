@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Activity, ChevronLeft, ChevronRight, Maximize2, Menu, Network, PanelLeftClose, PanelLeftOpen, PictureInPicture2, Pin, PinOff, Plus, X } from 'lucide-react';
+import { Activity, ChevronLeft, ChevronRight, Maximize2, Menu, PanelLeftClose, PanelLeftOpen, PictureInPicture2, Pin, PinOff, Plus, X } from 'lucide-react';
 import type { ShellPage } from '@/shell-contract';
 import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { shell, useActivityStatus, useShellPage } from '@/renderer/lib/desktop';
 import { toggleActivityPanel, useActivityPanelState } from '@/renderer/lib/activity-panel';
-import { TaskGraphsPopover } from '@/renderer/app/TitleBarPanels';
 import { closeCard, getCurrentSession, openMiniCard, restoreMain, setMiniPinned, useMiniMode, useMiniPinned } from '@/renderer/lib/mini';
 import { back, forward, toggleSecondarySidebar, useNavigation, useSecondarySidebarToggle } from '@/renderer/lib/navigation';
 import { registerTitleBarSlot } from '@/renderer/lib/titlebar';
@@ -75,9 +74,9 @@ export function TitleBar() {
   const pinned = useMiniPinned();
   const activitySnapshot = useActivityStatus();
   const activityOpen = useActivityPanelState().open;
-  const activityBadgeCount = activitySnapshot.tasks.filter(
-    (task) => task.status === 'running' || task.status === 'queued',
-  ).length;
+  const activityBadgeCount =
+    activitySnapshot.tasks.filter((task) => task.status === 'running' || task.status === 'queued').length
+    + activitySnapshot.taskgraphs.filter((graph) => graph.state !== 'done' && graph.state !== 'cancelled').length;
 
   // Track whether any page portals content into its auxiliary slot; the
   // separator between app-level and page-level controls only renders then.
@@ -233,6 +232,18 @@ export function TitleBar() {
       </div>
 
       <div className={cn('flex shrink-0 items-center gap-2 px-2', DRAG, SLOT_NO_DRAG)}>
+        {TITLE_BAR_PAGES.map((id) => (
+          <div
+            key={id}
+            data-titlebar-auxiliary={id}
+            className={cn('flex items-center gap-1', id !== page && 'hidden')}
+            ref={(element) => {
+              auxiliaryRefs.current.set(id, element);
+              registerTitleBarSlot(id, 'auxiliary', element);
+            }}
+          />
+        ))}
+        {hasAuxiliary && <span aria-hidden className="h-4 w-px shrink-0 bg-border" />}
         <TitleBarButton
           label="后台任务"
           tooltip="后台任务"
@@ -248,25 +259,6 @@ export function TitleBar() {
             ) : null}
           </span>
         </TitleBarButton>
-        <TaskGraphsPopover
-          trigger={(
-            <TitleBarButton label="任务图" tooltip="运行中的任务图" onClick={() => undefined}>
-              <Network />
-            </TitleBarButton>
-          )}
-        />
-        {hasAuxiliary && <span aria-hidden className="h-4 w-px shrink-0 bg-border" />}
-        {TITLE_BAR_PAGES.map((id) => (
-          <div
-            key={id}
-            data-titlebar-auxiliary={id}
-            className={cn('flex items-center gap-1', id !== page && 'hidden')}
-            ref={(element) => {
-              auxiliaryRefs.current.set(id, element);
-              registerTitleBarSlot(id, 'auxiliary', element);
-            }}
-          />
-        ))}
         {page === 'session' && (
           <TitleBarButton label="迷你模式" tooltip="迷你模式" onClick={() => openMiniCard(getCurrentSession())}>
             <PictureInPicture2 />

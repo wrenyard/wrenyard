@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   Square,
+  SquareArrowOutUpRight,
   Trash2,
   X,
 } from 'lucide-react';
@@ -45,6 +46,32 @@ interface TaskSessionLink {
 
 function isActiveGraph(graph: ActivityStatusTaskGraph): boolean {
   return graph.state !== 'done' && graph.state !== 'cancelled';
+}
+
+const NODE_LABELS: ReadonlyArray<[string, string]> = [
+  ['done', '完成'],
+  ['running', '运行'],
+  ['queued', '等待'],
+  ['waiting', '等待'],
+  ['failed', '失败'],
+  ['cancelled', '已取消'],
+];
+
+function formatNodeCounts(counts: Record<string, number>): string {
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  for (const [key, label] of NODE_LABELS) {
+    const value = counts[key];
+    if (value !== undefined && value > 0) {
+      parts.push(`${label} ${value}`);
+      seen.add(key);
+    }
+  }
+  for (const [key, value] of Object.entries(counts)) {
+    if (seen.has(key) || value <= 0) continue;
+    parts.push(`${key} ${value}`);
+  }
+  return parts.join(' · ');
 }
 
 function graphRowKey(graph: ListedGraph): ExpandedKey {
@@ -555,42 +582,22 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
   };
 
   const renderGraphRow = (graph: ListedGraph, active: boolean): React.ReactNode => {
-    const key = graphRowKey(graph);
-    const expanded = expandedKey === key;
     const title = graph.title ?? graph.taskgraphId;
     const stateLabel = graphStateLabel(graph, active);
 
     return (
-      <div key={graph.taskgraphId} className="flex flex-col gap-1">
-        <div
-          className={cn(
-            'flex h-9 items-center gap-1 rounded-lg px-3',
-            expanded && 'ring-1 ring-ring bg-accent/40',
-          )}
-        >
-          <button
-            type="button"
-            className="flex min-w-0 flex-1 items-center gap-2 text-left"
-            onClick={() => toggleExpand(key)}
-          >
-            <span className="min-w-0 flex-1 truncate text-sm" title={title}>{title}</span>
-            <span className="shrink-0 text-sm text-muted-foreground">{stateLabel}</span>
-            {expanded ? <ChevronDown className="size-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
-          </button>
-        </div>
-        {expanded ? (
-          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 pb-2 text-xs text-muted-foreground">
-            <button
-              type="button"
-              className="hover:text-foreground"
-              onClick={() => void shell.openTaskGraph(graph.taskgraphId)}
-            >
-              任务图 {title}
-            </button>
-            {!active && stateLabel !== '' ? <span>· {stateLabel}</span> : null}
-          </p>
-        ) : null}
-      </div>
+      <button
+        key={graph.taskgraphId}
+        type="button"
+        className="flex h-9 items-center gap-2 rounded-lg px-3 text-left hover:bg-accent/40"
+        onClick={() => void shell.openTaskGraph(graph.taskgraphId)}
+      >
+        <span className="min-w-0 flex-1 truncate text-sm" title={title}>{title}</span>
+        <span className="shrink-0 text-sm text-muted-foreground">
+          {active ? formatNodeCounts(graph.nodeCounts) : stateLabel}
+        </span>
+        <SquareArrowOutUpRight className="size-4 shrink-0 text-muted-foreground" />
+      </button>
     );
   };
 
