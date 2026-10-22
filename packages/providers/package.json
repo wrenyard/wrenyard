@@ -16,7 +16,6 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@wrenyard/client-codebuddy": "workspace:*",
     "@wrenyard/models": "workspace:*",
     "@wrenyard/paths": "workspace:*",
     "smol-toml": "^1.4.2"

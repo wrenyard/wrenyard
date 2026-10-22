@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { configModelEntries } from '@wrenyard/client-codebuddy';
 import type {
   ProviderCredential,
   ProviderDefinition,
@@ -9,7 +8,7 @@ import type {
 } from '../base/index.ts';
 import type { RoutingFreeSupplyFact } from '../base/provider.ts';
 import { codeBuddyProtocolError } from '../codebuddy/route-errors.ts';
-import { productCreditsAreFree } from '../codebuddy/product.ts';
+import { configModelEntries, productCreditsAreFree } from '../codebuddy/product.ts';
 import type { WorkBuddyBuild } from './definition.ts';
 import {
   classifyWorkBuddyAccountIdentity,

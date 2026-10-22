@@ -103,6 +103,41 @@ export function parseCodeBuddyProductModels(value: unknown): CodeBuddyProductMod
   return entries;
 }
 
+/**
+ * The offerable model rows of a `/v3/config` envelope. The configuration's
+ * `cli` agent names, in the endpoint's own order, the models the signed-in
+ * account may run; every named row is resolved against the configuration's
+ * model metadata. A missing, non-numeric or non-zero business code, a missing
+ * `data`/`models` shape, or any other unexpected payload yields undefined so the
+ * caller reports an unavailable snapshot instead of silently showing an empty
+ * catalog.
+ */
+export function configModelEntries(payload: unknown): CodeBuddyProductModelEntry[] | undefined {
+  if (!isRecord(payload)) return undefined;
+  if (payload.code !== 0) return undefined;
+  const data = isRecord(payload.data) ? payload.data : undefined;
+  if (!data || !Array.isArray(data.models)) return undefined;
+  return parseCodeBuddyProductModels({ models: cliAgentRows(data) });
+}
+
+export function cliAgentRows(data: Record<string, unknown>): unknown[] {
+  const agents = (Array.isArray(data.agents) ? data.agents : []).filter(isRecord);
+  // The session's models come from the agent the product identifies as its CLI
+  // agent; the default-tagged agent is the same one it falls back to.
+  const agent = agents.find((entry) => entry.name === 'cli') ?? agents.find((entry) => Array.isArray(entry.tags) && entry.tags.includes('default'));
+  if (!agent || !Array.isArray(agent.models)) return [];
+  const known = new Map<string, Record<string, unknown>>();
+  for (const item of Array.isArray(data.models) ? data.models : []) {
+    if (isRecord(item) && typeof item.id === 'string') known.set(item.id, item);
+  }
+  const rows: unknown[] = [];
+  for (const item of agent.models) {
+    const row = typeof item === 'string' ? known.get(item) : isRecord(item) ? item : undefined;
+    if (row) rows.push(row);
+  }
+  return rows;
+}
+
 export function productCreditsAreFree(credits: string | undefined): boolean {
   if (!credits) return false;
   const match = /^x(\d+(?:\.\d+)?)/iu.exec(credits.trim());
@@ -133,4 +168,8 @@ function domainListMatches(value: unknown, domain: string): boolean {
 
 function finitePositive(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
