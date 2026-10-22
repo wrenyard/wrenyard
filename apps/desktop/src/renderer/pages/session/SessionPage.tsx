@@ -395,10 +395,12 @@ export function SessionPage() {
               viewport edge instead of narrowing the transcript. */}
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             {empty ? (
-              <EmptySession>
-                {errorAlert}
-                {composer}
-              </EmptySession>
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col pr-(--session-rail)">
+                <EmptySession>
+                  {errorAlert}
+                  {composer}
+                </EmptySession>
+              </div>
             ) : (
               <>
                 <MessageScrollerProvider key={sessionKey} autoScroll>
