@@ -94,6 +94,20 @@ function outputText(output: unknown): string {
   return output === undefined || output === null ? '' : JSON.stringify(output, null, 2)
 }
 
+/**
+ * The run's report text. A timed-out run records `{report, facts}`; its facts
+ * travel separately, so only the report enters the text.
+ */
+function reportText(output: unknown): string {
+  if (output !== null && typeof output === 'object' && !Array.isArray(output)) {
+    const record = output as Record<string, unknown>
+    if (typeof record.report === 'string' && Object.keys(record).every(key => key === 'report' || key === 'facts')) {
+      return record.report
+    }
+  }
+  return outputText(output)
+}
+
 /** Declared artifacts of a structured task output, or an empty list. */
 function outputArtifacts(output: unknown): TaskArtifact[] {
   if (!output || typeof output !== 'object') return []
@@ -373,8 +387,8 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
         // A run that did not finish done leads with its error, so the session
         // always sees the failure cause beside any output the run produced.
         output: result.status === 'done'
-          ? outputText(result.output) || outputText(result.error)
-          : [outputText(result.error), outputText(result.output)].filter(text => text !== '').join('\n\n'),
+          ? reportText(result.output) || outputText(result.error)
+          : [outputText(result.error), reportText(result.output)].filter(text => text !== '').join('\n\n'),
         ...(result.facts === undefined || result.facts === null ? {} : { facts: result.facts as TaskRunFacts }),
         ...(usage !== null && typeof usage === 'object' ? { usage: usage as Record<string, unknown> } : {}),
         ...(artifacts.length === 0 ? {} : { artifacts }),
