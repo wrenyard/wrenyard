@@ -19,10 +19,10 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { estimateTokens } from '@wrenyard/model-call'
 import {
   createSession,
   createWorkspaceMemory,
-  estimateTokens,
   type AgentToolPort,
   type LedgerEvent,
   type ReplySentEvent,

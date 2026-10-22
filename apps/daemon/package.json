@@ -45,6 +45,7 @@
   "dependencies": {
     "@wrenyard/gateway": "workspace:*",
     "@wrenyard/agent-loop": "workspace:*",
+    "@wrenyard/model-call": "workspace:*",
     "@wrenyard/models": "workspace:*",
     "@wrenyard/providers": "workspace:*",
     "@wrenyard/control": "workspace:*",

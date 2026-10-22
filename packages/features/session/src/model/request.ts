@@ -18,7 +18,6 @@
  * auxiliary call uses the route the selector ranked first.
  */
 import { randomUUID } from 'node:crypto';
-import { getEncoding } from 'js-tiktoken';
 import type { GatewayRouteStatus, ProviderDefinition } from '@wrenyard/providers/base';
 import { PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
 import {
@@ -30,7 +29,6 @@ import {
   type ModelAttempt,
   type ModelEvent,
   type ModelMetrics,
-  type ModelRequest,
   type ModelResult,
   type ModelTransport,
   type ModelPreflightResult,
@@ -40,14 +38,37 @@ import {
   type ToolChoice,
   type Usage,
 } from '../transport/index.ts';
+import {
+  callModelAttempt,
+  settleWithAbort,
+  checkContextBudget,
+  contextBudgetOf as sharedContextBudgetOf,
+  estimateInputTokens,
+  isProviderDefaultReasoningOnly,
+  isReasoningEffortSupported,
+  type ContextBudgetFacts,
+} from '@wrenyard/model-call';
 import type { ModelSpanFinishedEvent, ModelSpanStartedEvent } from '../ledger/events.ts';
 import type { AuxiliaryCallRole } from './roles.ts';
-import { boundedOutputReservation, resolveModelMetadata, type ModelMetadata } from './metadata.ts';
+import type { ModelMetadata } from './metadata.ts';
 
-// The pure metadata helper now lives in the browser-safe model-metadata entry;
-// the call runner re-exports it so existing `./calls.ts` consumers are unchanged.
-export { resolveModelMetadata } from './metadata.ts';
-export type { ModelMetadata } from './metadata.ts';
+// The pure metadata helper now lives in the shared model-call package; the
+// call runner re-exports it so existing consumers are unchanged.
+export { resolveModelMetadata } from '@wrenyard/model-call/metadata';
+export type { ModelMetadata } from '@wrenyard/model-call/metadata';
+
+// Reusable estimation and budget facts moved to `@wrenyard/model-call`; the
+// session entry points re-export them unchanged.
+export {
+  checkContextBudget,
+  estimateContentTokens,
+  estimateInputTokens,
+  estimateTokens,
+  isProviderDefaultReasoningOnly,
+  isReasoningEffortSupported,
+  IMAGE_INPUT_TOKEN_ESTIMATE,
+} from '@wrenyard/model-call';
+export type { ContextBudget, ContextBudgetFacts } from '@wrenyard/model-call';
 
 export type { Message, ModelContentPart, ToolCall, ToolSpec, Usage } from '../transport/index.ts';
 
@@ -258,37 +279,18 @@ export class ModelCallError extends Error {
   }
 }
 
-let tokenizer: ReturnType<typeof getEncoding> | undefined;
-
-/** Fallback per-image input-token estimate when only a data URL is available. */
-export const IMAGE_INPUT_TOKEN_ESTIMATE = 1_200;
-
-/** `o200k_base` token count estimate of one text. */
-export function estimateTokens(text: string): number {
-  if (!text) return 0;
-  tokenizer ??= getEncoding('o200k_base');
-  return tokenizer.encode(text).length;
-}
-
 /**
- * Token estimate of one message content. Text parts are counted with the same
- * tokenizer; an image part contributes a fixed processed-image estimate, never
- * the base64 payload length.
+ * Session's budget facts. The compaction threshold cap is session policy, so
+ * this wrapper keeps applying the fixed {@link COMPACTION_THRESHOLD_CAP} over
+ * the shared calculation instead of moving the policy into `@wrenyard/model-call`.
  */
-export function estimateContentTokens(content: string | readonly ModelContentPart[]): number {
-  if (typeof content === 'string') return estimateTokens(content);
-  let total = 0;
-  for (const part of content) {
-    total += part.type === 'text' ? estimateTokens(part.text) : IMAGE_INPUT_TOKEN_ESTIMATE;
-  }
-  return total;
-}
-
-/** `o200k_base` token count estimate of a supplied message list. */
-export function estimateInputTokens(messages: readonly import('../transport/index.ts').Message[]): number {
-  let total = 0;
-  for (const message of messages) total += estimateTokens(message.role) + estimateContentTokens(message.content);
-  return total;
+export function contextBudgetOf(
+  publicId: string,
+  messages: readonly import('../transport/index.ts').Message[],
+  resolveProvider?: (providerId: string) => ProviderDefinition | undefined,
+  requestedMaxOutputTokens?: number,
+): ContextBudgetFacts {
+  return sharedContextBudgetOf(publicId, messages, resolveProvider, requestedMaxOutputTokens, COMPACTION_THRESHOLD_CAP);
 }
 
 /**
@@ -313,200 +315,9 @@ export function sanitizeMessagesForRole(
   return replaced ? next : messages;
 }
 
-export interface ContextBudget {
-  metadata: ModelMetadata;
-  estimatedInputTokens: number;
-  /**
-   * The request output cap this call resolves and forwards as the serialized
-   * transport cap. See {@link checkContextBudget}. Absent when the legacy
-   * behaviour applies and no explicit per-call cap was given, in which case the
-   * protocol's own default output field still applies.
-   */
-  requestMaxOutputTokens?: number;
-  /** True when the call may be sent. */
-  ok: boolean;
-  /** Why the call may not be sent; absent when `ok`. */
-  reason?: string;
-}
-
-/**
- * Context budget check. The model maximum is the only limit — there is no
- * extra soft budget — and a call is refused when the estimate plus the output
- * the request reserves would exceed its window.
- *
- * The declared `metadata.maxOutputTokens` is the model's source maximum — a
- * capability, not a mandatory per-request reservation. It is reserved only up to
- * {@link boundedOutputReservation}: reserving a huge declared maximum verbatim
- * would leave almost no input budget, so a request never reserves more than the
- * shared cap. A per-call cap that is already smaller than that bound still wins.
- * A route whose provider
- * opted out of the canonical metadata fallback therefore resolves its request
- * output cap to the smallest of the per-call cap (or the source maximum when
- * none was requested), the source maximum when known, and the room left after
- * the estimated input:
- *
- *   min(requested cap or source max, source max when known, contextWindow - estimatedInputTokens)
- *
- * Such a route fails only when the estimated input leaves no positive room. Its
- * resolved `requestMaxOutputTokens` is the single cap handed back for both this
- * check and the serialized transport request. Every other route keeps its prior
- * budget semantics: the per-call cap is reserved verbatim (never raised above the
- * source maximum) and, with none, the source maximum is reserved exactly as
- * before.
- */
-export function checkContextBudget(
-  publicId: string,
-  messages: readonly import('../transport/index.ts').Message[],
-  resolveProvider?: (providerId: string) => ProviderDefinition | undefined,
-  requestedMaxOutputTokens?: number,
-): ContextBudget {
-  const metadata = resolveModelMetadata(publicId, resolveProvider);
-  const estimatedInputTokens = estimateInputTokens(messages);
-  const { contextWindow } = metadata;
-  const sourceMax = boundedOutputReservation(metadata.maxOutputTokens);
-
-  if (metadata.skipCanonicalMetadataFallback === true) {
-    const requested = requestedMaxOutputTokens ?? sourceMax;
-    if (requested === undefined) return { metadata, estimatedInputTokens, ok: true };
-    const bounded = sourceMax === undefined ? requested : Math.min(requested, sourceMax);
-    if (contextWindow === undefined) {
-      return { metadata, estimatedInputTokens, requestMaxOutputTokens: bounded, ok: true };
-    }
-    const room = contextWindow - estimatedInputTokens;
-    if (room <= 0) {
-      return {
-        metadata,
-        estimatedInputTokens,
-        ok: false,
-        reason: `Estimated input ${estimatedInputTokens} leaves no room in the context window ${contextWindow}`,
-      };
-    }
-    return { metadata, estimatedInputTokens, requestMaxOutputTokens: Math.min(bounded, room), ok: true };
-  }
-
-  // No declared window or maximum: nothing to check, exactly as before.
-  if (contextWindow === undefined || sourceMax === undefined) {
-    return { metadata, estimatedInputTokens, ok: true };
-  }
-  // With no explicit per-call cap the legacy reservation is the source maximum;
-  // the protocol default is still what the transport sends, so no cap is added.
-  if (requestedMaxOutputTokens === undefined) {
-    if (estimatedInputTokens + sourceMax > contextWindow) {
-      return {
-        metadata,
-        estimatedInputTokens,
-        ok: false,
-        reason: `Estimated input ${estimatedInputTokens} + max output ${sourceMax} exceeds the context window ${contextWindow}`,
-      };
-    }
-    return { metadata, estimatedInputTokens, ok: true };
-  }
-  const reserved = Math.min(requestedMaxOutputTokens, sourceMax);
-  if (estimatedInputTokens + reserved > contextWindow) {
-    return {
-      metadata,
-      estimatedInputTokens,
-      ok: false,
-      reason: `Estimated input ${estimatedInputTokens} + max output ${reserved} exceeds the context window ${contextWindow}`,
-    };
-  }
-  return { metadata, estimatedInputTokens, requestMaxOutputTokens: reserved, ok: true };
-}
-
-/**
- * The budget facts compaction and the turn need, resolved exactly as
- * {@link checkContextBudget} resolves them. `threshold` is the input size above
- * which a request compacts before sending: the lower of half the room left after
- * the output reservation and the fixed {@link COMPACTION_THRESHOLD_CAP}.
- */
-export interface ContextBudgetFacts {
-  contextWindow?: number;
-  estimatedInputTokens: number;
-  /** Output tokens the request reserves; absent when nothing is reserved. */
-  outputReservation?: number;
-  /** Input-token compaction threshold; absent when the window is unknown. */
-  threshold?: number;
-}
-
-/** Metadata and budget facts of one assembled request, without mutating it. */
-export function contextBudgetOf(
-  publicId: string,
-  messages: readonly import('../transport/index.ts').Message[],
-  resolveProvider?: (providerId: string) => ProviderDefinition | undefined,
-  requestedMaxOutputTokens?: number,
-): ContextBudgetFacts {
-  const metadata = resolveModelMetadata(publicId, resolveProvider);
-  const estimatedInputTokens = estimateInputTokens(messages);
-  const { contextWindow } = metadata;
-  const sourceMax = boundedOutputReservation(metadata.maxOutputTokens);
-  const outputReservation = metadata.skipCanonicalMetadataFallback === true
-    ? sourceMax === undefined
-      ? requestedMaxOutputTokens
-      : Math.min(requestedMaxOutputTokens ?? sourceMax, sourceMax)
-    : requestedMaxOutputTokens === undefined
-      ? sourceMax
-      : sourceMax === undefined
-        ? undefined
-        : Math.min(requestedMaxOutputTokens, sourceMax);
-  const threshold = contextWindow === undefined || outputReservation === undefined
-    ? undefined
-    : Math.min(Math.floor(0.5 * (contextWindow - outputReservation)), COMPACTION_THRESHOLD_CAP);
-  return {
-    ...(contextWindow === undefined ? {} : { contextWindow }),
-    estimatedInputTokens,
-    ...(outputReservation === undefined ? {} : { outputReservation }),
-    ...(threshold === undefined ? {} : { threshold }),
-  };
-}
-
-/**
- * True only when the route declares the level as a legal reasoning effort. An
- * undeclared list is not a licence to accept an arbitrary level.
- */
-export function isReasoningEffortSupported(metadata: ModelMetadata, effort: ReasoningEffort): boolean {
-  return metadata.reasoningEfforts?.includes(effort) ?? false;
-}
-
-/**
- * True only for a route whose whole ladder is the single provider-default
- * sentinel. Such a route offers no selectable weak-to-strong level; any
- * requested level is satisfied by the route's own upstream default, which
- * materializes no explicit reasoning field. The sentinel is never substituted
- * for a route that declares real levels.
- */
-export function isProviderDefaultReasoningOnly(metadata: ModelMetadata): boolean {
-  const efforts = metadata.reasoningEfforts;
-  return efforts !== undefined && efforts.length === 1 && efforts[0] === PROVIDER_DEFAULT_REASONING;
-}
-
-/** Reject promptly when the signal aborts, even while awaiting a plain promise. */
-function settleWithAbort<T>(value: T | Promise<T>, signal: AbortSignal): Promise<T> {
-  const settled = Promise.resolve(value);
-  if (signal.aborted) {
-    // The caller has already created `value` (e.g. a transport request). We stop
-    // waiting on it, but we must still observe it: its rejection would otherwise
-    // be an unhandled rejection.
-    void settled.catch(() => undefined);
-    return Promise.reject(abortError());
-  }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => {
-      signal.removeEventListener('abort', onAbort);
-      reject(abortError());
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    settled.then(
-      (resolved) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(resolved);
-      },
-      (error: unknown) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(error);
-      },
-    );
-  });
-}
+// The shared settleWithAbort helper is imported from '@wrenyard/model-call'
+// above; the attempt calls below no longer wrap it themselves because
+// callModelAttempt settles internally against the same signal.
 
 /**
  * Wait one backoff step. The wait ends at once, as an abort, when the call's
@@ -862,26 +673,26 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         }
 
         const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? maxTokens;
-        const effort = actualReasoningEffort!;
         const attemptId = randomUUID();
         try {
-          const request: ModelRequest = {
+          const completed = await callModelAttempt({
+            transport: options.transport,
             model: route.model,
+            reasoningEffort: route.reasoningEffort,
             messages,
-            reasoningEffort: effort,
-            attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
-            ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
-            ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),
-            ...(input.tools === undefined ? {} : { tools: input.tools }),
-            ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
+            budget,
             firstResponseTimeoutSec,
             signal: controller.signal,
             onEvent,
+            cacheKey: options.cacheKey,
+            attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
             attemptId,
-          };
-          const completed = await settleWithAbort(options.transport.complete(request), controller.signal);
-          collectAttempts(completed.metrics, retryInstantOf(route.model));
-          return completed;
+            maxOutputTokens: requestMaxOutputTokens,
+            ...(input.tools === undefined ? {} : { tools: input.tools }),
+            ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
+          });
+          collectAttempts(completed.result.metrics, retryInstantOf(route.model));
+          return completed.result;
         } catch (error) {
           if (error instanceof ModelCallError) throw error;
           const fact = errorFactOf(error);
@@ -979,17 +790,19 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           }
           for (;;) {
             try {
-              const completed = await settleWithAbort(options.transport.complete({
+              const completed = await callModelAttempt({
+                transport: options.transport,
                 model: candidateModel,
+                reasoningEffort: candidate.reasoningEffort,
                 messages,
-                reasoningEffort: actualReasoningEffort,
+                budget,
                 // The main reasoning path carries the user's explicit Fast
                 // preference, including an explicit false; an absent preference
                 // sends no field at all. Auxiliary requests never set it.
                 ...(candidate.fast === undefined ? {} : { fast: candidate.fast }),
                 attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
                 ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
-                ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),
+                maxOutputTokens: requestMaxOutputTokens,
                 ...(input.tools === undefined ? {} : { tools: input.tools }),
                 ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
                 ...(options.routeStatus === undefined && options.isRouteExcluded === undefined
@@ -997,9 +810,9 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
                   : { preflight: () => reasoningPreflight(candidateModel) }),
                 signal: controller.signal,
                 onEvent,
-              }), controller.signal);
-              collectAttempts(completed.metrics, retryInstantOf(candidateModel));
-              return completed;
+              });
+              collectAttempts(completed.result.metrics, retryInstantOf(candidateModel));
+              return completed.result;
             } catch (error) {
               lastError = error;
               collectAttempts(metricsOf(error), retryInstantOf(candidateModel));

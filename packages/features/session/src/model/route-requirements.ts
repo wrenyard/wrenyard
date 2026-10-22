@@ -16,7 +16,9 @@ export const AUXILIARY_LADDER: readonly LadderStep[] = [
   { intelligence: ['low', 'mid', 'high', 'premium'] },
 ];
 
-export const ROLE_ROUTE_REQUIREMENTS: Readonly<Record<AuxiliaryCallRole, RoleReasoningRequirement>> = {
+// `task-output` routing config is owned by `@wrenyard/task`
+// (`TASK_OUTPUT_ROUTE_REQUIREMENT`); the session table narrows to session roles.
+export const ROLE_ROUTE_REQUIREMENTS: Readonly<Record<Exclude<AuxiliaryCallRole, 'task-output'>, RoleReasoningRequirement>> = {
   title: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 400, minimumContextWindow: 0, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
   status: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 400, minimumContextWindow: 0, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
   suggestion: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 400, minimumContextWindow: 0, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
@@ -28,5 +30,4 @@ export const ROLE_ROUTE_REQUIREMENTS: Readonly<Record<AuxiliaryCallRole, RoleRea
   todo: { intelligenceMin: 'low', intelligenceExpected: 'mid', expectedTps: 400, minimumContextWindow: 131072, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
   project: { intelligenceMin: 'low', intelligenceExpected: 'mid', expectedTps: 400, minimumContextWindow: 131072, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
   reply: { intelligenceMin: 'low', intelligenceExpected: 'mid', expectedTps: 400, minimumContextWindow: 131072, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: AUXILIARY_LADDER },
-  'task-output': { intelligenceMin: 'low', intelligenceExpected: 'high', expectedTps: 400, minimumContextWindow: 131072, requiredCapabilities: TEXT, scoreWeights: AUXILIARY_SCORE_WEIGHTS, ladder: DISPATCH_LADDER },
 };

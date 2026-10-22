@@ -101,6 +101,9 @@ importers:
       '@wrenyard/gateway':
         specifier: workspace:*
         version: link:../../packages/features/gateway
+      '@wrenyard/model-call':
+        specifier: workspace:*
+        version: link:../../packages/features/model-call
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../../packages/models
@@ -699,6 +702,37 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  packages/features/model-call:
+    dependencies:
+      '@wrenyard/metrics':
+        specifier: workspace:*
+        version: link:../../metrics
+      '@wrenyard/models':
+        specifier: workspace:*
+        version: link:../../models
+      '@wrenyard/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@wrenyard/providers':
+        specifier: workspace:*
+        version: link:../../providers
+      js-tiktoken:
+        specifier: 1.0.21
+        version: 1.0.21
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   packages/features/provider:
     dependencies:
       '@wrenyard/protocol':
@@ -760,6 +794,9 @@ importers:
       '@wrenyard/metrics':
         specifier: workspace:*
         version: link:../../metrics
+      '@wrenyard/model-call':
+        specifier: workspace:*
+        version: link:../model-call
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../../models

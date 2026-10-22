@@ -6,6 +6,7 @@ import {
   type SelectorInputPort,
 } from '@wrenyard/auto-routing'
 import { ROLE_ROUTE_REQUIREMENTS } from '@wrenyard/session'
+import { TASK_OUTPUT_ROUTE_REQUIREMENT } from '@wrenyard/task'
 import { BOT_ROUTING_REQUIREMENT } from './services/bot-agents/routing.mts'
 import { readAuxiliaryRoutingSettings } from '../config/task-settings.mts'
 import { timingSafeEqual, randomBytes, createHash } from 'node:crypto'
@@ -1371,7 +1372,7 @@ async function createForemanDaemonResources(
         gateway: gatewayConnectionSnapshot,
         selectAuxiliary: (role, input) => selectRoutesByRequirement(
           auxiliaryRoutingOptions,
-          ROLE_ROUTE_REQUIREMENTS[role],
+          TASK_OUTPUT_ROUTE_REQUIREMENT,
           role,
           input,
         ),
@@ -1404,7 +1405,7 @@ async function createForemanDaemonResources(
         resetAuxiliaryRouteHealth()
         return selectRoutesByRequirement(
           auxiliaryRoutingOptions,
-          ROLE_ROUTE_REQUIREMENTS[role],
+          ROLE_ROUTE_REQUIREMENTS[role as Exclude<typeof role, 'task-output'>],
           role,
           input,
         )
