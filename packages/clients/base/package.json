@@ -13,9 +13,9 @@
   },
   "dependencies": {
     "@wrenyard/execution": "workspace:*",
+    "@wrenyard/metrics": "workspace:*",
     "@wrenyard/models": "workspace:*",
-    "@wrenyard/paths": "workspace:*",
-    "js-tiktoken": "1.0.21"
+    "@wrenyard/paths": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

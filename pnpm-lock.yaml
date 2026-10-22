@@ -359,15 +359,15 @@ importers:
       '@wrenyard/execution':
         specifier: workspace:*
         version: link:../../execution
+      '@wrenyard/metrics':
+        specifier: workspace:*
+        version: link:../../metrics
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../../models
       '@wrenyard/paths':
         specifier: workspace:*
         version: link:../../paths
-      js-tiktoken:
-        specifier: 1.0.21
-        version: 1.0.21
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -679,15 +679,12 @@ importers:
 
   packages/features/gateway:
     dependencies:
-      '@wrenyard/agent-client':
+      '@wrenyard/metrics':
         specifier: workspace:*
-        version: link:../../clients/base
+        version: link:../../metrics
       '@wrenyard/providers':
         specifier: workspace:*
         version: link:../../providers
-      js-tiktoken:
-        specifier: 1.0.21
-        version: 1.0.21
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -754,15 +751,15 @@ importers:
 
   packages/features/session:
     dependencies:
-      '@wrenyard/agent-client':
-        specifier: workspace:*
-        version: link:../../clients/base
       '@wrenyard/agent-loop':
         specifier: workspace:*
         version: link:../agent-loop
       '@wrenyard/auto-routing':
         specifier: workspace:*
         version: link:../auto-routing
+      '@wrenyard/metrics':
+        specifier: workspace:*
+        version: link:../../metrics
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../../models
@@ -827,6 +824,25 @@ importers:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/metrics:
+    dependencies:
+      js-tiktoken:
+        specifier: 1.0.21
+        version: 1.0.21
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

@@ -1,6 +1,6 @@
 /**
  * Gateway bridge between a protocol module's translated generation signals and
- * the shared tokenizer speed sample core in `@wrenyard/agent-client/statistics`.
+ * the shared tokenizer speed sample core in `@wrenyard/metrics`.
  *
  * All wire recognition lives in the protocol modules; this bridge only accepts
  * protocol-neutral channel deltas and a successful-completion / failure signal,
@@ -10,7 +10,7 @@
  *
  * The clock is injected so sampling is deterministic under test.
  */
-import { TpsGenerationCollector, sampleTiming, type AggregatedResponseTpsSample } from '@wrenyard/agent-client/statistics';
+import { TpsGenerationCollector, sampleTiming, type AggregatedResponseTpsSample } from '@wrenyard/metrics';
 import type { TpsSink } from './protocols/types.ts';
 
 export interface ResponseTpsSample {

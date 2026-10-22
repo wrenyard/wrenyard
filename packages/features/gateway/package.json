@@ -9,9 +9,8 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@wrenyard/agent-client": "workspace:*",
-    "@wrenyard/providers": "workspace:*",
-    "js-tiktoken": "1.0.21"
+    "@wrenyard/metrics": "workspace:*",
+    "@wrenyard/providers": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
