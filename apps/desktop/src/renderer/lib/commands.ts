@@ -45,9 +45,8 @@ function runNavPage(args: unknown): void {
   if (page) void shell.navigate(page);
 }
 
-/** Optional `{provider, sessionId}` args for panel-related commands. */
+/** Optional `{sessionId}` args for panel-related commands. */
 interface PanelCommandArgs {
-  provider?: string;
   sessionId?: string;
 }
 
@@ -55,7 +54,6 @@ function panelCommandArgs(args: unknown): PanelCommandArgs {
   if (args === null || typeof args !== 'object') return {};
   const raw = args as Record<string, unknown>;
   return {
-    ...(typeof raw.provider === 'string' ? { provider: raw.provider } : {}),
     ...(typeof raw.sessionId === 'string' ? { sessionId: raw.sessionId } : {}),
   };
 }
@@ -93,10 +91,9 @@ export const GLOBAL_COMMANDS: readonly CommandDefinition[] = [
   {
     id: 'quota.showPanel',
     title: '查看额度',
-    run: (args) => {
-      const { provider } = panelCommandArgs(args);
+    run: () => {
       void shell.navigate('session');
-      openSessionInspector(provider);
+      openSessionInspector();
     },
   },
   {

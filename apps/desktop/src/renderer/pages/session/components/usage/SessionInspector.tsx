@@ -10,7 +10,6 @@ import { shell } from '@/renderer/lib/desktop';
 import { useQuotaFocus } from '@/renderer/lib/quota-focus';
 import {
   closeSessionInspector,
-  consumeSessionInspectorProvider,
   toggleSessionInspector,
   useSessionInspectorState,
 } from '@/renderer/lib/session-inspector';
@@ -69,7 +68,7 @@ function SessionInspectorUsageBody({ hydrating }: { hydrating: boolean }) {
       </UsageCard>
       <UsageCard
         id="session"
-        title="本会话用量"
+        title="用量"
         footer={(
           <>
             <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{note ?? ''}</span>
@@ -100,11 +99,6 @@ export function SessionInspector({ draft, usageHydrating = false }: { draft: boo
   const focus = useQuotaFocus();
   const asideRef = useRef<HTMLElement | null>(null);
   const [rowWidth, setRowWidth] = useState(0);
-  const [scrollTarget, setScrollTarget] = useState<string | undefined>(undefined);
-
-  useEffect(() => {
-    setScrollTarget(consumeSessionInspectorProvider());
-  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -149,7 +143,7 @@ export function SessionInspector({ draft, usageHydrating = false }: { draft: boo
             title="额度"
             actions={<QuotaCardActions />}
           >
-            <QuotaPanel firstProviderId={focus ?? undefined} scrollProviderId={scrollTarget} />
+            <QuotaPanel providerId={focus ?? undefined} />
           </UsageCard>
         </div>
       </aside>

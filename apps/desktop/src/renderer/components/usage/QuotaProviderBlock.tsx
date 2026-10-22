@@ -1,8 +1,6 @@
-import { BrandIcon } from '@/renderer/components/brand-icon';
-import { QuotaBar, QUOTA_POOL_STATE_LABEL, quotaPoolStateTone } from '@/renderer/components/usage/QuotaBar';
+import { QuotaBar } from '@/renderer/components/usage/QuotaBar';
 import { Button } from '@/renderer/components/ui/button';
 import { useDisplayCurrency, useQuotaRefresh } from '@/renderer/lib/queries';
-import { providerBrand } from '@/renderer/lib/model-brand';
 import { formatQuotaBalance, type QuotaProviderSnapshot } from '@/shell-contract';
 import { cn } from 'cn';
 
@@ -33,8 +31,7 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
   return (
     <div className={cn('flex flex-col gap-1.5', provider.stale && 'opacity-60', className)} data-slot="quota-provider-block">
       <div className="flex items-center gap-2">
-        <BrandIcon brand={providerBrand(provider.id)} />
-        <span className="truncate font-medium">{name}{provider.stale ? '（数据过期）' : ''}</span>
+        <span className="truncate text-sm text-muted-foreground">{name}{provider.stale ? '（数据过期）' : ''}</span>
         {provider.plan ? (
           <span className="truncate text-xs text-muted-foreground">{provider.plan}</span>
         ) : null}
@@ -69,15 +66,13 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
             />
           ))}
           {provider.balances.map((balance) => (
-            <span key={`${balance.currency}:${balance.display}`} className="flex items-baseline gap-1 text-xs">
-              <span className="text-muted-foreground">{BALANCE_LABEL}</span>
-              <strong className="tabular-nums">{formatQuotaBalance(balance, currency)}</strong>
-              {balance.state !== undefined && (
-                <span className={cn(quotaPoolStateTone(balance.state) ?? 'text-muted-foreground')}>
-                  {QUOTA_POOL_STATE_LABEL[balance.state]}
-                </span>
-              )}
-            </span>
+            <div
+              key={`${balance.currency}:${balance.display}`}
+              className="flex h-6 items-center gap-2 text-sm"
+            >
+              <span className="min-w-0 flex-1 truncate text-muted-foreground">{BALANCE_LABEL}</span>
+              <span className="shrink-0 text-right tabular-nums">{formatQuotaBalance(balance, currency)}</span>
+            </div>
           ))}
           {(provider.message || !hasStructured) && (
             <span className="text-xs text-muted-foreground">{provider.message ?? NO_DATA_NOTE}</span>

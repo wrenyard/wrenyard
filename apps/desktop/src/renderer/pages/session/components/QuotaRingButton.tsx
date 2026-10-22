@@ -87,7 +87,7 @@ export function QuotaRingButton() {
       restoreMain(getCurrentSession(), { id: 'quota.showPanel' });
       return;
     }
-    openSessionInspector(providerId);
+    openSessionInspector();
   };
 
   if (providerId === undefined) return null;
