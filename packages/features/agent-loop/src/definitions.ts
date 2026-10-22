@@ -13,7 +13,7 @@
 import type { LoopRecord, MethodEffect } from './loop.ts';
 
 /** The auxiliary definitions the package ships. */
-export type AuxiliaryDefinitionId = 'document' | 'todo' | 'vcs' | 'project' | 'dispatch' | 'memory-search' | 'search';
+export type AuxiliaryDefinitionId = 'document' | 'todo' | 'vcs' | 'project' | 'dispatch' | 'memory-search';
 
 /** Inputs a definition's system prompt may need from its host. */
 export interface DefinitionPorts {
@@ -332,36 +332,6 @@ function memorySearchSystemPrompt(): string {
   ].join('\n');
 }
 
-// ─── Search ─────────────────────────────────────────────────────────────────
-
-/** Rounds the search loop may run before it fails. */
-const SEARCH_MAX_ROUNDS = 12;
-
-/** Protocol methods the search loop exposes. */
-const SEARCH_METHODS = [
-  'workspace.doc.list',
-  'workspace.doc.read',
-  'search.pick',
-];
-
-/** The system prompt: pick workspace documents to read for a read intent. */
-function searchSystemPrompt(): string {
-  return [
-    'You are the document retriever of a Wrenyard session. Pick workspace documents to read for the given intent.',
-    '',
-    'Tools:',
-    '- workspace_doc_list: list documents of one project.',
-    '- workspace_doc_read: read one document by project, kind and name.',
-    '- search_pick: record up to three document paths to load, with a one-sentence understanding and optional near hints.',
-    '',
-    'Rules:',
-    '- Paths must come from the catalog in the message or from workspace_doc_list.',
-    '- Call search_pick once with your final picks before done.',
-    '- near hints name related paths that are not read.',
-    '- Finish with done and a short summary.',
-  ].join('\n');
-}
-
 // ─── Registry ───────────────────────────────────────────────────────────────
 
 /** Every auxiliary definition, keyed by role. */
@@ -414,18 +384,10 @@ export const AUXILIARY_DEFINITIONS: Readonly<Record<AuxiliaryDefinitionId, Auxil
     spanIdPrefix: 'memory',
     buildSystemPrompt: memorySearchSystemPrompt,
   },
-  search: {
-    role: 'search',
-    methods: SEARCH_METHODS,
-    effects: {},
-    maxRounds: SEARCH_MAX_ROUNDS,
-    spanIdPrefix: 'search',
-    buildSystemPrompt: searchSystemPrompt,
-  },
 };
 
 /** The definition list in declaration order. */
-export const AUXILIARY_DEFINITION_IDS = ['document', 'todo', 'vcs', 'project', 'dispatch', 'memory-search', 'search'] as const;
+export const AUXILIARY_DEFINITION_IDS = ['document', 'todo', 'vcs', 'project', 'dispatch', 'memory-search'] as const;
 
 /** Look up one definition by id; undefined for an unknown id. */
 export function getAuxiliaryDefinition(id: string): AuxiliaryDefinition | undefined {

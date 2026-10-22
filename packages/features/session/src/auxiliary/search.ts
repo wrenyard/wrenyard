@@ -2,33 +2,22 @@
  * The search auxiliary task: read workspace material by intent or exact
  * path. It resolves the intent's path tokens against globally readable
  * workspace documents/instructions and against the session's files, asks the
- * document retriever which documents to read, and returns the reads as
- * deferred drafts.
+ * document retriever in one forced `pick` call which catalog documents to
+ * read, and returns the reads as deferred drafts.
  */
 
 import { existsSync, statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { platform } from 'node:os';
 
-import {
-  bindCatalog,
-  createLoopRecord,
-  getAuxiliaryDefinition,
-  protocolTools,
-  runAuxiliaryLoop,
-  toActionOutcome,
-  type AuxiliaryRecordPort,
-  type MethodCatalogPort,
-  type MethodInfo,
-} from '@wrenyard/agent-loop';
-
 import { collectSessionFiles, type LedgerEvent, type LedgerEventDraft } from '../ledger/store.ts';
 import { makeDocumentDraft } from '../documents.ts';
-import { escapeAttr, escapeBody, renderEventsBlock, tag } from '../context/render.ts';
+import { escapeBody, tag } from '../context/render.ts';
 import { fail, isObject, renderRunFiles } from './shared.ts';
 import { messageOf } from '../errors.ts';
 import type { DocCatalogEntry } from '../workspace.ts';
 import type { SessionFile } from '../media.ts';
+import type { ToolCall, ToolSpec } from '../transport/index.ts';
 import type {
   ActionExecutionOutcome,
   ActionRunContext,
@@ -44,45 +33,20 @@ export interface DocSearchViewInput {
   directoryHints?: string[];
 }
 
-function docCategory(path: string): string {
-  const match = /^(.*\/docs\/[^/]+)\//u.exec(path);
-  return match ? match[1]! : path.slice(0, path.lastIndexOf('/'));
-}
-
-function newestSpec(catalog: readonly DocCatalogEntry[]): string | undefined {
-  let best: DocCatalogEntry | undefined;
-  for (const entry of catalog) {
-    if (!/\/docs\/specs\//u.test(entry.path)) continue;
-    if (/deprecated|废弃/iu.test(entry.status)) continue;
-    if (best === undefined || entry.updated > best.updated) best = entry;
-  }
-  return best?.path;
-}
-
+/**
+ * The catalog with one-based ids in catalog order, plus the intent. The
+ * retriever answers with ids, so a pick can never name a path outside it.
+ */
 export function buildDocSearchUser(input: DocSearchViewInput): string {
-  const groups = new Map<string, DocCatalogEntry[]>();
-  for (const entry of input.catalog) {
-    const key = docCategory(entry.path);
-    groups.set(key, [...(groups.get(key) ?? []), entry]);
-  }
-  const defaultSpec = newestSpec(input.catalog);
-  const catalog = [...groups.keys()].sort().map((key) => {
-    const rows = groups.get(key)!.slice().sort((a, b) => a.path.localeCompare(b.path)).map((entry) => {
-      const name = entry.path.slice(entry.path.lastIndexOf('/') + 1);
-      const isDefault = entry.path === defaultSpec ? ' default=true' : '';
-      return escapeBody(
-        `- path=${entry.path} name=${name} title=${entry.title} status=${entry.status} updated=${entry.updated} length=${entry.length}${isDefault}`,
-      );
-    }).join('\n');
-    return `<group path="${escapeAttr(key)}">\n${rows}\n</group>`;
-  }).join('\n');
+  const rows = input.catalog.map((entry, index) =>
+    escapeBody(`[${index + 1}] ${entry.path} | ${entry.title} | ${entry.status || '-'} | ${entry.updated || '-'}`)).join('\n');
   const loaded = input.loadedPaths.length === 0
     ? '(none)'
     : input.loadedPaths.map((path) => `- ${escapeBody(path)}`).join('\n');
   const hints = input.directoryHints ?? [];
   const hintLines = hints.map((hint) => `- ${escapeBody(hint)}`).join('\n');
   const body = [
-    tag('catalog', [], groups.size === 0 ? '(none)' : catalog),
+    tag('catalog', [], rows === '' ? '(none)' : rows),
     ...(hints.length === 0 ? [] : [tag('directory-hints', [], hintLines)]),
     tag('loaded-paths', [], loaded),
     tag('intent', [], escapeBody(input.intent)),
@@ -90,107 +54,76 @@ export function buildDocSearchUser(input: DocSearchViewInput): string {
   return tag('wy-doc-search', [], body);
 }
 
-const SEARCH_PICK_METHOD: MethodInfo = {
-  name: 'search.pick',
-  description: 'Record the final document picks for this search intent.',
-  params: {
+/**
+ * Output-token allowance for the one pick call. Reasoning counts against it:
+ * HY3 picks spent up to about 1,400 tokens and fail outright below 512.
+ */
+const SEARCH_MAX_TOKENS = 3072;
+
+const SEARCH_SYSTEM = [
+  'You choose workspace documents for a Wrenyard session to read.',
+  'The catalog lists every project document with a numeric id. Choose at most three ids whose documents the intent needs, most relevant first, judging only by path, title, status and date.',
+  'Do not answer the intent, derive values or locate source code: the session reads the chosen documents itself.',
+  'Prefer current documents over deprecated ones, and the newer one when titles overlap.',
+  'Call pick exactly once. Use an empty ids list when nothing fits.',
+].join('\n');
+
+/** The one tool the retriever declares; calling it ends the search. */
+const PICK_TOOL: ToolSpec = {
+  name: 'pick',
+  description: 'Choose the catalog documents to read. Calling it ends the search.',
+  parameters: {
     type: 'object',
     properties: {
-      understanding: { type: 'string' },
-      picks: {
+      ids: {
         type: 'array',
         maxItems: 3,
-        items: {
-          type: 'object',
-          properties: {
-            path: { type: 'string' },
-            reason: { type: 'string' },
-          },
-          required: ['path', 'reason'],
-        },
+        items: { type: 'integer' },
+        description: 'Catalog ids to read, most relevant first. Empty when nothing fits.',
       },
-      near: {
-        type: 'array',
-        maxItems: 5,
-        items: {
-          type: 'object',
-          properties: {
-            path: { type: 'string' },
-            reason: { type: 'string' },
-          },
-          required: ['path', 'reason'],
-        },
-      },
+      understanding: { type: 'string', description: 'One sentence: what the intent is looking for.' },
     },
-    required: ['understanding', 'picks', 'near'],
+    required: ['ids', 'understanding'],
+    additionalProperties: false,
   },
 };
 
-type SearchPickState = {
-  understanding: string;
-  picks: { path: string; reason: string }[];
-  near: { path: string; title: string; reason: string }[];
-  notes: string[];
-};
-
-function createSearchCatalog(
-  host: ActionWorkflowDeps['host'],
+/**
+ * Read the pick: exactly one `pick` call with integer ids. A provider that
+ * ignores a forced tool choice may answer in prose; its `[n]` ids are read
+ * from the text instead. Unknown and repeated ids are dropped.
+ */
+function readPick(
+  calls: readonly ToolCall[],
+  text: string,
+  proseFallback: boolean,
   catalog: readonly DocCatalogEntry[],
-  state: SearchPickState,
-): MethodCatalogPort {
-  const remote = bindCatalog(host, 'search');
-  const local = new Map([[SEARCH_PICK_METHOD.name, SEARCH_PICK_METHOD]]);
-  const known = new Map(catalog.map((entry) => [entry.path, entry]));
-  return {
-    async methods(names) {
-      const out: MethodInfo[] = [];
-      const delegated: string[] = [];
-      for (const name of names) {
-        const info = local.get(name);
-        if (info !== undefined) out.push(info);
-        else delegated.push(name);
-      }
-      if (delegated.length > 0) out.push(...await remote.methods(delegated));
-      return out;
-    },
-    async call(method, params, context) {
-      if (method === 'search.pick') {
-        if (!isObject(params) || typeof params.understanding !== 'string'
-          || !Array.isArray(params.picks) || !Array.isArray(params.near)) {
-          throw Object.assign(new Error('search.pick has an invalid shape'), { code: 'validation_failed' });
-        }
-        state.understanding = params.understanding;
-        state.picks = [];
-        state.near = [];
-        for (const raw of params.picks) {
-          if (!isObject(raw) || typeof raw.path !== 'string' || typeof raw.reason !== 'string') {
-            throw Object.assign(new Error('search.pick entry has an invalid shape'), { code: 'validation_failed' });
-          }
-          const entry = known.get(raw.path);
-          if (!entry) {
-            state.notes.push(`discarded unknown catalog path: ${raw.path}`);
-            continue;
-          }
-          state.picks.push({ path: entry.path, reason: raw.reason });
-          if (state.picks.length >= 3) break;
-        }
-        for (const raw of params.near) {
-          if (!isObject(raw) || typeof raw.path !== 'string' || typeof raw.reason !== 'string') {
-            throw Object.assign(new Error('search.pick near entry has an invalid shape'), { code: 'validation_failed' });
-          }
-          const entry = known.get(raw.path);
-          if (!entry) {
-            state.notes.push(`discarded unknown catalog path: ${raw.path}`);
-            continue;
-          }
-          state.near.push({ path: entry.path, title: entry.title, reason: raw.reason });
-          if (state.near.length >= 5) break;
-        }
-        return { ok: true };
-      }
-      return remote.call(method, params, context);
-    },
-  };
+): { understanding: string; paths: string[] } | undefined {
+  let ids: unknown[];
+  let understanding = '';
+  const picks = calls.filter((call) => call.name === PICK_TOOL.name);
+  if (picks.length === 1) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(picks[0]!.arguments);
+    } catch {
+      return undefined;
+    }
+    if (!isObject(parsed) || !Array.isArray(parsed.ids)) return undefined;
+    ids = parsed.ids;
+    if (typeof parsed.understanding === 'string') understanding = parsed.understanding;
+  } else if (calls.length === 0 && proseFallback && text.trim() !== '') {
+    ids = [...text.matchAll(/\[(\d+)\]/gu)].map((match) => Number(match[1]));
+  } else {
+    return undefined;
+  }
+  const paths: string[] = [];
+  for (const id of ids) {
+    const path = Number.isInteger(id) ? catalog[(id as number) - 1]?.path : undefined;
+    if (path !== undefined && !paths.includes(path)) paths.push(path);
+    if (paths.length >= 3) break;
+  }
+  return { understanding, paths };
 }
 
 // ─── Read action ────────────────────────────────────────────────────────────
@@ -250,71 +183,49 @@ export async function runSearchAction(
   const needSearch = tokens.length === 0 || directoryHints.length > 0;
   if (!needSearch && residual !== '') notes.push('Only the stated paths were read. For other documents, send a separate read without paths.');
 
-  let picks: { path: string; reason: string }[] = [];
   if (needSearch) {
-    const pickState: SearchPickState = { understanding: '', picks: [], near: [], notes: [] };
-    const record: AuxiliaryRecordPort = {
-      ...createLoopRecord(),
-      helpers: { messageOf, escapeBody, renderEventsBlock },
-    };
-    record.observeToolResult = () => {
-      record.observations.push('search.pick');
-    };
-    const definition = getAuxiliaryDefinition('search');
-    if (definition === undefined) return fail(withMissing('search auxiliary definition is missing', missing));
-    const loopDeps = {
-      host: createSearchCatalog(deps.host, catalog, pickState),
-      calls: deps.calls,
-      helpers: record.helpers,
-    };
-    const tools = await protocolTools(
-      loopDeps.host,
-      record.helpers,
-      ctx,
-      record,
-      definition.methods,
-      definition.effects,
-    );
-    const loopResult = await runAuxiliaryLoop({
-      deps: loopDeps,
-      ctx,
-      role: 'search',
-      system: definition.buildSystemPrompt({ documentRules: () => '' }),
-      user: buildDocSearchUser({ catalog, loadedPaths: [...loadedDocs], intent: action.intent, directoryHints }),
-      tools,
-      maxRounds: definition.maxRounds,
-      spanIdPrefix: definition.spanIdPrefix,
-      record,
-    });
-    const searchOutcome = toActionOutcome(loopResult, record);
-    if (searchOutcome.status !== 'done') {
-      return fail(withMissing(searchOutcome.result, missing));
+    const system = SEARCH_SYSTEM;
+    const user = buildDocSearchUser({ catalog, loadedPaths: [...loadedDocs], intent: action.intent, directoryHints });
+    let pick: ReturnType<typeof readPick>;
+    try {
+      const result = await deps.calls.run({
+        spanId: `${ctx.actionId}.search`,
+        parent: ctx.actionId,
+        role: 'search',
+        turn: ctx.turn,
+        step: ctx.step,
+        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+        layers: { 'wy-system': system.length, 'wy-ctx': user.length },
+        maxTokens: SEARCH_MAX_TOKENS,
+        tools: [PICK_TOOL],
+        toolChoice: { name: PICK_TOOL.name },
+        signal: ctx.signal,
+      });
+      const provider = result.route?.provider;
+      const proseFallback = provider !== undefined && deps.host.resolveInferenceProvider(provider)?.ignoresForcedToolChoice === true;
+      pick = readPick(result.toolCalls, result.text, proseFallback, catalog);
+    } catch (error) {
+      return fail(withMissing(`The model call failed: ${messageOf(error)}`, missing));
     }
-    if (pickState.picks.length === 0 && pickState.understanding === '') {
-      return fail(withMissing('search did not record any document picks', missing));
-    }
-    notes.push(...pickState.notes);
-    picks = pickState.picks;
-    const nearTitles = pickState.near.map((near) => `${near.path} (${near.title})`);
-    if (nearTitles.length > 0) notes.push(`near: ${nearTitles.join(', ')}`);
+    if (pick === undefined) return fail(withMissing('search did not return a valid pick call', missing));
+    if (pick.paths.length === 0) notes.push('search found no matching document');
     deferred.push({
       type: 'document.found',
       turn: ctx.turn,
       step: ctx.step,
       parent: ctx.actionId,
-      understanding: pickState.understanding,
-      picks: pickState.picks.map((pick) => ({
-        path: pick.path,
-        title: catalog.find((entry) => entry.path === pick.path)?.title ?? pick.path,
-        reason: pick.reason,
+      understanding: pick.understanding,
+      picks: pick.paths.map((path) => ({
+        path,
+        title: catalog.find((entry) => entry.path === path)?.title ?? path,
+        reason: '',
       })),
-      near: pickState.near.map((near) => ({ path: near.path, title: near.title, reason: near.reason })),
-      notes: pickState.notes,
+      near: [],
+      notes: [],
     });
-  }
-
-  for (const pick of picks) {
-    if (!exact.some((item) => item.path === pick.path)) exact.push({ path: pick.path, kind: 'doc' });
+    for (const path of pick.paths) {
+      if (!exact.some((item) => item.path === path)) exact.push({ path, kind: 'doc' });
+    }
   }
 
   for (const item of exact) {
