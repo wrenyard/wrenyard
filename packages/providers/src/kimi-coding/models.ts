@@ -1,6 +1,7 @@
 import { defineProvider, model, openAI, anthropic, REASONING_LOW_HIGH_MAX, effortLadder } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
+  modelProtocols: ['openai_chat', 'anthropic_messages'],
   id: 'kimi-coding', displayName: 'Kimi Coding', credentialResolver: 'managed',
   defaultModel: 'kimi-k3', quotaProvider: 'kimi-coding',
   models: [

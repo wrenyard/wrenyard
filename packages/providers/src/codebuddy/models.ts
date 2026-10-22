@@ -1,6 +1,7 @@
 import { codeBuddyRouteFailure } from './route-errors.ts';
 import type { ClientDefinition, ModelDefinition, ProviderDefinition, ReasoningEffort } from '../base/index.ts';
 import { resolveProviderModel, type CanonicalModelOverrides } from '../base/model-defaults.ts';
+import { validateOfferingSnapshot } from '../base/catalog.ts';
 import { models, isMainstreamModelId, REASONING_EFFORTS } from '@wrenyard/models';
 import {
   codeBuddyCanonicalModelId,
@@ -269,6 +270,7 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
           ...productMetadataOverrides(entry, registered.defaults.contextWindow),
           ...claudeMetadataOverrides(canonicalId),
           reasoningEfforts: codeBuddyReasoningEfforts(canonicalId, entry),
+          protocols: ['openai_chat'],
         },
       }),
     };
@@ -330,20 +332,26 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     state.effortLadders = Object.fromEntries(
       built.models.flatMap((entry) => entry.reasoningEfforts.length === 0 ? [] : [[entry.id, entry.reasoningEfforts] as const]),
     );
-    definition.models = built.models;
-    // Aliases only target currently offered models, and only where they do not
-    // collide with an exact offered endpoint id. Outbound wire ids are the
-    // endpoint row ids themselves.
-    definition.modelAliases = historicalAliasesFor(built.models);
-    definition.reasoningEffortMappings = reasoningEffortMappingsFor(built.models);
     // Registered identity -> exact endpoint wire id. The mapping is derived
     // from the same private bindings the native and gateway transports use.
+    // The endpoint is assigned before the snapshot validation so the offering
+    // protocol check sees the registered endpoints it must match.
     definition.protocols = [{
       protocol: 'openai_chat',
       endpoint: 'https://copilot.tencent.com/v2/chat/completions',
       authScheme: 'bearer',
       upstreamModels: state.upstreamModels,
     }];
+    // A refreshed snapshot obeys the same registered-identity and
+    // protocol-declaration contract as startup; an invalid snapshot is not
+    // published.
+    validateOfferingSnapshot('codebuddy', built.models, definition.protocols);
+    definition.models = built.models;
+    // Aliases only target currently offered models, and only where they do not
+    // collide with an exact offered endpoint id. Outbound wire ids are the
+    // endpoint row ids themselves.
+    definition.modelAliases = historicalAliasesFor(built.models);
+    definition.reasoningEffortMappings = reasoningEffortMappingsFor(built.models);
   };
   publish(entries);
 

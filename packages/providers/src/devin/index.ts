@@ -61,7 +61,7 @@ export function createDevin(options: DevinOptions = {}): DevinProvider {
   const publish = (snapshot: Snapshot) => {
     // A replacement snapshot obeys the same identity contract as startup:
     // registered ids only, one offering per identity.
-    validateOfferingSnapshot('devin', snapshot.models);
+    validateOfferingSnapshot('devin', snapshot.models, [chatProtocol]);
     const mappings: Record<string, { codebuddy: ReturnType<typeof effortLadder>; grok: ReturnType<typeof effortLadder> }> = {};
     const upstreamModels: Record<string, string> = {};
     for (const group of snapshot.models) {

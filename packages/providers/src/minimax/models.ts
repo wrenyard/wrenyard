@@ -1,6 +1,7 @@
 import { defineProvider, model, openAI, anthropic } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
+  modelProtocols: ['openai_chat', 'anthropic_messages'],
   id: 'minimax', displayName: 'MiniMax', credentialResolver: 'managed', defaultModel: 'minimax-m3',
   models: [model('minimax-m3', 1_000_000, 131_072, 'MiniMax-M3', ['none', 'medium'])],
   protocols: [openAI('https://api.minimaxi.com/v1/chat/completions'), anthropic('https://api.minimaxi.com/anthropic/v1/messages')],

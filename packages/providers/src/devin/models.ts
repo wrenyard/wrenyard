@@ -103,6 +103,7 @@ export async function fetchDevinModels(credentials: DevinCredentials, fetcher: t
       id: uid,
       displayName: name || uid,
       reasoningEfforts: ['default'],
+      protocols: ['openai_chat'],
       capabilities: ['text'],
       ...(context > 0 ? { contextWindow: context } : {}),
       ...(output > 0 ? { maxOutputTokens: output, maxTokens: output } : {}),
@@ -164,6 +165,7 @@ export async function fetchDevinModels(credentials: DevinCredentials, fetcher: t
       ownsMetadata: true,
       capabilities: ['text'],
       reasoningEfforts: efforts,
+      protocols: ['openai_chat'],
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(maxOutputTokens === undefined ? {} : { maxOutputTokens, maxTokens: maxOutputTokens }),
       ...(cached !== undefined && input !== undefined && output !== undefined

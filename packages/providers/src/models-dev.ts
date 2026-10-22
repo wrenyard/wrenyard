@@ -84,12 +84,16 @@ function publicProviderIdentity(
 export const modelsDevProviders: readonly ProviderDefinition[] = MODELS_DEV_CATALOG_PROVIDERS.map(
   (entry) => {
     const identity = publicProviderIdentity(entry);
+    const capability = protocolFor(entry);
     return defineProvider({
       id: identity.id,
       displayName: identity.displayName,
       credentialResolver: 'managed',
-      models: entry.models.map(modelFor),
-      protocols: [protocolFor(entry)],
+      // Every generated offering serves exactly the one protocol this row
+      // registers an endpoint for.
+      models: entry.models.map((source) => ({ ...modelFor(source), protocols: [capability.protocol] })),
+      modelProtocols: [capability.protocol],
+      protocols: [capability],
       usesProviderDefaultReasoning: true,
       // The provider default sends no upstream reasoning fields at all: it is
       // neither `none` nor a fabricated effort.

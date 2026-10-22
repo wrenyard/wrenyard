@@ -4,6 +4,7 @@ import { defineProvider, model, REASONING_UP_TO_XHIGH } from '../base/model-defa
 // provider id with its own metadata, quota row, and pool; neither identity
 // rewrites into the other.
 export const definition = defineProvider({
+  modelProtocols: [],
   id: 'spacex-ai', displayName: 'SpaceXAI', credentialResolver: 'grok-oauth', nativeClients: ['grok'], defaultModel: 'grok-4.7', quotaProvider: 'spacex-ai', useClientBinary: true,
   // The Grok client sends a text prompt file and does not forward images.
   // The native CLI receives an explicit mapped reasoning effort.

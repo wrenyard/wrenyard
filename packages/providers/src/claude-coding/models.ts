@@ -2,6 +2,7 @@ import { defineProvider, REASONING_FULL } from '../base/model-defaults.ts';
 
 // Native effort and extended-thinking budgets are materialized per launch.
 export const definition = defineProvider({
+  modelProtocols: [],
   id: 'claude-coding', displayName: 'Claude', credentialResolver: 'claude',
   nativeClients: ['claude'],
   models: [

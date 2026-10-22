@@ -65,6 +65,7 @@ function freeRow(seed: FreeSeed): ModelDefinition {
     free: true,
     supportedClients: ['opencode'],
     reasoningEfforts: seed.efforts ?? ['default'],
+    protocols: ['openai_chat', 'anthropic_messages'],
   };
 }
 
@@ -81,15 +82,15 @@ const FREE_MAPPINGS: ProviderReasoningEffortMappings = Object.fromEntries(
 
 const PAID_DECLARATIONS = [
   // Paid Zen pool, priced by the registered catalog metadata.
-  model('glm-5.3', 1_048_576, 32_768, 'glm-5.3', REASONING_LOW_HIGH_MAX),
-  model('kimi-k3', 1_048_576, 32_768, 'kimi-k3', REASONING_LOW_HIGH_MAX),
+  { ...model('glm-5.3', 1_048_576, 32_768, 'glm-5.3', REASONING_LOW_HIGH_MAX), protocols: ['openai_chat', 'anthropic_messages'] },
+  { ...model('kimi-k3', 1_048_576, 32_768, 'kimi-k3', REASONING_LOW_HIGH_MAX), protocols: ['openai_chat', 'anthropic_messages'] },
   // Zen serves Sol through Responses. The native OpenCode client owns that
   // transport; the existing Chat Completions gateway cannot serve this model.
-  { canonical: 'gpt-6.1-sol', overrides: { supportedClients: ['opencode'], reasoningEfforts: ['high'] } },
+  { canonical: 'gpt-6.1-sol', overrides: { supportedClients: ['opencode'], reasoningEfforts: ['high'], protocols: ['openai_chat', 'anthropic_messages'] } },
   // The official Zen Argon endpoint uses @ai-sdk/google, so this model is
   // reachable only through the native OpenCode client and is never published
   // through the OpenAI or Anthropic gateway.
-  { canonical: 'gemini-4-argon', overrides: { supportedClients: ['opencode'], reasoningEfforts: ['low', 'medium', 'high'] } },
+  { canonical: 'gemini-4-argon', overrides: { supportedClients: ['opencode'], reasoningEfforts: ['low', 'medium', 'high'], protocols: ['openai_chat', 'anthropic_messages'] } },
 ] satisfies readonly ProviderModel[];
 
 /**
@@ -133,6 +134,7 @@ export const definition = defineProvider({
   // Supplier hook: the OpenCode identity and session-header forwarding.
   beforeRequest: forwardOpenCodeSession,
   models: [...FREE_SEEDS.map(freeRow), ...PAID_DECLARATIONS],
+  modelProtocols: ['openai_chat', 'anthropic_messages'],
   // Real measured evidence for the exact free route, threaded through the shared
   // explicit-free gate: the canonical default speed is 95 too, and this
   // provider-scoped override states the same floored value as a routing fact.

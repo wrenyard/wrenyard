@@ -7,6 +7,7 @@ const suffixMappings = (id: string, levels: readonly ReasoningEffort[]) =>
 const FIVE_LEVELS = REASONING_FULL.filter(effort => effort !== 'none');
 
 export const definition = defineProvider({
+  modelProtocols: [],
   id: 'cursor', displayName: 'Cursor', credentialResolver: 'cursor', nativeClients: ['cursor'],
   defaultModel: 'composer-2.5', quotaProvider: 'cursor', useClientBinary: true,
   models: [

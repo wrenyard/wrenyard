@@ -1,6 +1,7 @@
 import { defineProvider, model, openAI, anthropic } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
+  modelProtocols: ['openai_chat', 'anthropic_messages'],
   id: 'qwen-coding', displayName: 'Qwen Coding Plan', credentialResolver: 'managed',
   models: [],
   convertReasoningEffort: (_modelId, effort, protocol) => {

@@ -2,6 +2,7 @@ import { defineProvider, REASONING_FULL, effortLadder } from '../base/model-defa
 
 // GPT-6.1 Sol tool calls require Responses; Chat Completions is text-only.
 export const definition = defineProvider({
+  modelProtocols: ['openai_responses'],
   id: 'openai', displayName: 'OpenAI', credentialResolver: 'managed', defaultModel: 'gpt-6.1-sol',
   models: [
     { canonical: 'gpt-6-astra', overrides: { reasoningEfforts: REASONING_FULL, supportsFast: true } },

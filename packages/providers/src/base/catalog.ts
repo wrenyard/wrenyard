@@ -121,11 +121,34 @@ function requireID(kind: string, value: string): void {
  * provider-published replacement snapshot, so a discovery refresh cannot
  * bypass the identity or metadata contract.
  */
-export function validateOfferingSnapshot(providerID: string, offerings: readonly ModelDefinition[]): void {
+export function validateOfferingSnapshot(
+  providerID: string,
+  offerings: readonly ModelDefinition[],
+  providerProtocols: readonly ProtocolCapability[],
+): void {
+  const endpointProtocols = new Set<GatewayProtocol>(providerProtocols.map((entry) => entry.protocol));
   const seen = new Set<string>();
   for (const model of offerings) {
     if (!model.id.trim()) throw new Error(`provider ${providerID} has an empty model id`);
     if (seen.has(model.id)) throw new Error(`provider ${providerID} has duplicate model ${model.id}`);
+    // The offering's protocol declaration is required and must name only
+    // distinct, registered endpoints of the owning provider.
+    if (!Array.isArray(model.protocols)) {
+      throw new Error(`provider ${providerID} model ${model.id} protocols must be an array`);
+    }
+    const declared = new Set<string>();
+    for (const protocol of model.protocols) {
+      if (!(GATEWAY_PROTOCOLS as readonly string[]).includes(protocol)) {
+        throw new Error(`provider ${providerID} model ${model.id} has invalid protocol: ${JSON.stringify(protocol)}`);
+      }
+      if (declared.has(protocol)) {
+        throw new Error(`provider ${providerID} model ${model.id} has duplicate protocol ${protocol}`);
+      }
+      declared.add(protocol);
+      if (!endpointProtocols.has(protocol)) {
+        throw new Error(`provider ${providerID} model ${model.id} declares protocol ${protocol} with no registered endpoint`);
+      }
+    }
     const registered = models.get(model.id);
     if (!registered) {
       throw new Error(`provider ${providerID} model ${model.id} must be a registered model id`);
@@ -348,7 +371,7 @@ export class Catalog {
     if (this.providersByID.has(provider.id)) throw new Error(`duplicate provider: ${provider.id}`);
     // The initial snapshot obeys the same identity contract as every later
     // replacement snapshot: registered ids only, no duplicate offering.
-    validateOfferingSnapshot(provider.id, provider.models);
+    validateOfferingSnapshot(provider.id, provider.models, provider.protocols ?? []);
     const modelIDs = new Set<string>();
     // Stage shared identity entries locally. They are committed only after the
     // whole provider (including aliases, speed overrides, and protocols) has
@@ -536,10 +559,11 @@ export class Catalog {
     return this.providers()
       .filter((provider) => credentialAvailable(provider))
       .flatMap((provider) => {
-        const protocols = (provider.protocols ?? []).map((entry) => entry.protocol);
-        if (protocols.length === 0) return [];
         return provider.models
           .filter((model) => !model.taskOnly)
+          // Only offerings that declare at least one gateway protocol are
+          // callable through the gateway directory.
+          .filter((model) => model.protocols.length > 0)
           // Only a NON-EMPTY client restriction hides the model from the
           // client-agnostic public gateway directory: such models are usable
           // solely through their exact client transport. A model with an empty
@@ -551,7 +575,7 @@ export class Catalog {
             displayName: model.displayName,
             provider: provider.id,
             publicId: `${provider.id}/${model.id}`,
-            protocols: [...protocols],
+            protocols: model.protocols,
             // Speed and intelligence are required registered facts, carried
             // through verbatim: the directory never substitutes a zero speed or
             // a made-up intelligence tier.
@@ -626,6 +650,9 @@ export class Catalog {
     if ((model.supportedClients?.length ?? 0) > 0) {
       throw new Error(`model ${requestedModelID} is not available through the gateway`);
     }
+    if (!model.protocols.includes(protocol)) {
+      throw new Error(`model ${requestedModelID} does not support ${protocol}`);
+    }
     const capability = provider.protocols?.find((entry) => entry.protocol === protocol);
     if (!capability) throw new Error(`model ${requestedModelID} does not support ${protocol}`);
     return {
@@ -651,10 +678,10 @@ export class Catalog {
   ): ProviderDefinition {
     const candidates = this.providers()
       .filter((provider) => credentialAvailableProviderIDs.has(provider.id))
-      .filter((provider) => provider.protocols?.some((entry) => entry.protocol === protocol))
       .filter((provider) => provider.modelAliases?.[modelID] === undefined)
       .filter((provider) => provider.models.some((model) =>
-        model.id === modelID && !model.taskOnly && (model.supportedClients?.length ?? 0) === 0));
+        model.id === modelID && !model.taskOnly && (model.supportedClients?.length ?? 0) === 0
+          && model.protocols.includes(protocol)));
     if (candidates.length === 1) return candidates[0]!;
     if (candidates.length === 0) throw new Error(`no available provider offers registered model ${modelID}`);
     throw new Error(
@@ -679,7 +706,7 @@ export class Catalog {
     const byLevel = provider.reasoningEffortMappings?.[modelDef.id]?.[clientID];
     const forwardsGatewayEffort = client.forwardsGatewayReasoningEffort === true
       && !provider.nativeClients?.includes(clientID)
-      && client.gatewayProtocols.some(protocol => provider.protocols?.some(capability => capability.protocol === protocol))
+      && client.gatewayProtocols.some(protocol => modelDef.protocols.includes(protocol))
       && !client.unsupportedGatewayProviders?.includes(providerID)
       && (modelDef.supportedClients === undefined || modelDef.supportedClients.length === 0 || modelDef.supportedClients.includes(clientID));
     if (byLevel === undefined && forwardsGatewayEffort) return modelDef.reasoningEfforts;
@@ -775,7 +802,7 @@ export class Catalog {
       throw new Error(`provider ${providerID} cannot serve client ${clientID}`);
     }
     const protocol = client.gatewayProtocols.find((candidate) =>
-      provider.protocols?.some((capability) => capability.protocol === candidate));
+      modelDef.protocols.includes(candidate));
     if (!protocol) throw new Error(`provider ${providerID} cannot serve client ${clientID}`);
     // A gateway task run has no body injection: neither an on nor an off Fast
     // request can reach the upstream, because only a provider-owned native

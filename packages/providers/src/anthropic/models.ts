@@ -1,6 +1,7 @@
 import { defineProvider, anthropic, REASONING_FULL } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
+  modelProtocols: ['anthropic_messages'],
   id: 'anthropic', displayName: 'Anthropic', credentialResolver: 'managed',
   defaultModel: 'claude-sonnet-5-5', quotaProvider: 'anthropic',
   models: [

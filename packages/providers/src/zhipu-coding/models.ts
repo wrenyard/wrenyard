@@ -1,6 +1,7 @@
 import { defineProvider, model, openAI, anthropic, REASONING_LOW_HIGH_MAX } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
+  modelProtocols: ['openai_chat', 'anthropic_messages'],
   id: 'zhipu-coding', displayName: 'Zhipu Coding', credentialResolver: 'managed', defaultModel: 'glm-5.3', quotaProvider: 'zhipu-coding',
   models: [
     model('glm-5.3', 1_048_576, 32_768, undefined, REASONING_LOW_HIGH_MAX),

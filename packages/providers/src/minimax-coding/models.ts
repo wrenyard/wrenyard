@@ -4,6 +4,7 @@ import { defineProvider, model, openAI, anthropic, effortLadder } from '../base/
 const REASONING_LOW_MAX = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 export const definition = defineProvider({
+  modelProtocols: ['openai_chat', 'anthropic_messages'],
   id: 'minimax-coding', displayName: 'MiniMax Coding Plan', credentialResolver: 'managed', defaultModel: 'minimax-m3.1-flash',
   // M3.1 Flash is subscription-only; the pay-as-you-go provider keeps M3.
   models: [model('minimax-m3.1-flash', undefined, undefined, 'MiniMax-M3.1-Flash', REASONING_LOW_MAX)],

@@ -5,6 +5,7 @@ import { defineProvider } from '../base/model-defaults.ts';
 // no models, no native client, and no execution binary. It is never merged
 // with SpaceXAI (the model API) by an id rewrite.
 export const definition = defineProvider({
+  modelProtocols: [],
   id: 'super-grok', displayName: 'Super Grok', credentialResolver: 'grok-oauth',
   convertReasoningEffort: () => { throw new Error('Super Grok has no runnable model routes'); },
   models: [], quotaProvider: 'super-grok',

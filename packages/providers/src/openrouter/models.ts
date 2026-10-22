@@ -8,6 +8,7 @@ const REASONING_WITHOUT_NONE: readonly ReasoningEffort[] = ['low', 'medium', 'hi
 const REASONING_BASIC: readonly ReasoningEffort[] = ['medium'];
 
 export const definition = defineProvider({
+  modelProtocols: ['openai_chat'],
   id: 'openrouter', displayName: 'OpenRouter', credentialResolver: 'managed', defaultModel: 'nex-n2.5-mini',
   models: [
     model('claude-sonnet-5-5', undefined, undefined, 'anthropic/claude-sonnet-5.5', REASONING_WITHOUT_NONE),

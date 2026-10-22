@@ -127,6 +127,7 @@ function liveFreeRow(entry: LiveFreeRow): ModelDefinition {
     free: true,
     supportedClients: ['opencode'],
     reasoningEfforts: entry.row.efforts.length > 0 ? entry.row.efforts : ['default'],
+    protocols: ['openai_chat', 'anthropic_messages'],
   };
 }
 
@@ -169,7 +170,7 @@ export function createOpenCodeZen(options: OpenCodeZenOptions = {}): OpenCodeZen
     };
     // A replacement snapshot obeys the same registered-identity, duplicate and
     // required-metadata contract as startup; an invalid snapshot is not published.
-    validateOfferingSnapshot('opencode-zen', offerings);
+    validateOfferingSnapshot('opencode-zen', offerings, definition.protocols ?? []);
     definition.models = offerings;
     definition.reasoningEffortMappings = mappings;
     // A promotion leaving the catalog removes its speed override and measurement

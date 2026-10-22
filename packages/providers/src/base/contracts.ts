@@ -145,6 +145,15 @@ export interface ModelDefinition {
    * `/v3/config` offering (e.g. `x1.33 credits`). A display-only cost
    * multiplier, never a balance, USD price or percentage. */
   readonly credits?: string;
+  /**
+   * The exact gateway protocols this offering supports. An EMPTY array means
+   * the offering has no gateway protocol; native semantics remain governed by
+   * `nativeClients`/`supportedClients`. Every entry must be a member of
+   * `GATEWAY_PROTOCOLS`, entries must be unique, and every entry must have a
+   * registered endpoint in the owning provider's `protocols`. A missing field
+   * is an illegal offering: registration and refresh validation reject it.
+   */
+  protocols: readonly GatewayProtocol[];
 }
 
 export interface DispatchCandidate {
@@ -204,11 +213,6 @@ export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel'> & {
    * route health, quota and statistics and is never the model's public
    * identity: the entry's `id` is the registered model id. */
   publicId: string;
-  /** Entry protocols this exact model is served on. Required and non-empty:
-   * the public directory is protocol-independent and every entry declares where
-   * it is reachable, so a consumer never re-derives protocol ownership from a
-   * provider definition. */
-  protocols: readonly GatewayProtocol[];
   routeState?: GatewayRouteState;
   routeUntil?: string;
   /** Circuit phase of the route; absent when the route is healthy. */

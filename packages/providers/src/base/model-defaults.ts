@@ -1,5 +1,5 @@
 import { models, PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
-import type { ProviderDefinition, ModelDefinition, ProtocolCapability } from './catalog.ts';
+import type { GatewayProtocol, ProviderDefinition, ModelDefinition, ProtocolCapability } from './catalog.ts';
 
 /**
  * One provider-side model declaration.
@@ -18,9 +18,12 @@ import type { ProviderDefinition, ModelDefinition, ProtocolCapability } from './
  *   fields describe only what its source reported and an omitted value stays
  *   absent. No value is ever fabricated either way.
  */
-type RawModelDefinition = Omit<ModelDefinition, 'displayName' | 'canonicalModel' | 'speed' | 'intelligence' | 'reasoningEfforts'> & {
+type RawModelDefinition = Omit<ModelDefinition, 'displayName' | 'canonicalModel' | 'speed' | 'intelligence' | 'reasoningEfforts' | 'protocols'> & {
   displayName?: string;
   reasoningEfforts?: readonly ReasoningEffort[];
+  /** Per-offering protocol override; absent rows inherit the provider's
+   * `modelProtocols` batch declaration at resolve time. */
+  protocols?: readonly GatewayProtocol[];
 };
 
 /**
@@ -56,6 +59,10 @@ export type ProviderModel = string | CanonicalModelSelection | RawModelDefinitio
 
 type RawProviderDefinition = Omit<ProviderDefinition, 'models'> & {
   models: readonly ProviderModel[];
+  /** The explicit per-provider batch declaration stamped onto every resolved
+   * offering that does not override `protocols` itself. An EMPTY array means
+   * every resolved offering has no gateway protocol (native-only provider). */
+  modelProtocols: readonly GatewayProtocol[];
 };
 
 export const model = (
@@ -116,6 +123,7 @@ function isCanonicalSelection(declaration: ProviderModel): declaration is Canoni
 function resolveModelDefaults(
   def: RawModelDefinition,
   usesProviderDefaultReasoning: boolean,
+  modelProtocols: readonly GatewayProtocol[],
 ): ModelDefinition {
   const registered = models.require(def.id);
   // A route that declares its own effort ladder owns it. A route that declares
@@ -135,6 +143,7 @@ function resolveModelDefaults(
     displayName: def.displayName ?? registered.displayName,
     canonicalModel: { id: registered.id, displayName: registered.displayName },
     reasoningEfforts,
+    protocols: def.protocols ?? modelProtocols,
     // Identity-owned metadata: never sourced from the declaration.
     intelligence: registered.defaults.intelligence,
     speed: registered.defaults.speed,
@@ -154,15 +163,16 @@ function resolveModelDefaults(
 export function resolveProviderModel(
   declaration: ProviderModel,
   usesProviderDefaultReasoning = false,
+  modelProtocols: readonly GatewayProtocol[] = [],
 ): ModelDefinition {
   if (typeof declaration === 'string') {
-    return resolveModelDefaults({ id: declaration }, usesProviderDefaultReasoning);
+    return resolveModelDefaults({ id: declaration }, usesProviderDefaultReasoning, modelProtocols);
   }
   if (isCanonicalSelection(declaration)) {
     const { canonical, overrides } = declaration;
-    return resolveModelDefaults({ ...overrides, id: canonical }, usesProviderDefaultReasoning);
+    return resolveModelDefaults({ ...overrides, id: canonical }, usesProviderDefaultReasoning, modelProtocols);
   }
-  return resolveModelDefaults(declaration, usesProviderDefaultReasoning);
+  return resolveModelDefaults(declaration, usesProviderDefaultReasoning, modelProtocols);
 }
 
 /**
@@ -191,7 +201,7 @@ function deriveProtocols(
 export function defineProvider(provider: RawProviderDefinition): ProviderDefinition {
   const usesProviderDefaultReasoning = provider.usesProviderDefaultReasoning === true;
   const offerings = provider.models.map((declaration) =>
-    resolveProviderModel(declaration, usesProviderDefaultReasoning));
+    resolveProviderModel(declaration, usesProviderDefaultReasoning, provider.modelProtocols));
   return {
     ...provider,
     models: offerings,

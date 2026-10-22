@@ -15,6 +15,7 @@ function forwardOpenCodeSession(context: ProviderRequestHookContext): void {
 }
 
 export const definition = defineProvider({
+  modelProtocols: ['openai_chat'],
   id: 'opencode-go', displayName: 'OpenCode Go', credentialResolver: 'managed', defaultModel: 'glm-5.3-flash',
   // Supplier hook: the OpenCode identity and session-header forwarding.
   beforeRequest: forwardOpenCodeSession,

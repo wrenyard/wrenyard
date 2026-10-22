@@ -1,6 +1,7 @@
 import { defineProvider, model, openAI } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
+  modelProtocols: ['openai_chat'],
   id: 'volcengine', displayName: 'Volcengine Ark', credentialResolver: 'managed', defaultModel: 'doubao-seed-2-0-lite',
   models: [model('doubao-seed-2-0-lite', 262_144, 32_768, 'doubao-seed-2-0-lite-260215', ['none', 'medium'])],
   convertReasoningEffort: (_modelId, effort, protocol) => {

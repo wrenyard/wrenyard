@@ -1,6 +1,7 @@
 import { defineProvider, model, openAI } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
+  modelProtocols: ['openai_chat'],
   id: 'deepseek', displayName: 'DeepSeek', credentialResolver: 'managed', defaultModel: 'deepseek-v4.1-flash',
   // Flash keeps its registered identity; the rolling 1017 release uses the same wire ID.
   // IDs and limits: https://api-docs.deepseek.com/api/list-models/

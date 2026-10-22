@@ -1,6 +1,7 @@
 import { defineProvider, model, openAI, REASONING_LOW_HIGH_MAX } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
+  modelProtocols: ['openai_chat'],
   id: 'moonshot', displayName: 'Moonshot', credentialResolver: 'managed', defaultModel: 'kimi-k3',
   models: [model('kimi-k3', 1_048_576, 32_768, undefined, REASONING_LOW_HIGH_MAX)],
   protocols: [openAI('https://api.moonshot.cn/v1/chat/completions')],

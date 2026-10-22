@@ -19,7 +19,8 @@ function registerProvider(catalog: Catalog, provider: unknown): void {
   catalog.registerProvider({
     convertReasoningEffort: () => ({}),
     ...record,
-    models: record.models.map((model) => ({ ...model, reasoningEfforts: model.reasoningEfforts ?? ['none'] })),
+    models: record.models.map((model) => ({ ...model, reasoningEfforts: model.reasoningEfforts ?? ['none'],
+      protocols: model.protocols ?? ((record.protocols as readonly { protocol: import('@wrenyard/providers/catalog').GatewayProtocol }[] | undefined) ?? []).map((entry) => entry.protocol) })),
     reasoningEffortMappings: record.reasoningEffortMappings ?? Object.fromEntries(record.models.map(model => [model.id, Object.fromEntries(catalog.clients().map(client => [client.id, Object.fromEntries((model.reasoningEfforts ?? ['none']).map(e => [e, {effort:e}]))]))])),
   } as unknown as ProviderDefinition);
 }

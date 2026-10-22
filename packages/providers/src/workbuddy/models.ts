@@ -1,4 +1,5 @@
 import type { ModelDefinition, ProviderDefinition } from '../base/index.ts';
+import { validateOfferingSnapshot } from '../base/catalog.ts';
 import { createCodeBuddyModels } from '../codebuddy/models.ts';
 import { codeBuddyRouteFailure } from '../codebuddy/route-errors.ts';
 import type { CodeBuddyProductModelEntry } from '../codebuddy/product.ts';
@@ -18,7 +19,12 @@ export function createWorkBuddyModelState(build: WorkBuddyBuild): WorkBuddyModel
     const seeded = createCodeBuddyModels(entries);
     const protocol = seeded.definition.protocols?.[0];
     upstreamModels = Object.freeze(protocol?.upstreamModels ?? {});
-    definition.models = seeded.definition.models;
+    // WorkBuddy borrows the CodeBuddy offering builder but stays Chat-only:
+    // the protocol declaration is re-stated explicitly so a later CodeBuddy
+    // protocol addition cannot leak into this provider.
+    const models = seeded.definition.models.map((m) => ({ ...m, protocols: ['openai_chat' as const] }));
+    validateOfferingSnapshot(build.id, models, definition.protocols ?? []);
+    definition.models = models;
     definition.modelAliases = seeded.definition.modelAliases;
     definition.reasoningEffortMappings = seeded.definition.reasoningEffortMappings;
     definition.defaultModel = seeded.definition.models[0]?.id;

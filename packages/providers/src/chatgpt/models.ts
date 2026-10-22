@@ -2,6 +2,7 @@ import { defineProvider, REASONING_FULL, effortLadder } from '../base/model-defa
 import { chatGptAfterResponse, chatGptBeforeRequest } from './runtime.ts';
 
 export const definition = defineProvider({
+  modelProtocols: ['openai_responses'],
   id: 'chatgpt', displayName: 'ChatGPT', credentialResolver: 'codex',
   nativeClients: ['codex'], defaultModel: 'gpt-6-astra', quotaProvider: 'chatgpt',
   // Supplier hooks: the pinned streamed/non-persisted openai_responses request

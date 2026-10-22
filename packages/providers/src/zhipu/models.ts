@@ -1,6 +1,7 @@
 import { defineProvider, model, openAI, REASONING_LOW_HIGH_MAX } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
+  modelProtocols: ['openai_chat'],
   id: 'zhipu', displayName: 'Zhipu', credentialResolver: 'managed', defaultModel: 'glm-5.3',
   // The open platform's current lineup, matching the vendor's own "Latest
   // Models" price table. GLM-5.2 stays because the open platform still sells
