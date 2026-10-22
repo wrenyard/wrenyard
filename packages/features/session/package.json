@@ -16,7 +16,6 @@
     "@wrenyard/agent-client": "workspace:*",
     "@wrenyard/agent-loop": "workspace:*",
     "@wrenyard/auto-routing": "workspace:*",
-    "@wrenyard/control": "workspace:*",
     "@wrenyard/models": "workspace:*",
     "@wrenyard/protocol": "workspace:*",
     "@wrenyard/providers": "workspace:*",

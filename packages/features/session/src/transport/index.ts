@@ -8,7 +8,7 @@
  * upstream request per call. The application never sees an endpoint or a wire shape.
  */
 import { TpsGenerationCollector } from '@wrenyard/agent-client/statistics';
-import type { WrenyardGatewayConnection } from '@wrenyard/control';
+import type { GatewayConnection as WrenyardGatewayConnection } from '@wrenyard/protocol/gateway';
 import { GATEWAY_HEADERS } from '@wrenyard/providers/base';
 
 import {

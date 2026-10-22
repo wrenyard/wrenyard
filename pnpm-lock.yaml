@@ -763,9 +763,6 @@ importers:
       '@wrenyard/auto-routing':
         specifier: workspace:*
         version: link:../auto-routing
-      '@wrenyard/control':
-        specifier: workspace:*
-        version: link:../../control
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../../models
