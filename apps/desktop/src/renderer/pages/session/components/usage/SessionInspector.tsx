@@ -128,15 +128,14 @@ export function SessionInspector({ draft, usageHydrating = false }: { draft: boo
       <aside
         ref={asideRef}
         className={cn(
-          'flex w-80 min-h-0 shrink-0 flex-col bg-background',
-          // The border belongs to the floating panel only: in flow the cards
-          // already separate the panel, and the line sat against the
-          // transcript's own scrollbar gutter.
-          overlay && 'absolute inset-y-0 right-0 z-40 border-l shadow-lg',
+          'absolute inset-y-0 right-(--session-scrollbar) w-80 flex min-h-0 flex-col bg-background',
+          // The border and shadow belong to the narrow overlay only: in flow
+          // the panel floats over the transcript's scrollbar-gutter space.
+          overlay && 'right-0 z-40 border-l shadow-lg',
         )}
         data-slot="session-inspector"
       >
-        <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
+        <div className="no-scrollbar flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-2.5 pt-[calc(0.625rem+var(--session-top-fade))]">
           {draft ? null : <SessionInspectorUsageBody hydrating={usageHydrating} />}
           <UsageCard
             id="quota"

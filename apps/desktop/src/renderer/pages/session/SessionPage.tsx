@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { X } from 'lucide-react';
 import { cn } from 'cn';
 import { useQueryClient } from '@tanstack/react-query';
@@ -18,6 +18,7 @@ import { useShellPage } from '@/renderer/lib/desktop';
 import { registerPageCommands } from '@/renderer/lib/commands';
 import { openMiniCard, restoreMain, setCurrentSession, useMiniMode } from '@/renderer/lib/mini';
 import { markSessionSeen } from '@/renderer/lib/session-seen';
+import { useSessionInspectorState } from '@/renderer/lib/session-inspector';
 import { setActiveSession, useNavLocation } from '@/renderer/lib/navigation';
 import { sessionListQueryKey } from '@/renderer/lib/queries';
 import { useAgentsQuery } from '../agents/queries.js';
@@ -188,6 +189,38 @@ export function SessionPage() {
   const loadFailed = !draft && !state.ledgerLoaded && !state.loadingLedger;
   const sessionKey = state.selectedId === '' ? 'draft' : state.selectedId;
 
+  // Single-scrollbar layout: the transcript viewport spans the whole content
+  // row and the inspector overlays it. The row carries --session-scrollbar
+  // (the measured gutter) and --session-rail (20rem only while the inspector
+  // sits in flow mode) so transcript, composer and scroll button stay centred
+  // in the width left of the rail.
+  const { open: inspectorOpen } = useSessionInspectorState();
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const [rowWidth, setRowWidth] = useState(0);
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (row === null) return;
+    const measure = (): void => {
+      const viewport = viewportRef.current;
+      if (viewport !== null) {
+        row.style.setProperty('--session-scrollbar', `${viewport.offsetWidth - viewport.clientWidth}px`);
+      }
+      setRowWidth(row.clientWidth);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    if (viewportRef.current !== null) observer.observe(viewportRef.current);
+    measure();
+    return () => observer.disconnect();
+  }, [sessionKey, empty]);
+  const rail = inspectorOpen && !mini && rowWidth >= 760;
+  const rowStyle = {
+    '--session-rail': rail ? '20rem' : '0px',
+    '--session-top-fade': 'calc(var(--spacing) * 6)',
+    '--session-scrollbar': '0px',
+  } as CSSProperties;
+
   // Mark the shown session as seen while this window is visible and focused.
   // Re-runs on selection, on that session's new result, and on focus changes,
   // in both the main window and a mini card. A draft (empty id) is never marked.
@@ -352,7 +385,11 @@ export function SessionPage() {
           tasks={state.tasks}
           setTasks={setTasks}
         />
-        <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <div
+          ref={rowRef}
+          className="session-top-fade relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
+          style={rowStyle}
+        >
           {/* min-w-0: a flex item defaults to min-width:auto, so wide inline
               content would otherwise push the fixed-width inspector past the
               viewport edge instead of narrowing the transcript. */}
@@ -367,7 +404,7 @@ export function SessionPage() {
                 <MessageScrollerProvider key={sessionKey} autoScroll>
                   <MessageScroller className={cn('min-h-0 flex-1', conversationEnter && 'motion-conversation-enter')}>
                     {/* The scroller owns follow-bottom, so browser scroll anchoring must not compete during streaming. */}
-                    <MessageScrollerViewport className="scroll-fade-y [overflow-anchor:none] overflow-x-hidden">
+                    <MessageScrollerViewport ref={viewportRef} className="scroll-fade-b pr-(--session-rail) [overflow-anchor:none] overflow-x-hidden">
                       <MessageScrollerContent className={cn('w-full pt-(--header-height) pb-4 gap-5', mini ? 'px-3' : 'mx-auto max-w-3xl px-4')}>
                         {hydrating && (
                           <div role="status" className="py-8 text-center text-sm text-muted-foreground">
@@ -397,12 +434,14 @@ export function SessionPage() {
                       </MessageScrollerContent>
                     </MessageScrollerViewport>
                     <FollowSentMessage pendingId={state.pending.at(-1)?.localId} />
-                    <MessageScrollerButton />
+                    <MessageScrollerButton className="-translate-x-[calc(50%+var(--session-rail)/2)]" />
                   </MessageScroller>
                 </MessageScrollerProvider>
-                <div className={cn('w-full', mini ? 'px-4 pt-2 pb-5' : 'mx-auto max-w-3xl px-4 pb-4')}>
+                <div className="pr-(--session-rail)">
+                  <div className={cn('w-full', mini ? 'px-4 pt-2 pb-5' : 'mx-auto max-w-3xl px-4 pb-4')}>
                   {errorAlert}
                   {composer}
+                  </div>
                 </div>
               </>
             )}

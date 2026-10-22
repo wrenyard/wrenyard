@@ -279,6 +279,28 @@
   }
 }
 
+/* Static top mask for the session content row: the same four-stop curve as
+   --scroll-fade-block, but a fixed height so the transcript and the inspector
+   share one top fade. */
+@utility session-top-fade {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    rgb(0 0 0 / 0.26) calc(var(--session-top-fade) * 0.33),
+    rgb(0 0 0 / 0.74) calc(var(--session-top-fade) * 0.67),
+    #000 var(--session-top-fade)
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    rgb(0 0 0 / 0.26) calc(var(--session-top-fade) * 0.33),
+    rgb(0 0 0 / 0.74) calc(var(--session-top-fade) * 0.67),
+    #000 var(--session-top-fade)
+  );
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
 @utility scroll-fade-x {
   --_scroll-fade-size-s: var(
     --scroll-fade-s-size,
