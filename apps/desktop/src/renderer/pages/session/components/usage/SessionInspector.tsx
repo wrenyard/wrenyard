@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChartColumn, PanelRight } from 'lucide-react';
+import { ChartColumn, SquareMenu } from 'lucide-react';
 import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
@@ -38,7 +38,7 @@ export function SessionInspectorToggle() {
             />
           )}
         >
-          <PanelRight />
+          <SquareMenu />
         </TooltipTrigger>
         <TooltipContent>会话详情</TooltipContent>
       </Tooltip>
