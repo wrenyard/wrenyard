@@ -146,6 +146,10 @@ export function buildTrace(input: readonly LedgerEvent[]): TraceModel {
       continue;
     }
     const parentId = stringField(event, 'parent');
+    // Content of a hidden system span (its recalled memories, its per-request
+    // context sample) stays hidden with the span instead of surfacing under the turn.
+    if ((parentId !== undefined && hiddenSpanIds.has(parentId))
+      || (event.type === 'span.context' && hiddenSpanIds.has(event.id))) continue;
     const parentNode = parentId ? byId.get(parentId) ?? nodes.get(`step:${parentId}`) ?? nodes.get(`turn:${turn}`) : undefined;
     const kind: TraceKind = event.type.startsWith('system.') ? 'notice' : 'content';
     const parentKey = parentNode?.key ?? (turnNode ? turnNode.key : 'session');
@@ -174,10 +178,9 @@ export function buildTrace(input: readonly LedgerEvent[]): TraceModel {
     warnings: events.filter((event) => event.type === 'system.warning').length,
     usage: usageZero(), startedAt: events[0]?.at, endedAt: events.at(-1)?.at, running: sessionRunning,
   };
+  // Aggregate usage still counts hidden system spans: only their named rows are hidden.
   for (const event of events) {
     if (event.type !== 'span.finished') continue;
-    const id = stringField(event, 'id');
-    if (id !== undefined && hiddenSpanIds.has(id)) continue;
     const usage = usageFor(event);
     summary.usage.input += usage.input;
     summary.usage.cached += usage.cached;
