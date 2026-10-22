@@ -405,6 +405,7 @@ const EVENT_INDEX_STATEMENTS = [
   // lookups. Existing databases drop it via dropRedundantEventExecIndex below.
   'CREATE INDEX IF NOT EXISTS idx_event_type       ON events(type)',
   "CREATE INDEX IF NOT EXISTS idx_event_gateway_exec ON events(json_extract(data, '$.data.executionId')) WHERE type = 'gateway.request.completed'",
+  'CREATE INDEX IF NOT EXISTS idx_event_task_id    ON events(task_id)',
 ] as const
 
 const PM_TICKETS_TABLE_SQL = `CREATE TABLE pm_tickets (
