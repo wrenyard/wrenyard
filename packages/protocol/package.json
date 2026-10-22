@@ -33,8 +33,7 @@
     "test": "tsx --test src/*.test.ts"
   },
   "dependencies": {
-    "@wrenyard/models": "workspace:*",
-    "@wrenyard/session": "workspace:*"
+    "@wrenyard/models": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.9.0"

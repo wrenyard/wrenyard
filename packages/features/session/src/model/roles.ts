@@ -1,6 +1,8 @@
 /** Auxiliary role identifiers; no IO or selection logic. */
 import type { SessionRoutesPreviewRole } from '@wrenyard/protocol';
-export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch' | 'document' | 'todo' | 'vcs' | 'project' | 'reply' | 'status' | 'suggestion' | 'task-output';
+/** Auxiliary call roles are model-call facts on the wire; declared in `@wrenyard/protocol/session` and re-exported here. */
+export type { AuxiliaryCallRole } from '@wrenyard/protocol/session';
+import type { AuxiliaryCallRole } from '@wrenyard/protocol/session';
 /** Auxiliary roles in the fixed order the route preview lists them. */
 export const AUXILIARY_ROLE_ORDER: readonly AuxiliaryCallRole[] = [
   'reply',

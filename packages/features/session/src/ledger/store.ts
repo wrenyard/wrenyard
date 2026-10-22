@@ -35,6 +35,7 @@ import {
 import { open, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionFile } from '@wrenyard/protocol';
+import type { SessionSummary } from '@wrenyard/protocol/session';
 import type { LedgerEvent, LedgerEventDraft } from './events.ts';
 import { normalizeStoredEvent } from './compat.ts';
 
@@ -46,80 +47,13 @@ import { normalizeStoredEvent } from './compat.ts';
  */
 export * from './events.ts';
 
-// ─── Ledger ────────────────────────────────────────────────────────────────
+/**
+ * The index row shape is part of the `session.list` wire contract, so it is
+ * declared in `@wrenyard/protocol/session` and re-exported here.
+ */
+export type { SessionSummary };
 
-/** One row of `index.json`. */
-export interface SessionSummary {
-  sessionId: string;
-  title: string;
-  /**
-   * True when `title` came from an explicit user rename (the `manual` marker on
-   * the latest applicable `session.titled` event) rather than generation.
-   * Derived and maintained exactly like `title`: updated on append and rebuilt
-   * when the index is recomputed from the timelines. A manual title is never
-   * overwritten by a generated one.
-   */
-  manualTitle?: boolean;
-  /**
-   * True when the latest `session.metadata` event marked the session archived.
-   * Derived exactly like `manualTitle`: updated on append and rebuilt from the
-   * timelines. Absent means not archived; an event that omits the field leaves
-   * it unchanged.
-   */
-  archived?: boolean;
-  /** True when the latest `session.metadata` event pinned the session. */
-  pinned?: boolean;
-  createdAt: string;
-  updatedAt: string;
-  /**
-   * Derived from the ledger: the outcome of the session's most recent turn.
-   * Cleared when the next turn starts. Maintained exactly like `title`: updated
-   * on append and rebuilt when the index is recomputed from the timelines.
-   */
-  lastTurn?: {
-    status: 'completed' | 'failed' | 'interrupted';
-    finishedAt: string;
-    /**
-     * The owning turn's index. `turn.attention` only annotates the turn that
-     * owns `lastTurn`, so a marker from any other turn leaves it unchanged.
-     */
-    turn: number;
-    /** From `turn.attention`: whether the finished turn waits on the user. */
-    needsUser?: boolean;
-    /** Short label from `turn.attention`, when one was provided. */
-    label?: string;
-    /** Failure category of a failed turn, from its failed model span. */
-    errorKind?: string;
-    /** Failure text of a failed turn. */
-    errorMessage?: string;
-    /** When a failed route is expected to recover, when the events carry it. */
-    retryAt?: string;
-  };
-  /**
-   * Runtime-derived: whether the session has an in-flight turn right now. Never
-   * persisted to `index.json`; only the session engine populates it in memory.
-   */
-  running?: boolean;
-  /**
-   * The `seq` of the newest event in the timeline as of the last index write.
-   * Absent means the index does not know it (a placeholder or a summary the
-   * timeline outgrew); the value is only trusted when `bytes` still matches the
-   * timeline file's size.
-   */
-  lastSeq?: number;
-  /**
-   * Turns that started without a matching `turn.finished`, ascending. This is
-   * the only startup recovery signal: a session whose pending turns are empty
-   * is never body-read at startup.
-   */
-  pendingTurns?: number[];
-  /**
-   * Serialized size of the timeline file at the last index write. A mismatch
-   * with the file's current size marks the summary stale, so it is rebuilt from
-   * the body on first touch instead of being trusted.
-   */
-  bytes?: number;
-}
+// ─── Ledger ────────────────────────────────────────────────────────────────
 
 const DEFAULT_TITLE = '新会话';
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]+$/;

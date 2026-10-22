@@ -1,0 +1,783 @@
+/**
+ * session ledger event model.
+ *
+ * Every event carries exactly one timestamp (`at`, the moment it was appended).
+ * Structure is expressed by ids: a start event names its `parent`, the matching
+ * finish event repeats the same `id`, and content events only name a `parent`.
+ *
+ * Three families:
+ * - structure: session, turn, step and action. What the system decided to do.
+ * - execution: spans. What actually ran, with its request facts and metrics.
+ *   Spans never enter the model context.
+ * - content: material produced for the model and the user, and system
+ *   notices: out-of-band facts the model should know.
+ */
+import type { ReasoningEffort } from '@wrenyard/models';
+import type { SessionFile } from './attachments.ts';
+import type { AuxiliaryCallRole, ModelErrorKind, ModelMetrics } from './model.ts';
+
+// ─── Envelope ──────────────────────────────────────────────────────────────
+
+/** The `type` discriminant of every ledger event. */
+export type LedgerEventType =
+  | 'session.created'
+  | 'turn.started'
+  | 'turn.steered'
+  | 'turn.finished'
+  | 'turn.interrupted'
+  | 'turn.attention'
+  | 'turn.waiting'
+  | 'turn.waiting.cleared'
+  | 'step.started'
+  | 'step.finished'
+  | 'action.started'
+  | 'action.titled'
+  | 'action.finished'
+  | 'span.started'
+  | 'span.finished'
+  | 'span.context'
+  | 'reasoning.thinking'
+  | 'reasoning.completed'
+  | 'memory.recalled'
+  | 'document.found'
+  | 'document.content'
+  | 'files.attached'
+  | 'workspace.changed'
+  | 'reply.sent'
+  | 'session.titled'
+  | 'session.metadata'
+  | 'system.info'
+  | 'system.warning'
+  | 'system.error'
+  | 'context.compacted'
+  | 'context.reduced';
+
+/** Fields common to every ledger event; `seq` and `at` are assigned on append. */
+export interface LedgerEventBase {
+  /** Global, strictly increasing sequence number within the session. */
+  seq: number;
+  /** ISO 8601 timestamp with timezone designator; the event's only time. */
+  at: string;
+  type: LedgerEventType;
+  /** Turn number index; absent only on `session.created`. */
+  turn?: number;
+  /** Step number index within the turn; absent on turn-level events. */
+  step?: number;
+}
+
+// ─── Session and turn ──────────────────────────────────────────────────────
+
+/** The terminal states of a work turn. */
+export type TurnStatus = 'completed' | 'failed' | 'interrupted';
+
+/** The main reasoning model a turn was started with. */
+export interface TurnModel {
+  provider: string;
+  model: string;
+  /** Explicit public reasoning level this turn runs at. */
+  reasoningEffort?: ReasoningEffort;
+  /**
+   * The Fast preference the turn was explicitly started with: true for Fast on
+   * and false for Fast off. Absent when no preference was requested; an inferred
+   * or effective value is never recorded here.
+   */
+  fast?: boolean;
+  /**
+   * True when automatic routing chose this model (a bot dispatcher or a session
+   * a bot opened). Such a turn may move to another automatic route within the
+   * same turn; absent means the model was hand-picked and is never substituted.
+   */
+  automatic?: boolean;
+}
+
+export interface TaskBrief {
+  id: string;
+  description: string;
+  inputSummary: string[];
+}
+
+export interface ProjectSnapshot {
+  /** Registered project id. */
+  id: string;
+  displayName?: string;
+  /** Workspace-relative project directory, e.g. `projects/saa/game`. */
+  workspaceDir: string;
+  checkoutPath?: string;
+  gitRemote?: string;
+  defaultBranch?: string;
+  /** Branch captured in the snapshot. */
+  branch?: string;
+  /** HEAD short hash captured in the snapshot. */
+  head?: string;
+  tasks: TaskBrief[];
+  recentDocs: { path: string; title: string }[];
+}
+
+/** Frozen workspace facts taken when the session is created. */
+export interface WorkspaceSnapshot {
+  takenAt: string;
+  deviceName: string;
+  /** Full text of the workspace root `AGENTS.md`. */
+  agents: string;
+  /** Full text of `memories/INDEX.md`. */
+  memoryIndex: string;
+  builtinTasks: TaskBrief[];
+  projects: ProjectSnapshot[];
+}
+
+export interface SessionCreatedEvent extends LedgerEventBase {
+  type: 'session.created';
+  workspaceRoot: string;
+  snapshot: WorkspaceSnapshot;
+}
+
+export interface TurnStartedEvent extends LedgerEventBase {
+  type: 'turn.started';
+  id: string;
+  text: string;
+  model: TurnModel;
+  /**
+   * Bot provenance of the send that opened this turn. Absent on ordinary user
+   * sends; existing ledgers therefore keep their exact event shape.
+   */
+  sender?: { botId: string };
+}
+
+/** Additional user input delivered to a turn that is already running. */
+export interface TurnSteeredEvent extends LedgerEventBase {
+  type: 'turn.steered';
+  id: string;
+  turn: number;
+  text: string;
+  sender?: { botId: string };
+}
+
+export interface TurnFinishedEvent extends LedgerEventBase {
+  type: 'turn.finished';
+  id: string;
+  status: TurnStatus;
+  error?: string;
+}
+
+export interface TurnInterruptedEvent extends LedgerEventBase {
+  type: 'turn.interrupted';
+  parent: string;
+  reason: 'user' | 'shutdown' | 'restart';
+}
+
+/**
+ * That a finished turn needs the user's attention: it ended on a single
+ * standalone question (`source: 'ask'`), or the post-turn status judgement
+ * marked it as needing the user (`source: 'model'`). Observational, like
+ * `turn.finished`; written after it. Never enters the model context.
+ */
+export interface TurnAttentionEvent extends LedgerEventBase {
+  type: 'turn.attention';
+  /** Id of the turn that needs attention: `t<turn>`. */
+  turnId: string;
+  needsUser: boolean;
+  /** Short label for the user, e.g. 「等你确认提交」. */
+  label?: string;
+  source: 'ask' | 'model';
+}
+
+/**
+ * Live waiting status of the active turn: the turn is not calling upstream
+ * right now but is waiting, inside the one recovery loop, for its route to be
+ * admitted. It is a distinct nonterminal state, never a completion or a
+ * failure. `reason` distinguishes waiting for permission to probe a locally
+ * blocked route (`admission`) from a guaranteed recovery after an adopted hint,
+ * and `retryAt` is the absolute instant the next probe/recovery is due. A wait
+ * with no real instant is recorded without `retryAt`, so an unknown recovery
+ * time stays a visible, distinct waiting state instead of being dropped or
+ * given a fallback recheck delay. Observational, like
+ * `turn.finished`. It is cleared only by an explicit `turn.waiting.cleared`
+ * event or the turn's own terminal event; an unrelated later same-turn event
+ * never clears it. Never enters the model context.
+ */
+export interface TurnWaitingEvent extends LedgerEventBase {
+  type: 'turn.waiting';
+  /** The waiting turn: `t<turn>`. */
+  parent: string;
+  /** Why the turn is waiting. */
+  reason: 'admission' | 'recovery' | 'quota_exhausted';
+  /**
+   * Absolute instant the next probe/recovery is due (ISO 8601); absent when no
+   * real instant is known, so the wait is recorded as unknown-time.
+   */
+  retryAt?: string;
+}
+
+/**
+ * Ends the live waiting status of `turn.waiting` for its turn: the previous
+ * wait is over because the next actual upstream attempt is starting, or the
+ * turn completed or was cancelled. Additive and observational, like
+ * `turn.waiting`; it never enters the model context and is emitted from the
+ * same wait lifecycle that emitted the matching `turn.waiting`.
+ */
+export interface TurnWaitingClearedEvent extends LedgerEventBase {
+  type: 'turn.waiting.cleared';
+  /** The turn whose wait ended: `t<turn>`. */
+  parent: string;
+}
+
+// ─── Step ──────────────────────────────────────────────────────────────────
+
+export type StepStatus = 'done' | 'failed' | 'interrupted';
+
+/**
+ * Marks the start of one reasoning step. It is appended before the step's
+ * request is assembled and rendered as that step's `<wy-info>` line, so the
+ * per-request facts are part of the append-only context instead of a block
+ * rewritten on every request.
+ */
+export interface StepStartedEvent extends LedgerEventBase {
+  type: 'step.started';
+  id: string;
+  parent: string;
+  /** Main model public id serving this step. */
+  model: string;
+  contextWindow?: number;
+  /** Upstream-reported input tokens of the previous reasoning request, when known. */
+  lastInputTokens?: number;
+}
+
+export interface StepFinishedEvent extends LedgerEventBase {
+  type: 'step.finished';
+  id: string;
+  status: StepStatus;
+}
+
+// ─── Action ────────────────────────────────────────────────────────────────
+
+/**
+ * The action types: the tools the reasoning model may write, plus `tool` for a
+ * native agent tool call dispatched through a host's agent tool port.
+ * `schedule` is no longer produced by any action, but is kept so ledgers
+ * written before routines moved to bots still render.
+ */
+export type ActionType = 'search' | 'dispatch' | 'document' | 'todo' | 'vcs' | 'project' | 'tool' | 'schedule';
+export type ActionStatus = 'done' | 'failed' | 'skipped' | 'cancelled' | 'interrupted';
+
+export interface ActionStartedEvent extends LedgerEventBase {
+  type: 'action.started';
+  id: string;
+  /** The step whose reasoning wrote it. */
+  parent: string;
+  /** The action as written: its type plus the natural-language prompt. */
+  action: { type: ActionType; prompt: string };
+  /** The parsed action payload; opaque here because the action layer owns its shape. */
+  input?: unknown;
+  taskRunId?: string;
+}
+
+/** The display name of an action, known only after it started. */
+export interface ActionTitledEvent extends LedgerEventBase {
+  type: 'action.titled';
+  /** The action's id. */
+  id: string;
+  title: string;
+}
+
+export interface ActionFinishedEvent extends LedgerEventBase {
+  type: 'action.finished';
+  id: string;
+  action: { type: ActionType };
+  status: ActionStatus;
+  /** The parsed result the reasoning model reads. */
+  result: string;
+  task?: string;
+  taskStatus?: string;
+  taskRunId?: string;
+  /** The result arrived after the turn was interrupted; kept out of the context. */
+  afterInterrupt?: boolean;
+}
+
+// ─── Span ──────────────────────────────────────────────────────────────────
+
+export type SpanKind = 'reasoning' | 'auxiliary' | 'task';
+export type SpanStatus = 'ok' | 'failed' | 'aborted' | 'interrupted';
+
+/** One ranked auxiliary route and the level it is called at. */
+export interface SpanRoute {
+  model: string;
+  reasoningEffort: ReasoningEffort;
+}
+
+/** Facts of a model request that hold before it is sent. */
+export interface ModelSpanRequest {
+  /** The auxiliary role; absent on a reasoning span. */
+  role?: AuxiliaryCallRole;
+  /** Gateway public id, always exactly `provider/model`. */
+  model: string;
+  effort?: {
+    /** The explicitly requested level, or the auxiliary role's declared expectation. */
+    requested?: string;
+    /** Public reasoning level actually sent. */
+    sent?: ReasoningEffort;
+  };
+  /** Input tokens estimated before sending. */
+  inputEstimate: number;
+  /** Character count per prompt layer, e.g. `{ 'wy-system': 1234 }`. */
+  layers: Record<string, number>;
+  /** Ordered auxiliary routes kept for this invocation and the rank that serves it. */
+  route?: { candidates: readonly SpanRoute[]; rank?: number };
+}
+
+/** Facts of a dispatched agent task that hold when it is created. */
+export interface TaskSpanRequest {
+  task: string;
+  project?: string;
+  worktree?: string;
+  taskRunId: string;
+  /** Effective task input submitted when the run was created. */
+  input?: unknown;
+}
+
+/** Summary of a finished agent task, copied from the task system. */
+export interface TaskSpanMetrics {
+  taskStatus?: string;
+  usage?: {
+    inputTokens?: number;
+    cachedInputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
+  referenceCostUsd?: number;
+  generationMs?: number;
+  outputTps?: number;
+}
+
+/** Structured failure fact of a span. */
+export interface SpanError {
+  kind: ModelErrorKind | 'task';
+  status?: number;
+  /**
+   * The earliest instant the failed call may be retried, when the failure
+   * carried one. A route that was never called reports its own retry instant
+   * here rather than as an attempt record.
+   */
+  retryAt?: string;
+  /** Supplier's original message. */
+  message: string;
+}
+
+interface SpanStartedBase extends LedgerEventBase {
+  type: 'span.started';
+  id: string;
+  /**
+   * The owner: the step for a reasoning span and for the step's own auxiliary
+   * tasks (memory search, reply), the turn for the title, the action for an
+   * action's auxiliary task and its agent task.
+   */
+  parent: string;
+}
+
+export interface ModelSpanStartedEvent extends SpanStartedBase {
+  kind: 'reasoning' | 'auxiliary';
+  request: ModelSpanRequest;
+}
+
+export interface TaskSpanStartedEvent extends SpanStartedBase {
+  kind: 'task';
+  request: TaskSpanRequest;
+}
+
+export type SpanStartedEvent = ModelSpanStartedEvent | TaskSpanStartedEvent;
+
+interface SpanFinishedBase extends LedgerEventBase {
+  type: 'span.finished';
+  id: string;
+  status: SpanStatus;
+  error?: SpanError;
+}
+
+export interface ModelSpanFinishedEvent extends SpanFinishedBase {
+  kind: 'reasoning' | 'auxiliary';
+  /** Raw visible output of the last completed request; absent when none completed. */
+  output?: string;
+  /** Raw reasoning text of the last completed request. */
+  reasoning?: string;
+  /**
+   * Public id (`provider/model`) of the model the request actually selected for
+   * the last completed round, including a fallback route. It is the session's
+   * own serving identity, distinct from any provider-native response metadata
+   * inside `metrics`.
+   */
+  requestModel?: string;
+  /**
+   * Measured by the transport. One span is one whole auxiliary task or one
+   * reasoning request, so a multi-round task carries the sum of its requests,
+   * including the part measured before a failure.
+   */
+  metrics?: ModelMetrics;
+}
+
+export interface TaskSpanFinishedEvent extends SpanFinishedBase {
+  kind: 'task';
+  metrics?: TaskSpanMetrics;
+}
+
+export type SpanFinishedEvent = ModelSpanFinishedEvent | TaskSpanFinishedEvent;
+
+/**
+ * Per-request context snapshot of one finished model request: the actual prompt
+ * occupancy of that single request, as opposed to the cumulative metrics a
+ * multi-request span accumulates. One is written for every reported request,
+ * including each round of a held multi-round auxiliary task, so a consumer can
+ * show the latest request's occupancy rather than the task's summed
+ * consumption.
+ *
+ * `model` is the public id (`provider/model`) of the model that actually served
+ * the request, including a fallback route chosen after a failover. `inputTokens`
+ * is that request's upstream-reported input count and already includes cached
+ * input; it is omitted — unknown — when the request reported no usage, never a
+ * sentinel zero.
+ */
+export interface SpanContextEvent extends LedgerEventBase {
+  type: 'span.context';
+  /** The span this request belongs to. */
+  id: string;
+  kind: 'reasoning' | 'auxiliary';
+  /** Public id (`provider/model`) of the model that actually served the request. */
+  model: string;
+  /** Input tokens of exactly this request, including cached input; absent when unknown. */
+  inputTokens?: number;
+}
+
+// ─── Content ───────────────────────────────────────────────────────────────
+
+/** The reasoning trace of a completed reasoning span. */
+export interface ReasoningThinkingEvent extends LedgerEventBase {
+  type: 'reasoning.thinking';
+  /** The reasoning span. */
+  parent: string;
+  text: string;
+}
+
+export interface ReasoningCompletedEvent extends LedgerEventBase {
+  type: 'reasoning.completed';
+  /** The reasoning span. */
+  parent: string;
+  text: string;
+  /**
+   * The complete worker output of this step: the visible prose plus the ordered
+   * raw action intents and questions parsed from its wy_action tool calls. The
+   * communication view renders this; `text` stays the main reasoning prose.
+   */
+  workerOutput?: string;
+}
+
+export interface MemoryRecalledEvent extends LedgerEventBase {
+  type: 'memory.recalled';
+  /** The memory search span, or the search action that read it. */
+  parent?: string;
+  version: string;
+  source: 'memory-search' | 'read';
+  path: string;
+  content: string;
+}
+
+/** One document pick in a document search result. */
+export interface DocPick {
+  path: string;
+  title: string;
+  reason: string;
+}
+
+export interface DocumentFoundEvent extends LedgerEventBase {
+  type: 'document.found';
+  /** The search action. */
+  parent: string;
+  understanding: string;
+  picks: DocPick[];
+  near: DocPick[];
+  notes: string[];
+}
+
+export interface DocumentContentEvent extends LedgerEventBase {
+  type: 'document.content';
+  parent?: string;
+  path: string;
+  title: string;
+  updated: string;
+  version: string;
+  tokens: number;
+  content: string;
+  format: 'full' | 'diff';
+  base?: string;
+  source: 'read' | 'write' | 'project-instructions';
+}
+
+export interface FilesAttachedEvent extends LedgerEventBase {
+  type: 'files.attached';
+  parent?: string;
+  source: 'user' | 'task' | 'read';
+  files: SessionFile[];
+  taskRunId?: string;
+}
+
+export interface WorkspaceChangedEvent extends LedgerEventBase {
+  type: 'workspace.changed';
+  /** The action that made the change. */
+  parent: string;
+  scope: 'document' | 'workspace' | 'project';
+  target: string;
+  change: 'created' | 'updated' | 'committed' | 'pushed' | 'pulled' | 'worktree-created' | 'worktree-removed' | 'worktree-merged' | 'registered' | 'deleted';
+  worktreeId?: string;
+  version?: string;
+  hash?: string;
+  files?: string[];
+}
+
+/** The reply shown to the user for one step. */
+export interface ReplySentEvent extends LedgerEventBase {
+  type: 'reply.sent';
+  /** The reply span; absent on records that predate spans. */
+  parent?: string;
+  text: string;
+  /**
+   * Whether this publication is an intermediate process update (`progress`) or
+   * the turn's closing reply (`final`). Optional, so a record written before
+   * the field existed still parses; a missing kind is read from execution
+   * order rather than from the text.
+   */
+  kind?: 'progress' | 'final';
+  /**
+   * Where the reply text came from: the reply tool call (`tool`), plain text
+   * from the communication call when the serving provider ignores forced tool
+   * choice (`reply-text`), the native agentTools final output (`agent-text`),
+   * or an explicit interruption message (`interruption`). `agent-text` and
+   * `interruption` are deliberate publication paths, not fallbacks. Records
+   * written before this field existed have an unspecified source; do not infer
+   * `tool` from a missing value. Reasoning output, action results and closing
+   * lines are not reconstructed as reply fallbacks.
+   */
+  source?: 'tool' | 'reply-text' | 'agent-text' | 'interruption';
+}
+
+/**
+ * Non-tool reply sources the engine may record after a successful communication
+ * call. Only `reply-text` is allowed: plain text accepted when the actual
+ * serving route's provider declares `ignoresForcedToolChoice`. Desktop reads
+ * committed `reply.sent` records only; it does not rebuild reasoning, action
+ * output or closing text as substitutes.
+ */
+export const REPLY_FALLBACK_SOURCES = ['reply-text'] as const;
+
+/** The session title; never part of the model context. */
+export interface SessionTitledEvent extends LedgerEventBase {
+  type: 'session.titled';
+  /** The title span; absent on records that predate spans. */
+  parent?: string;
+  text: string;
+  /**
+   * True when the title was set by an explicit user rename rather than by
+   * automatic generation. Absent on generated titles and on records written
+   * before the marker existed, so old ledger lines still parse as generated.
+   */
+  manual?: boolean;
+}
+
+/**
+ * Session list metadata set by explicit user actions: whether the session is
+ * archived and whether it is pinned. Never part of the model context. Both
+ * fields are optional so an event that only changes one flag leaves the other
+ * untouched, and old ledger lines still parse unchanged.
+ */
+export interface SessionMetadataEvent extends LedgerEventBase {
+  type: 'session.metadata';
+  parent?: string;
+  archived?: boolean;
+  pinned?: boolean;
+}
+
+/**
+ * One context compaction: the rendered model context starts after this event
+ * instead of at the beginning of the ledger. Every covered event stays durable
+ * and readable; only the request view is bounded.
+ *
+ * `throughSeq` is the highest ledger sequence the summary covers, so the latest
+ * compaction event is the single floor later requests apply. The event itself
+ * renders as one context block carrying `summary`. A missing `failure` means the
+ * summary was written by the model; a present one names why the deterministic
+ * fallback was used instead.
+ */
+export interface ContextCompactedEvent extends LedgerEventBase {
+  type: 'context.compacted';
+  /** Highest ledger sequence covered by the summary. */
+  throughSeq: number;
+  /**
+   * Markdown handover note with the fixed sections `work_so_far`,
+   * `worktree_state`, `open_tasks`, `decisions` and `pending_followups`.
+   */
+  summary: string;
+  /** Input-token estimate of the request whose size triggered the compaction. */
+  estimatedInputTokens?: number;
+  /** The model's context window when the compaction ran. */
+  contextWindow?: number;
+  /** Why the summary is a deterministic fallback instead of a model-written one. */
+  failure?: string;
+}
+
+/**
+ * One programmatic context reduction: every context event at or below
+ * `throughSeq` renders in its reduced form from now on, which releases the
+ * bulky content of cold, older events without a model call. Nothing is dropped
+ * from the ledger and nothing is rewritten; the floor only bounds the rendered
+ * view. A reduction is deliberately not a context event itself, so it never
+ * renders into the model context.
+ */
+export interface ContextReducedEvent extends LedgerEventBase {
+  type: 'context.reduced';
+  /** Highest ledger sequence rendered in reduced form. */
+  throughSeq: number;
+  /** Tokens the reduction released, when the estimate was computable. */
+  releasedTokens?: number;
+}
+
+/**
+ * An out-of-band notice the model should read: a system fault that no content
+ * event already reports (`system.error`), a degraded but continuing condition
+ * (`system.warning`), or a state change (`system.info`). A failed action that
+ * produced its own result is reported by that result, not by a notice.
+ */
+export interface SystemNoticeEvent extends LedgerEventBase {
+  type: 'system.info' | 'system.warning' | 'system.error';
+  parent?: string;
+  /** Who caused it: the system itself or a user operation. */
+  source: 'system' | 'user';
+  /** Stable identifier of the condition, e.g. `memory-search` or `model.changed`. */
+  code: string;
+  /** Text for the model. */
+  message: string;
+}
+
+// ─── Union ─────────────────────────────────────────────────────────────────
+
+export type LedgerEvent =
+  | SessionCreatedEvent
+  | TurnStartedEvent
+  | TurnSteeredEvent
+  | TurnFinishedEvent
+  | TurnInterruptedEvent
+  | TurnAttentionEvent
+  | TurnWaitingEvent
+  | TurnWaitingClearedEvent
+  | StepStartedEvent
+  | StepFinishedEvent
+  | ActionStartedEvent
+  | ActionTitledEvent
+  | ActionFinishedEvent
+  | SpanStartedEvent
+  | SpanFinishedEvent
+  | SpanContextEvent
+  | ReasoningThinkingEvent
+  | ReasoningCompletedEvent
+  | MemoryRecalledEvent
+  | DocumentFoundEvent
+  | DocumentContentEvent
+  | FilesAttachedEvent
+  | WorkspaceChangedEvent
+  | ReplySentEvent
+  | SessionTitledEvent
+  | SessionMetadataEvent
+  | ContextCompactedEvent
+  | ContextReducedEvent
+  | SystemNoticeEvent;
+
+/** An event body without the `seq` / `at` the ledger assigns on append. */
+type WithoutSequence<T> = T extends LedgerEventBase ? Omit<T, 'seq' | 'at'> : never;
+
+/** Discriminated distributively, so each member narrows on `type`. */
+export type LedgerEventDraft = WithoutSequence<LedgerEvent>;
+
+// ─── Session index row ─────────────────────────────────────────────────────
+
+/** One row of `index.json`. */
+export interface SessionSummary {
+  sessionId: string;
+  title: string;
+  /**
+   * True when `title` came from an explicit user rename (the `manual` marker on
+   * the latest applicable `session.titled` event) rather than generation.
+   * Derived and maintained exactly like `title`: updated on append and rebuilt
+   * when the index is recomputed from the timelines. A manual title is never
+   * overwritten by a generated one.
+   */
+  manualTitle?: boolean;
+  /**
+   * True when the latest `session.metadata` event marked the session archived.
+   * Derived exactly like `manualTitle`: updated on append and rebuilt from the
+   * timelines. Absent means not archived; an event that omits the field leaves
+   * it unchanged.
+   */
+  archived?: boolean;
+  /** True when the latest `session.metadata` event pinned the session. */
+  pinned?: boolean;
+  createdAt: string;
+  updatedAt: string;
+  /**
+   * Derived from the ledger: the outcome of the session's most recent turn.
+   * Cleared when the next turn starts. Maintained exactly like `title`: updated
+   * on append and rebuilt when the index is recomputed from the timelines.
+   */
+  lastTurn?: {
+    status: 'completed' | 'failed' | 'interrupted';
+    finishedAt: string;
+    /**
+     * The owning turn's index. `turn.attention` only annotates the turn that
+     * owns `lastTurn`, so a marker from any other turn leaves it unchanged.
+     */
+    turn: number;
+    /** From `turn.attention`: whether the finished turn waits on the user. */
+    needsUser?: boolean;
+    /** Short label from `turn.attention`, when one was provided. */
+    label?: string;
+    /** Failure category of a failed turn, from its failed model span. */
+    errorKind?: string;
+    /** Failure text of a failed turn. */
+    errorMessage?: string;
+    /** When a failed route is expected to recover, when the events carry it. */
+    retryAt?: string;
+  };
+  /**
+   * Runtime-derived: whether the session has an in-flight turn right now. Never
+   * persisted to `index.json`; only the session engine populates it in memory.
+   */
+  running?: boolean;
+  /**
+   * The `seq` of the newest event in the timeline as of the last index write.
+   * Absent means the index does not know it (a placeholder or a summary the
+   * timeline outgrew); the value is only trusted when `bytes` still matches the
+   * timeline file's size.
+   */
+  lastSeq?: number;
+  /**
+   * Turns that started without a matching `turn.finished`, ascending. This is
+   * the only startup recovery signal: a session whose pending turns are empty
+   * is never body-read at startup.
+   */
+  pendingTurns?: number[];
+  /**
+   * Serialized size of the timeline file at the last index write. A mismatch
+   * with the file's current size marks the summary stale, so it is rebuilt from
+   * the body on first touch instead of being trusted.
+   */
+  bytes?: number;
+}
+
+// ─── Live calls ────────────────────────────────────────────────────────────
+
+/**
+ * An in-memory streaming snapshot of one call. It is never written to the
+ * ledger: the durable `span.started` / `span.finished` events remain
+ * authoritative, and the live table only bridges the gap while a call is still
+ * running. The complete accumulated text (not a delta) is exposed on each
+ * notification.
+ */
+export interface LiveCall {
+  spanId: string;
+  text: string;
+  reasoning: string;
+}

@@ -12,20 +12,10 @@
 import { GATEWAY_HEADERS, parseAdmissionRefusal } from '@wrenyard/providers/base';
 
 import { record, stringField, type ModelFailureSource, type ModelMetrics, type RetryAfterHint } from './protocol.ts';
+import type { ModelErrorKind } from '@wrenyard/protocol/session';
 
-/** Normalized failure class; overloads are folded into `server`. */
-export type ModelErrorKind =
-  | 'network'
-  | 'server'
-  | 'rate_limited'
-  | 'quota_exhausted'
-  | 'auth'
-  | 'model_unavailable'
-  | 'invalid_request'
-  | 'context_overflow'
-  | 'protocol'
-  | 'interrupted'
-  | 'aborted';
+/** Normalized failure class; declared on the wire layer and re-exported here. */
+export type { ModelErrorKind };
 
 /** The supplier's original error identity, kept for diagnostics. */
 export interface UpstreamErrorIdentity {

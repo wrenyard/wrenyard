@@ -1,4 +1,4 @@
-import type { LedgerEvent, LiveCall } from '@wrenyard/session'
+import type { LedgerEvent, LiveCall } from '../session/ledger.ts'
 import type { JsonSchema } from '../common/jsonrpc'
 
 interface SessionEventsResult {

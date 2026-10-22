@@ -873,9 +873,6 @@ importers:
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../models
-      '@wrenyard/session':
-        specifier: workspace:*
-        version: link:../features/session
     devDependencies:
       typescript:
         specifier: ^5.9.0

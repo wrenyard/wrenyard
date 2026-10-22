@@ -7,6 +7,7 @@ import type { GatewayConnection as WrenyardGatewayConnection } from '@wrenyard/p
 import type { TaskRunFacts } from '@wrenyard/protocol/task';
 import type { ReasoningEffort } from '@wrenyard/models';
 import type { ProviderDefinition } from '@wrenyard/providers';
+import type { LiveCall } from '@wrenyard/protocol/session';
 import type {
   LedgerEvent,
   LedgerEventDraft,
@@ -172,6 +173,12 @@ export interface SessionHost {
  * built-in orchestrator prompt and the single `wy_action` tool with a host-owned
  * system prompt and native tool set.
  */
+/**
+ * The live-call snapshot is part of the `session.events` wire contract, so it
+ * is declared in `@wrenyard/protocol/session` and re-exported here.
+ */
+export type { LiveCall };
+
 export interface AgentToolPort {
   /** Replaces the whole reason system prompt (REASON_SYSTEM, the `<wy-global>` AGENTS.md and REASON_ROLE). */
   system: string;
@@ -199,19 +206,6 @@ export interface AgentToolPort {
    * also appear in `tools`.
    */
   auxiliaryTools?: Readonly<Record<string, ActionType>>;
-}
-
-/**
- * An in-memory streaming snapshot of one call. It is never written to the
- * ledger: the durable `span.started` / `span.finished` events remain
- * authoritative, and the live table only bridges the gap while a call is still
- * running. The complete accumulated text (not a delta) is exposed on each
- * notification.
- */
-export interface LiveCall {
-  spanId: string;
-  text: string;
-  reasoning: string;
 }
 
 export interface Session {

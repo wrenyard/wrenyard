@@ -3,10 +3,10 @@
  * `session.send` / `session.interrupt` / `session.events` surface for the
  * append-only session timeline.
  *
- * The event and summary shapes come from `@wrenyard/session` verbatim so a
- * ledger record crosses the wire unchanged.
+ * The event and summary shapes are declared in `./ledger.ts` so a ledger
+ * record crosses the wire unchanged.
  */
-import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session'
+import type { LedgerEvent, LiveCall, SessionSummary } from './ledger.ts'
 
 export type SessionListParams = Record<string, never>
 export interface SessionListResult { sessions: SessionSummary[] }

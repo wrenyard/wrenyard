@@ -9,7 +9,14 @@
  * carries retry parameters.
  */
 import type { ReasoningEffort } from '@wrenyard/models';
-import type { ModelErrorKind } from './errors.ts';
+import type { FinishReason, ModelAttempt, ModelErrorKind, ModelMetrics, RetryAfterHint, RetryAfterSource, Usage } from '@wrenyard/protocol/session';
+
+/**
+ * The model-call fact types are the wire shape of ledger span metrics, so they
+ * are declared in `@wrenyard/protocol/session` and re-exported here under their
+ * original names; the transport's functions and runtime values stay local.
+ */
+export type { FinishReason, ModelAttempt, ModelMetrics, RetryAfterHint, RetryAfterSource, Usage };
 
 /** One OpenAI-compatible content part. `text` is visible text; `image_url` a data URL. */
 export type ModelContentPart =
@@ -66,22 +73,8 @@ export interface Message {
   toolCallId?: string;
 }
 
-/**
- * Provider-reported usage. Only fields the upstream actually reported are set;
- * a missing value stays absent instead of being replaced by `0`.
- */
-export interface Usage {
-  inputTokens?: number;
-  cachedInputTokens?: number;
-  outputTokens?: number;
-  reasoningTokens?: number;
-}
-
 /** How the caller wants tools used; defaults to `auto`. */
 export type ToolChoice = 'auto' | 'none' | 'required' | { name: string };
-
-/** Normalized completion reason. */
-export type FinishReason = 'stop' | 'length' | 'tool_calls' | 'content_filter';
 
 /* ── Protocol selection ───────────────────────────────────────────────────── */
 
@@ -109,25 +102,6 @@ export function supportsSession(model: { protocols?: readonly string[] }): boole
 }
 
 /* ── Upstream retry hint ──────────────────────────────────────────────────── */
-
-/** Which upstream response header supplied an adopted retry hint. */
-export type RetryAfterSource = 'retry-after' | 'retry-after-ms';
-
-/**
- * An upstream retry hint the transport actually adopted. The original header
- * value is kept verbatim so a caller can record the supplier's own wording in
- * the ledger; `delayMs` is the wait that was applied and `retryAt` is that wait
- * expressed as an absolute not-before instant (epoch ms), so a hint longer than
- * a minute is honoured exactly instead of being re-clamped relative to a later
- * clock read.
- */
-export interface RetryAfterHint {
-  source: RetryAfterSource;
-  value: string;
-  delayMs: number;
-  /** Absolute instant (epoch ms) before which no retry may start. */
-  retryAt: number;
-}
 
 /**
  * Where a normalized failure originated. `upstream` is a real supplier
@@ -227,40 +201,6 @@ export type ModelEvent =
   | { type: 'activity' }
   | { type: 'retry'; attempt: number; kind: ModelErrorKind; status?: number; delayMs: number; retryAfter?: RetryAfterHint }
   | { type: 'wait'; attempt: number; kind: ModelErrorKind; status?: number; delayMs: number; reason: ModelWaitReason; retryAt?: string; retryAfter?: RetryAfterHint };
-
-/** One request actually issued during a call, in order. */
-export interface ModelAttempt {
-  /** HTTP status of this request, when one was received. */
-  status?: number;
-  /** Failure kind of this request; absent on the successful one. */
-  error?: ModelErrorKind;
-  /** Duration of this request in milliseconds. */
-  ms: number;
-  /** Wait before this request, when it is a retry. */
-  waitedMs?: number;
-  /** Present only when an upstream retry hint was adopted for that wait. */
-  retryAfter?: RetryAfterHint;
-  /** The route this request was issued for, when a caller distinguishes routes. */
-  model?: string;
-  /** When this route is expected to recover, from an adopted hint or route state. */
-  routeUntil?: string;
-}
-
-/** Measured facts of one completed or failed call, produced by the transport. */
-export interface ModelMetrics {
-  /** Model id the upstream reported, when it differs or is known. */
-  responseModel?: string;
-  finishReason?: FinishReason;
-  usage?: Usage;
-  /** Milliseconds from the first request being sent to the first output (text, reasoning or tool-call argument). */
-  ttftMs?: number;
-  /** Total time visible content was streaming, from the shared sampler. */
-  streamMs?: number;
-  /** Sampler token count of that streamed content. */
-  streamTokens?: number;
-  /** Every request actually issued, in order. */
-  attempts: ModelAttempt[];
-}
 
 /** One unified completion result. */
 export interface ModelResult {
