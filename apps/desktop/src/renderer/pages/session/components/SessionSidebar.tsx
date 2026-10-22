@@ -12,6 +12,7 @@ import {
   SquarePen,
   Trash2,
 } from 'lucide-react';
+import { cn } from 'cn';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { SessionGroupBy, SessionSortBy, SessionStatusFilter } from '@/shell-contract';
 import {
@@ -255,14 +256,16 @@ function SessionRow({
         <SidebarMenuButton
           isActive={selected}
           onClick={onSelect}
-          className={`group-has-data-[sidebar=menu-action]/menu-item:pr-8!${indent ? ' ml-4 border-l border-sidebar-border pl-2' : ''}`}
+          className={cn('pr-8!', indent && 'ml-4 border-l border-sidebar-border pl-2')}
         >
           <SessionDot status={sessionStatusOf(session, seen)} />
           <span className="min-w-0 flex-1 [text-overflow:clip]! [mask-image:linear-gradient(to_right,#000_calc(100%_-_2rem),transparent)]">{session.title}</span>
-          {session.running === true && (
-            <Spinner className="size-3 shrink-0 text-muted-foreground" />
-          )}
         </SidebarMenuButton>
+      )}
+      {!editing && session.running === true && (
+        <span className="pointer-events-none absolute top-1.5 right-1 flex size-5 items-center justify-center group-hover/menu-item:opacity-0 group-focus-within/menu-item:opacity-0 group-has-[[aria-expanded=true]]/menu-item:opacity-0">
+          <Spinner className="size-3 text-muted-foreground" />
+        </span>
       )}
       {!editing && (
         <DropdownMenu>
