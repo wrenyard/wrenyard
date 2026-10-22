@@ -148,13 +148,9 @@ export interface TimelineBlock {
 
 export type TimelineItem = TimelineUser | TimelineBlock;
 
-/** Turn ids order as strings, so the timeline does not depend on the id type. */
+/** Turn ids are sequential numbers: an earlier turn orders first on a time tie. */
 function compareTurnId(a: number, b: number): number {
-  const left = String(a);
-  const right = String(b);
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
+  return a - b;
 }
 
 /**
