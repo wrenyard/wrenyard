@@ -18,6 +18,7 @@ export * from './task-timeouts.ts';
 export * from './schema-validation.ts';
 export * from './output-facts.ts';
 export * from './task-settings.ts';
+export * from './task-output-route-requirement.ts';
 export * from './run-record.ts';
 /**
  * `TaskDispatchRequirements` is the auto-routing SSOT re-exported by
