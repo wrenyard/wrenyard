@@ -67,7 +67,7 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
           ))}
           {provider.balances.map((balance) => (
             <div
-              key={`${balance.currency}:${balance.display}`}
+              key={`${balance.id ?? balance.currency}:${balance.display}`}
               className="flex h-6 items-center gap-2 text-sm"
             >
               <span className="min-w-0 flex-1 truncate text-muted-foreground">{BALANCE_LABEL}</span>

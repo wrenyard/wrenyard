@@ -382,8 +382,11 @@ export function adaptQuotaTips(tips: readonly QuotaTipLine[] | undefined): Quota
         stale: false,
         windows: [],
         balances: tip.balances.map((balance) => ({
-          currency: balance.currency,
+          ...(balance.id === undefined ? {} : { id: balance.id }),
+          ...(balance.currency === undefined ? {} : { currency: balance.currency }),
           amount: balance.amount,
+          ...(balance.unit === undefined ? {} : { unit: balance.unit }),
+          ...(balance.unlimited === undefined ? {} : { unlimited: balance.unlimited }),
           display: balance.display,
         })),
       });

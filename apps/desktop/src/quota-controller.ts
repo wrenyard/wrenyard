@@ -217,8 +217,11 @@ function projectProvider(id: string, provider: QuotaProviderState, lastSuccessAt
   }
   const balances: QuotaBalanceSnapshot[] = (provider.balances ?? []).map((balance) => {
     const row: QuotaBalanceSnapshot = {
-      currency: balance.currency,
+      ...(balance.id === undefined ? {} : { id: balance.id }),
+      ...(balance.currency === undefined ? {} : { currency: balance.currency }),
       amount: balance.amount,
+      ...(balance.unit === undefined ? {} : { unit: balance.unit }),
+      ...(balance.unlimited === undefined ? {} : { unlimited: balance.unlimited }),
       display: sanitizeQuotaText(balance.display),
     };
     return { ...row, state: balancePoolState(row, observedAtMs, nowMs) };
@@ -423,19 +426,26 @@ function windowPoolState(
   return quotaStateOf([{ id: window.name, kind: 'quota', evidence }], nowMs).state;
 }
 
-/** Per-pool state of one balance: exhausted at zero, insufficient at or below its currency threshold. */
+/**
+ * Per-pool state of one balance: exhausted at zero, insufficient at or below
+ * its currency threshold. A unit row has no threshold (zero exhausts it); an
+ * explicit unlimited row is sufficient; a reported-but-absent amount is
+ * insufficient, never a fabricated zero.
+ */
 function balancePoolState(
   balance: QuotaBalanceSnapshot,
   observedAtMs: number,
   nowMs: number,
 ): QuotaPoolState {
   const balanceEvidence: BalanceEvidence = {
-    amount: balance.amount,
-    currency: balance.currency,
+    ...(balance.amount === null ? {} : { amount: balance.amount }),
+    currency: balance.currency ?? null,
+    ...(balance.unit === undefined ? {} : { unit: balance.unit }),
+    ...(balance.unlimited === true ? { unlimited: true } : {}),
     observedAtMs,
     validForMs: QUOTA_EVIDENCE_GRACE_MS,
   };
-  return quotaStateOf([{ id: balance.currency, kind: 'balance', evidence: null, balance: balanceEvidence }], nowMs).state;
+  return quotaStateOf([{ id: balance.id ?? balance.currency ?? 'balance', kind: 'balance', evidence: null, balance: balanceEvidence }], nowMs).state;
 }
 
 function isQuotaUnavailable(status: QuotaProviderSnapshot['status']): boolean {

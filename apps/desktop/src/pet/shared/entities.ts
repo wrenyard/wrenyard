@@ -88,7 +88,8 @@ export interface QuotaProviderState {
   code?: string | null;
   /** Parsed window data for graphical rendering */
   bars?: QuotaProviderBars;
-  /** Structured monetary balances, distinct from percentage windows. */
+  /** Structured monetary and unit-denominated balances, distinct from
+   *  percentage windows. */
   balances?: QuotaBalanceRow[];
   /**
    * Daemon-computed estimated USD spend per quota window (Devin only):
@@ -98,13 +99,25 @@ export interface QuotaProviderState {
   estimatedSpend?: { window: string; models: Record<string, number>; totalUsd: number }[];
 }
 
-/** A single monetary quota balance row, separate from percentage bars. */
+/**
+ * A single quota balance row, separate from percentage bars. Monetary rows
+ * carry `currency` + `amount`; a unit-denominated row carries a stable `id`,
+ * a non-currency `unit` (e.g. `Credits`), a null amount when the provider
+ * reported the balance slot without a value, and an optional `unlimited`
+ * flag.
+ */
 export interface QuotaBalanceRow {
-  /** Uppercase three-letter ISO currency code, e.g. `CNY` or `USD`. */
-  currency: string;
-  /** Non-negative decimal-string amount, e.g. `"12.50"`. */
-  amount: string;
-  /** Pre-formatted display value for the currency (e.g. `¥12.50`, `$12.50`). */
+  /** Stable balance identity (e.g. `chatgpt/credits`); absent for monetary rows. */
+  id?: string;
+  /** Uppercase three-letter ISO currency code of a monetary row. */
+  currency?: string;
+  /** Non-negative decimal-string amount; null means reported-but-unknown. */
+  amount: string | null;
+  /** Non-currency display unit of a unit-denominated row. */
+  unit?: string;
+  /** Provider-declared unlimited balance. */
+  unlimited?: boolean;
+  /** Pre-formatted display value (e.g. `¥12.50`, `120 Credits`, `不限量`). */
   display: string;
 }
 

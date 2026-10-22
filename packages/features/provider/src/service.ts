@@ -264,7 +264,15 @@ export function toQuotaSnapshot(row: ProviderQuotaSnapshot): ProviderQuotaSnapsh
     ...(row.code === undefined ? {} : { code: row.code }),
     ...(row.used === undefined ? {} : { used: row.used }),
     ...(row.total === undefined ? {} : { total: row.total }),
-    ...(row.balances === undefined ? {} : { balances: row.balances.map((balance) => ({ currency: balance.currency, amount: balance.amount })) }),
+    ...(row.balances === undefined ? {} : {
+      balances: row.balances.map((balance) => ({
+        ...(balance.id === undefined ? {} : { id: balance.id }),
+        ...(balance.currency === undefined ? {} : { currency: balance.currency }),
+        amount: balance.amount,
+        ...(balance.unit === undefined ? {} : { unit: balance.unit }),
+        ...(balance.unlimited === undefined ? {} : { unlimited: balance.unlimited }),
+      })),
+    }),
     ...(row.fetched_at === undefined ? {} : { fetched_at: row.fetched_at }),
     ...(row.source === undefined ? {} : { source: row.source }),
     ...(row.message === undefined ? {} : { message: row.message }),

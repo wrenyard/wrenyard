@@ -93,7 +93,7 @@ function ProviderTips({ provider, now, inverse, currency }: {
             />
           ))}
           {provider.balances.map((balance) => (
-            <span key={`${balance.currency}:${balance.display}`} className="flex items-baseline gap-1">
+            <span key={`${balance.id ?? balance.currency}:${balance.display}`} className="flex items-baseline gap-1">
               <span className={muted}>{BALANCE_LABEL}</span>
               <strong className="tabular-nums">{formatQuotaBalance(balance, currency)}</strong>
               {balance.state !== undefined && (

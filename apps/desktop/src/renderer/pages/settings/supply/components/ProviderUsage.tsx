@@ -132,7 +132,7 @@ function ProviderUsageCard({ entry, now, currency }: { entry: ProviderCatalogSna
           })}
           {quota.balances.map((balance) => (
             <span
-              key={`${balance.currency}:${balance.display}`}
+              key={`${balance.id ?? balance.currency}:${balance.display}`}
               className="flex items-baseline gap-1 text-sm"
             >
               <span className="text-muted-foreground">{BALANCE_LABEL}</span>

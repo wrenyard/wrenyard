@@ -6,7 +6,7 @@ import { paceView, quotaLevel, quotaPoolLevel, resetView } from '@/renderer/comp
 import { openSessionInspector } from '@/renderer/lib/session-inspector';
 import { useQuotaQuery } from '@/renderer/lib/queries';
 import { getCurrentSession, restoreMain, useMiniMode } from '@/renderer/lib/mini';
-import { selectTightestQuotaWindow } from '@/renderer/lib/quota-focus';
+import { selectChatGptFundingSource } from '@wrenyard/providers/chatgpt';
 import { useComposerSelection, useSessionUsage } from '../state/session-usage.js';
 
 function useMinuteNow(): number {
@@ -36,25 +36,57 @@ export function QuotaRingButton() {
       ?? data.catalog.find((entry) => entry.id === providerId);
   }, [quota.data, providerId]);
 
-  const window = useMemo(() => {
-    if (provider === undefined || !('windows' in provider)) return null;
+  const { window, fallbackBalance, creditsUnknown } = useMemo(() => {
+    if (provider === undefined || !('windows' in provider)) {
+      return { window: null, fallbackBalance: undefined, creditsUnknown: false };
+    }
     const snapshot = quota.data;
-    if (snapshot === undefined) return null;
+    if (snapshot === undefined) return { window: null, fallbackBalance: undefined, creditsUnknown: false };
     const full = snapshot.providers.find((entry) => entry.id === provider.id);
-    if (full === undefined) return null;
-    return selectTightestQuotaWindow([full])?.window ?? null;
+    if (full === undefined) return { window: null, fallbackBalance: undefined, creditsUnknown: false };
+    const finite = full.windows.filter((entry) => Number.isFinite(entry.remainingPct));
+    if (finite.length === 0) return { window: null, fallbackBalance: undefined, creditsUnknown: false };
+    const tightest = finite.reduce((best, entry) =>
+      (entry.remainingPct < best.remainingPct ? entry : best));
+    if (full.id !== 'chatgpt') return { window: tightest, fallbackBalance: undefined, creditsUnknown: false };
+    // The shared subscription-first rule decides the ring source: any
+    // confirmed-exhausted applicable window may hand off to Credits, while a
+    // stale/unknown observation never fabricates a paid fallback and an
+    // absent/zero balance stays a real subscription window.
+    const stale = full.stale === true;
+    const balance = full.balances.find((entry) => entry.id === 'chatgpt/credits');
+    const source = selectChatGptFundingSource({
+      subscriptionExhausted: stale ? false : finite.some((entry) => entry.remainingPct <= 0),
+      credits: stale || balance === undefined ? 'unknown'
+        : balance.unlimited === true ? 'available'
+        : balance.state === 'sufficient' ? 'available'
+        : balance.state === 'exhausted' ? 'empty'
+        : 'unknown',
+    });
+    if (source === 'credits' && balance !== undefined) {
+      return { window: tightest, fallbackBalance: balance, creditsUnknown: false };
+    }
+    if (source === 'unresolved') return { window: tightest, fallbackBalance: undefined, creditsUnknown: true };
+    return { window: tightest, fallbackBalance: undefined, creditsUnknown: false };
   }, [provider, quota.data]);
 
   const unknownByDesign = selected?.quotaEvidence === 'unknown_by_design';
 
-  const ringStatus = quota.isPending ? 'loading' : unknownByDesign ? 'unknown' : 'ready';
+  const ringStatus = quota.isPending ? 'loading'
+    : unknownByDesign || creditsUnknown ? 'unknown'
+    : 'ready';
   const remainingPct = window?.remainingPct;
-  const usedRatio = remainingPct !== undefined && Number.isFinite(remainingPct)
-    ? Math.max(0, Math.min(1, (100 - remainingPct) / 100))
-    : undefined;
+  // A usable fallback balance keeps the ring usable even when the tightest
+  // subscription window is exhausted. It reports a neutral unused ratio —
+  // never a fabricated percentage of an unknown full Credits allowance.
+  const usedRatio = creditsUnknown || fallbackBalance !== undefined
+    ? 0
+    : remainingPct !== undefined && Number.isFinite(remainingPct)
+      ? Math.max(0, Math.min(1, (100 - remainingPct) / 100))
+      : undefined;
 
   let level = 'normal' as 'normal' | 'warning' | 'destructive';
-  if (window !== null && Number.isFinite(window.remainingPct)) {
+  if (!creditsUnknown && fallbackBalance === undefined && window !== null && Number.isFinite(window.remainingPct)) {
     level = quotaPoolLevel(window);
     if (level === 'normal' && paceView(window.remainingPct, window.expectedRemainingPct)?.warn === true) {
       level = 'warning';
@@ -75,12 +107,14 @@ export function QuotaRingButton() {
 
   const tooltip = unknownByDesign
     ? '按量计费 · 用量未知'
-    : [
-      providerLabel,
-      windowLabel,
-      remainingPct !== undefined && Number.isFinite(remainingPct) ? `剩余 ${Math.round(remainingPct)}%` : undefined,
-      reset?.label,
-    ].filter(Boolean).join(' · ');
+    : fallbackBalance !== undefined
+      ? [providerLabel, `按量计费 · ${fallbackBalance.display}`].filter(Boolean).join(' · ')
+      : [
+        providerLabel,
+        windowLabel,
+        remainingPct !== undefined && Number.isFinite(remainingPct) ? `剩余 ${Math.round(remainingPct)}%` : undefined,
+        reset?.label,
+      ].filter(Boolean).join(' · ');
 
   const onClick = (): void => {
     if (mini) {

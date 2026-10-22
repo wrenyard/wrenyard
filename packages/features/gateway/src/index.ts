@@ -215,9 +215,14 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
   const nowFn = options.now ?? Date.now;
   const healthStore = createGatewayHealthStore(nowFn);
   const quotaPoolsForRoute = options.providers.quotaPools ?? (() => []);
+  // The stable pools drive fault attribution and health; the effective reader
+  // (when present) governs admission filtering only, never attribution.
+  const effectivePoolsForRoute = options.providers.effectiveQuotaPools;
   const routeStates = new RouteStateStore(nowFn,
     quotaPoolsForRoute,
-    event => { void Promise.resolve().then(() => options.onRouteStateChanged?.(event)).catch(() => undefined); });
+    event => { void Promise.resolve().then(() => options.onRouteStateChanged?.(event)).catch(() => undefined); },
+    undefined,
+    effectivePoolsForRoute);
 
   const routeStatus = (publicModel: string): RouteStatus | undefined => {
     const split = gatewayRouteKey(options.catalog, publicModel);

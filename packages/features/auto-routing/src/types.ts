@@ -85,12 +85,19 @@ export interface RequiredQuotaConstraint {
    */
   observedExhausted?: boolean;
 }
-/** Discriminated monetary balance evidence for one required balance resource. */
+/** Discriminated balance evidence for one required balance resource. */
 export interface BalanceEvidence {
-  /** Raw decimal amount string from Wrenyard balances (authoritative). */
-  amount: string;
-  /** ISO-4217 currency code; selects the low-balance threshold. */
+  /** Raw decimal amount string from Wrenyard balances (authoritative). Absent
+   *  only on a provider-declared unlimited row. */
+  amount?: string;
+  /** ISO-4217 currency code; selects the low-balance threshold. Absent on a
+   *  non-currency unit balance (e.g. Credits), which has no threshold. */
   currency?: string | null;
+  /** Non-currency unit label carried for diagnostics; never a currency. */
+  unit?: string;
+  /** Provider-declared unlimited balance: usable while fresh, never a fake
+   *  large amount. */
+  unlimited?: boolean;
   /** Timestamp (epoch ms) the observation was taken. */
   observedAtMs: number;
   /** How long after observedAtMs the observation is considered fresh. */

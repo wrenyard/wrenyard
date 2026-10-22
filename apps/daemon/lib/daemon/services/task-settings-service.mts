@@ -57,7 +57,7 @@ import type {
   TaskResolvedDispatch,
 } from '@wrenyard/protocol'
 import {
-  AutoRoutingQuotaSnapshotService,
+  AutoRoutingQuotaSnapshotSource,
   type AutoRoutingBoundQuotaSnapshot,
   type AutoRoutingQuotaSnapshot,
   type CodeBuddyActiveSnapshotView,
@@ -261,7 +261,7 @@ export interface TaskSettingsServiceOptions {
    *  every automatic selection (run and snapshot row preview). Snapshot row
    *  preview takes one immutable snapshot per request; every other selection
    *  call takes its own. */
-  quotaSnapshots?: AutoRoutingQuotaSnapshotService
+  quotaSnapshots?: AutoRoutingQuotaSnapshotSource
   /** Optional in-memory Gateway route circuit status keyed by a route key:
    *  `provider/model` for the shared free-supply gate, plus the client-qualified
    *  `provider/model:client` task target for the additional exact task-client
@@ -764,7 +764,7 @@ export class TaskSettingsService {
   private readonly runtimeAvailability?: TaskSettingsRuntimeAvailabilityCallback
   private readonly nativeProviderReadiness?: TaskSettingsNativeProviderReadinessCallback
   private readonly clientReadiness?: TaskSettingsClientReadinessCallback
-  private readonly quotaSnapshots?: AutoRoutingQuotaSnapshotService
+  private readonly quotaSnapshots?: AutoRoutingQuotaSnapshotSource
   private readonly routeStatus?: (model: string) => GatewayRouteStatus | undefined
   private readonly gatewayHealth?: () => GatewayHealthResult | Promise<GatewayHealthResult>
   private readonly now: () => number

@@ -35,7 +35,9 @@ export async function handleQuota(args: string[]): Promise<number> {
         const label = pool ? providerQuotaPoolLabel(pool) : window.name
         return `${label}: ${window.pct.toFixed(1)}% used`
       }).join(', ')
-        || row.balances?.map(balance => `${balance.amount} ${balance.currency}`).join(', ')
+        || row.balances?.map(balance => balance.unlimited === true
+          ? `unlimited ${balance.unit ?? balance.currency ?? ''}`.trim()
+          : `${balance.amount ?? 'unknown'} ${balance.currency ?? balance.unit ?? ''}`.trim()).join(', ')
         || row.message || row.error || 'No observable quota'
       console.log(`${row.provider} [${row.status}] plan: ${row.plan || 'unknown'} ${detail}`)
     }

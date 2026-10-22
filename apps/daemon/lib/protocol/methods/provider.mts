@@ -128,9 +128,19 @@ export const providerQuotaResultSchema = {
         used: { type: 'number' },
         total: { type: 'number' },
         balances: { type: 'array', maxItems: 128, items: {
-          type: 'object', required: ['currency', 'amount'], properties: {
+          type: 'object',
+          // Monetary rows require currency+amount; unit-denominated rows
+          // require id+unit and allow a null amount (reported-but-unknown).
+          anyOf: [
+            { required: ['currency', 'amount'] },
+            { required: ['id', 'unit'] },
+          ],
+          properties: {
+            id: { type: 'string', minLength: 1, maxLength: 200 },
             currency: { type: 'string', minLength: 1, maxLength: 32 },
-            amount: { type: 'string', maxLength: 64 },
+            amount: { anyOf: [{ type: 'string', maxLength: 64 }, { type: 'null' }] },
+            unit: { type: 'string', minLength: 1, maxLength: 64 },
+            unlimited: { type: 'boolean' },
           }, additionalProperties: false,
         } },
         fetched_at: { type: 'string', maxLength: 64 },

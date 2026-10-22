@@ -131,7 +131,13 @@ export function buildQuotaMenuProviderGroup(
     // Convert the persisted balance through the display-currency setting so a
     // USD balance shows the converted ¥ form under CNY while CNY balances and
     // unsupported currencies render unchanged; the snapshot is never mutated.
-    amount: formatQuotaBalance(balance, displayCurrency),
+    // An unlimited or amount-less unit row keeps an ASCII caption because the
+    // 5×7 atlas cannot draw the Chinese unknown/unlimited labels.
+    amount: balance.unlimited === true
+      ? `unlimited ${balance.unit ?? ''}`.trim()
+      : balance.amount === null
+        ? `unknown ${balance.unit ?? ''}`.trim()
+        : formatQuotaBalance(balance, displayCurrency),
   }));
   if (lines.length === 0) {
     lines.push({

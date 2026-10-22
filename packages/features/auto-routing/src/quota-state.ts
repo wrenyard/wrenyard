@@ -79,8 +79,20 @@ function measuredBalance(
   const observedAtMs = balance.observedAtMs;
   if (!isFiniteNumber(observedAtMs)) return rejected('observation_time_not_finite');
   if (observedAtMs > nowMs) return rejected('future_observation');
+  // An explicit provider-declared unlimited balance is usable while fresh; it
+  // is never abundant and never fabricated as a large number.
+  if (balance.unlimited === true) {
+    const unlimitedValidForMs = balance.validForMs;
+    if (!isFiniteNumber(unlimitedValidForMs) || unlimitedValidForMs <= 0) return rejected('invalid_freshness_window');
+    if (nowMs - observedAtMs > unlimitedValidForMs) return rejected('stale_observation');
+    return { state: 'sufficient', headroom: null, rejectCode: null };
+  }
   const amount = balance.amount;
   if (typeof amount !== 'string' || !/^\d+(?:\.\d+)?$/.test(amount)) {
+    // A reported-but-absent amount is unknown, never fabricated as zero.
+    if (amount === undefined) {
+      return { state: 'insufficient', headroom: null, rejectCode: null };
+    }
     return rejected('invalid_balance_amount');
   }
   const value = Number(amount);

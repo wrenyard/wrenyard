@@ -26,6 +26,7 @@ import {
 export type { CodeBuddyActiveSnapshot, CodeBuddyClientIdentity, CodeBuddyEnvironment } from './codebuddy/runtime.ts';
 export type { ChatGptGatewayAuthAdapter, ChatGptGatewayCredential } from './chatgpt/runtime.ts';
 export { applyChatGptPromptCacheKey } from './chatgpt/runtime.ts';
+import { CHATGPT_CREDITS_POOL } from './chatgpt/quota.ts';
 
 import { freeQuotaPool } from './base/quota-helpers.ts';
 import type { ProviderCredential, RoutingFreeSupplyFact } from './base/provider.ts';
@@ -37,6 +38,14 @@ const credentialProviders = new WeakMap<ProviderCredential, Provider>();
 export interface ProviderRuntime {
   /** Current offering bindings, including runtime-only provider models. */
   quotaPools?(provider: string, model: string): readonly string[];
+  /**
+   * Optional admission/effective pool reader. Returns the live effective pool
+   * set (e.g. the ChatGPT subscription→Credits funding selection) when the
+   * injected callback is valid, otherwise the mandatory declared binding; it
+   * never widens to the full declared ownership superset that {@link quotaPools}
+   * returns for fault attribution.
+   */
+  effectiveQuotaPools?(provider: string, model: string): readonly string[];
   credential(provider: ProviderDefinition): Promise<ProviderCredential | undefined>;
   resolveUpstreamModel(provider: ProviderDefinition, model: string, credential?: ProviderCredential): string;
   publicResponseModel(provider: ProviderDefinition, model: string, upstreamModel: string, publicModel: string): string;
@@ -81,6 +90,13 @@ export interface ProviderRuntime {
 
 export interface BuiltinProviderRuntimeOptions {
   providers?: readonly Provider[];
+  /**
+   * Optional live effective-pool reader (e.g. the ChatGPT subscription-first
+   * funding selection from the latest routing snapshot). It returns the
+   * normalized pool ids a route currently draws from, or undefined to keep
+   * the declared binding. Confirmed-free supply still wins over its answer.
+   */
+  effectiveQuotaPools?(provider: string, model: string): readonly string[] | undefined;
   env?: NodeJS.ProcessEnv;
   home?: string;
   platform?: NodeJS.Platform;
@@ -212,6 +228,25 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
   implementations.set(activeCodeBuddy.id, activeCodeBuddy);
   for (const provider of options.providers ?? []) implementations.set(provider.id, provider);
   const lastCredentials = new Map<string, ProviderCredential>();
+  /**
+   * Confirmed-free evaluation against the credential last observed for the
+   * provider. Shared by `quotaPools` and `effectiveQuotaPools` so a free model
+   * is admitted only against its free pool regardless of which pool list a
+   * caller requested.
+   */
+  const confirmedFreePools = (provider: string, modelId: string): readonly string[] | undefined => {
+    const implementation = implementations.get(provider);
+    const credential = lastCredentials.get(provider);
+    if (credential === undefined) return undefined;
+    try {
+      const definition = implementation?.definition ?? BUILTIN_PROVIDERS.find((entry) => entry.id === provider);
+      const freeFact = implementation?.freeSupply(modelId, credential)
+        ?? (definition !== undefined ? evaluateManagedFreeSupply(definition, modelId, credential) : undefined);
+      return freeFact?.confirmedFree === true ? [freeQuotaPool(provider).quotaPoolId] : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   return {
     /**
      * Pools a provider model should be admitted against. A confirmed-free model
@@ -232,16 +267,37 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
       const modelId = bareModelId(model);
       const bound = quota?.bindings.find(binding => binding.modelId === modelId);
       const declared = (bound?.pools ?? quota?.defaultPools ?? []).map(pool => pool.quotaPoolId);
-      const credential = lastCredentials.get(provider);
-      if (credential === undefined) return declared;
-      try {
-        const definition = implementation?.definition ?? BUILTIN_PROVIDERS.find((entry) => entry.id === provider);
-        const freeFact = implementation?.freeSupply(modelId, credential)
-          ?? (definition !== undefined ? evaluateManagedFreeSupply(definition, modelId, credential) : undefined);
-        return freeFact?.confirmedFree === true ? [freeQuotaPool(provider).quotaPoolId] : declared;
-      } catch {
-        return declared;
+      // Stable declared ownership superset: ChatGPT also owns its Credits pool as
+      // an alternate funding source, so a Credits-specific hold is always
+      // attributable for fault scope and health even while subscription is the
+      // active source. The static default pools stay 5h+7d; the credits pool is
+      // appended here, never merged into mandatory default pools.
+      const superset = provider === 'chatgpt' && !declared.includes(CHATGPT_CREDITS_POOL.quotaPoolId)
+        ? [...declared, CHATGPT_CREDITS_POOL.quotaPoolId]
+        : declared;
+      return confirmedFreePools(provider, modelId) ?? superset;
+    },
+    effectiveQuotaPools(provider, model) {
+      const implementation = implementations.get(provider);
+      const quota = implementation?.quota ?? providerQuotas.get(provider);
+      const modelId = bareModelId(model);
+      const bound = quota?.bindings.find(binding => binding.modelId === modelId);
+      const declared = (bound?.pools ?? quota?.defaultPools ?? []).map(pool => pool.quotaPoolId);
+      // Confirmed-free supply overrides every other pool source, exactly as it
+      // does in `quotaPools`: a free model is never admitted against paid pools,
+      // including any supplied by the daemon's effective-pool callback.
+      const free = confirmedFreePools(provider, modelId);
+      if (free !== undefined) return free;
+      // The live effective reader narrows admission to the active funding source
+      // (e.g. a confirmed subscription→Credits switch). It falls back to the
+      // mandatory declared binding when the callback is absent or invalid, and
+      // never returns the full declared ownership superset.
+      const effective = options.effectiveQuotaPools?.(provider, modelId);
+      if (effective !== undefined && effective.length > 0
+        && effective.every((pool) => typeof pool === 'string' && pool.length > 0)) {
+        return effective;
       }
+      return declared;
     },
     async credential(provider) {
       // ChatGPT/Codex is the only provider whose gateway credential comes from

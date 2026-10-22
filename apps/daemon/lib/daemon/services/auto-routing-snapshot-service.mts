@@ -81,6 +81,7 @@ import { randomUUID } from 'node:crypto';
 
 import { queryQuotaJson, type CodeBuddyQueryContext } from '../execution/quota-query.mts';
 
+import { assessRequiredQuota } from '@wrenyard/auto-routing';
 import type { BalanceEvidence, QuotaEvidence, QuotaEvidenceStatus, RequiredQuotaConstraint, ReplenishmentKind } from '@wrenyard/auto-routing';
 import type {
   AutoRoutingBoundQuotaSnapshot as PackageAutoRoutingBoundQuotaSnapshot,
@@ -88,6 +89,7 @@ import type {
   AutoRoutingQuotaSnapshotEntry,
 } from '@wrenyard/auto-routing';
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
+import { CHATGPT_CREDITS_POOL, selectChatGptFundingSource } from '@wrenyard/providers/chatgpt';
 import { codeBuddyPoolsForModel } from '@wrenyard/providers/codebuddy';
 import { WORKBUDDY_PROVIDER_IDS, workBuddyPoolsForModel } from '@wrenyard/providers/workbuddy';
 import type { WorkBuddyAccountKind } from '@wrenyard/providers/workbuddy';
@@ -161,6 +163,18 @@ export interface AutoRoutingBoundQuotaSnapshot extends PackageAutoRoutingBoundQu
   readonly codeBuddySnapshot: CodeBuddyActiveSnapshotView | undefined;
 }
 
+/**
+ * The structural surface consumers need: the immutable routing snapshot plus
+ * evidence invalidation. Declared as an interface (not the concrete class) so
+ * the daemon can wrap the service — e.g. to publish each snapshot's effective
+ * pool set to gateway admission — without a second quota source.
+ */
+export interface AutoRoutingQuotaSnapshotSource {
+  snapshot(): Promise<AutoRoutingQuotaSnapshot>;
+  routingSnapshot(): Promise<AutoRoutingBoundQuotaSnapshot>;
+  invalidateProviderEvidence(providerId: string): void;
+}
+
 export interface AutoRoutingQuotaSnapshotServiceOptions {
   /** Query source for the serialized quota-service text (defaults to the daemon
    *  spawn). Receives the current complete CodeBuddy expected scope/environment
@@ -197,10 +211,14 @@ interface RawWindow {
   readonly windowMs: number | null;
 }
 
-/** One raw Wrenyard balance entry: a currency plus a decimal amount string. */
+/** One raw Wrenyard balance entry: a monetary `{ currency, amount }` row or a
+ * unit-denominated `{ id, unit, amount|null, unlimited? }` row. */
 interface RawBalance {
+  readonly id: string | null;
   readonly currency: string | null;
   readonly amount: string | null;
+  readonly unit: string | null;
+  readonly unlimited: boolean;
 }
 
 interface RawRow {
@@ -270,19 +288,23 @@ function normalizeRow(item: unknown): RawRow | null {
     }
   }
 
-  // Existing Wrenyard balances source: raw `balances: [{ currency, amount }]` with
-  // a decimal amount string. Never synthesized, never coerced to zero.
+  // Existing Wrenyard balances source: raw `balances` rows, either monetary
+  // `{ currency, amount }` or unit-denominated `{ id, unit, amount|null,
+  // unlimited? }`. Never synthesized, never coerced to zero.
   const balances: RawBalance[] = [];
   if (Array.isArray(raw.balances)) {
     for (const entry of raw.balances) {
       if (entry === null || typeof entry !== 'object') {
-        balances.push({ currency: null, amount: null });
+        balances.push({ id: null, currency: null, amount: null, unit: null, unlimited: false });
         continue;
       }
       const balance = entry as Record<string, unknown>;
       balances.push({
+        id: stringOrNull(balance.id),
         currency: stringOrNull(balance.currency),
         amount: stringOrNull(balance.amount),
+        unit: stringOrNull(balance.unit),
+        unlimited: balance.unlimited === true,
       });
     }
   }
@@ -559,6 +581,115 @@ function balanceEvidence(row: RawRow, validForMs = QUOTA_SNAPSHOT_VALID_FOR_MS):
 }
 
 /**
+ * Evidence for one explicitly identified unit-denominated balance (e.g.
+ * `chatgpt/credits`), matched by stable `id` — never by the monetary
+ * first-positive heuristic, so an unrelated balance row can never fund it.
+ * A reported-but-absent amount stays unknown (`amount` omitted); an explicit
+ * `unlimited` flag is preserved verbatim.
+ */
+function unitBalanceEvidence(
+  row: RawRow,
+  balanceId: string,
+  validForMs = QUOTA_SNAPSHOT_VALID_FOR_MS,
+): BalanceEvidence | null {
+  if (row.fetchedAtMs === null) return null;
+  const entry = row.balances.find((balance) => balance.id === balanceId && balance.unit !== null);
+  if (entry === undefined) return null;
+  if (entry.unlimited) {
+    return {
+      unlimited: true,
+      unit: entry.unit ?? undefined,
+      observedAtMs: row.fetchedAtMs,
+      validForMs,
+    };
+  }
+  if (entry.amount === null || !/^\d+(?:\.\d+)?$/.test(entry.amount)) {
+    return {
+      unit: entry.unit ?? undefined,
+      observedAtMs: row.fetchedAtMs,
+      validForMs,
+    };
+  }
+  return {
+    amount: entry.amount,
+    unit: entry.unit ?? undefined,
+    observedAtMs: row.fetchedAtMs,
+    validForMs,
+  };
+}
+
+/**
+ * The ChatGPT Credits constraint for one row, or null when the row cannot
+ * prove the balance exists (no usable observation / no matching row id).
+ * `evidenceStatus` follows the row: measured only on a fresh usable row.
+ */
+function chatGptCreditsConstraint(
+  source: RawRow | null,
+  usable: boolean,
+  providerId: string,
+  observedPoolExhaustion: ReadonlyMap<string, number> | undefined,
+): RequiredQuotaConstraint {
+  const target: RequiredQuotaTarget = { id: CHATGPT_CREDITS_POOL.quotaPoolId, balanceId: CHATGPT_CREDITS_POOL.quotaPoolId };
+  const balance = source === null
+    ? null
+    : unitBalanceEvidence(source, CHATGPT_CREDITS_POOL.quotaPoolId,
+      usable ? QUOTA_SNAPSHOT_VALID_FOR_MS : RETAINED_EVIDENCE_VALID_FOR_MS);
+  const constraint = constraintOf(target, null, balance, usable && balance !== null ? 'measured' : 'not_obtained');
+  return applyObservedPoolExhaustion(providerId, target, constraint, observedPoolExhaustion);
+}
+
+/**
+ * One measured state classification for the Credits constraint: `available`
+ * means a fresh positive/unlimited balance, `empty` a confirmed zero, and
+ * `unknown` anything else. The shared policy classifies it; this wrapper only
+ * maps its four-level result onto the funding rule's three cases.
+ */
+function chatGptCreditsState(nowMs: number, constraint: RequiredQuotaConstraint): 'available' | 'empty' | 'unknown' {
+  const state = assessRequiredQuota(nowMs, [constraint]).state;
+  if (state === 'exhausted') return 'empty';
+  if (state === 'sufficient' || state === 'abundant') return 'available';
+  return 'unknown';
+}
+
+/**
+ * Applies the shared ChatGPT subscription-first rule to one binding's
+ * constraint set. Applicable subscription pools are conjunctive; a confirmed
+ * exhaustion in any of them hands eligibility to the Credits balance pool.
+ * The effective set is what `requiredQuota`, `quotaPoolIds`, the routing
+ * price factor and gateway admission all consume:
+
+ * - `subscription`: unchanged subscription constraints (the declared AND set);
+ * - `credits`: only the Credits balance constraint;
+ * - `exhausted`: subscription constraints kept — the route reports the
+ *   confirmed exhaustion;
+ * - `unresolved`: only the Credits constraint — unknown Credits yields
+ *   insufficient, never a fabricated zero or a mislabeled paid state.
+ */
+function applyChatGptFundingSource(
+  nowMs: number,
+  quotaPoolIds: string[],
+  requiredQuota: RequiredQuotaConstraint[],
+  creditsConstraint: RequiredQuotaConstraint,
+): { quotaPoolIds: string[]; requiredQuota: RequiredQuotaConstraint[] } {
+  const assessment = assessRequiredQuota(nowMs, requiredQuota);
+  const subscriptionExhausted = assessment.constraints.some((constraint) => constraint.state === 'exhausted');
+  const source = selectChatGptFundingSource({
+    subscriptionExhausted,
+    credits: chatGptCreditsState(nowMs, creditsConstraint),
+  });
+  switch (source) {
+    case 'credits':
+      return { quotaPoolIds: [CHATGPT_CREDITS_POOL.quotaPoolId], requiredQuota: [creditsConstraint] };
+    case 'unresolved':
+      // Unknown is represented by the unresolved source itself — never
+      // mislabeled as paid eligibility or fabricated as zero.
+      return { quotaPoolIds: [CHATGPT_CREDITS_POOL.quotaPoolId], requiredQuota: [creditsConstraint] };
+    default:
+      return { quotaPoolIds, requiredQuota };
+  }
+}
+
+/**
  * The CodeBuddy retained negative reset time, or null when it is invalid.
  *
  * Matches the exact neutral Go v2 projection: pool `codebuddy`, status ok,
@@ -632,6 +763,11 @@ function buildUnknownSnapshot(
           ? null
           : windowEvidence(retained, target.windowName, target.resetKind, RETAINED_EVIDENCE_VALID_FOR_MS), null, 'not_obtained'),
     );
+    if (binding.providerId === 'chatgpt') {
+      const credits = chatGptCreditsConstraint(retained, false, binding.providerId, undefined);
+      const effective = applyChatGptFundingSource(nowMs, shape.quotaPoolIds, requiredQuota, credits);
+      return entryFields(binding, { ...shape, quotaPoolIds: effective.quotaPoolIds }, effective.requiredQuota);
+    }
     return entryFields(binding, shape, requiredQuota);
   });
   return deepFreeze({
@@ -700,6 +836,12 @@ function buildSnapshot(
       }
       return applyObservedPoolExhaustion(binding.providerId, target, constraint, observedPoolExhaustion);
     });
+    if (binding.providerId === 'chatgpt') {
+      const credits = chatGptCreditsConstraint(source, usable, binding.providerId, observedPoolExhaustion);
+      const effective = applyChatGptFundingSource(nowMs, shape.quotaPoolIds, requiredQuota, credits);
+      entries.push(entryFields(binding, { ...shape, quotaPoolIds: effective.quotaPoolIds }, effective.requiredQuota));
+      continue;
+    }
     entries.push(entryFields(binding, shape, requiredQuota));
   }
 
@@ -764,6 +906,13 @@ export class AutoRoutingQuotaSnapshotService {
    * for the last-measured grace period; it never leaves the process.
    */
   private readonly lastUsableRows = new Map<string, RawRow>();
+  /**
+   * Monotonic evidence epoch, bumped by {@link invalidateProviderEvidence}.
+   * A refresh that started before an invalidation compares its captured epoch
+   * after the async query and discards everything it measured rather than
+   * writing back the previous account's evidence.
+   */
+  private evidenceEpoch = 0;
   private readonly observedPoolExhaustion: (() => ReadonlyMap<string, number>) | undefined;
   private readonly workBuddyAccountKinds: (() => Readonly<Record<string, string>>) | undefined;
 
@@ -806,6 +955,7 @@ export class AutoRoutingQuotaSnapshotService {
    * provider keeps its retained row and existing grace behaviour.
    */
   invalidateProviderEvidence(providerId: string): void {
+    this.evidenceEpoch += 1;
     this.lastUsableRows.delete(providerId);
     // Context keys carry providers as JSON keys of the login-type map.
     const marker = `"${providerId}"`;
@@ -844,7 +994,10 @@ export class AutoRoutingQuotaSnapshotService {
     }
 
     const started = this.refresh(context, codeBuddySnapshot?.environment, workBuddyKinds).finally(() => {
-      this.inFlightByContext.delete(key);
+      // Only this refresh's own registration may be removed: an invalidation
+      // may have cleared the map and a newer refresh may already have
+      // registered a replacement promise for the same context key.
+      if (this.inFlightByContext.get(key) === started) this.inFlightByContext.delete(key);
     });
     this.inFlightByContext.set(key, started);
     return Object.freeze({ snapshot: await started, codeBuddySnapshot });
@@ -879,11 +1032,22 @@ export class AutoRoutingQuotaSnapshotService {
     environment?: string,
     workBuddyKinds: Readonly<Record<string, string>> = {},
   ): Promise<AutoRoutingQuotaSnapshot> {
+    // Capture the epoch before the async query: any advance during the await
+    // means an invalidation ran and everything this refresh measured belongs
+    // to the previous account. Such a result is answered as unknown and must
+    // not write retained rows, cache entries or failClosed state.
+    const epoch = this.evidenceEpoch;
     let text: string;
     try {
       text = await this.queryJson(context);
     } catch {
+      if (epoch !== this.evidenceEpoch) {
+        return buildUnknownSnapshot(this.now(), [], this.lastUsableRows, environment, workBuddyKinds);
+      }
       return this.failClosed(context, [], environment, workBuddyKinds);
+    }
+    if (epoch !== this.evidenceEpoch) {
+      return buildUnknownSnapshot(this.now(), [], this.lastUsableRows, environment, workBuddyKinds);
     }
     // Evaluate provider observations against the time at which the asynchronous
     // sample completed. Wrenyard stamps each provider row as that provider

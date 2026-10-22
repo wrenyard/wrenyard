@@ -1,6 +1,7 @@
 import type { CandidateInput, RequiredQuotaConstraint } from './types.ts';
 import { INTELLIGENCE_ORDER } from '@wrenyard/providers/catalog';
 import { findProviderQuotaBindingForSupply, resolveDeepSeekReferencePricing, type DeepSeekPricingModel, type DeepSeekReferencePricing, type ProviderQuotaBinding } from '@wrenyard/providers';
+import { CHATGPT_CREDITS_POOL } from '@wrenyard/providers/chatgpt';
 import type { AutoRoutingQuotaSnapshot } from './selector.ts';
 
 /** Model evidence only: callers supply their own route identity and transport. */
@@ -182,14 +183,24 @@ export function toAutomaticCandidateInput(
         ? snapshotRequiredQuota
         : freeRequiredQuota)
     : (snapshotRequiredQuota ?? requiredQuotaForBinding(choice.provider, binding))
-  // Fixed base-pool automatic-routing discount, resolved from the bound pools.
-  // The conservative rate is the maximum across pools and is applied ONCE, never
-  // multiplied/compounded across multiple 5h/7d pools. A balance pool is always
-  // 1; a missing/empty binding defaults to 1.
+  // Fixed base-pool automatic-routing discount, resolved from the EFFECTIVE
+  // pool set: when the snapshot entry carries one, it is authoritative (e.g. a
+  // ChatGPT Credits fallback replaces the subscription 5h/7d pools); otherwise
+  // the static binding is used. The conservative rate is the maximum across
+  // pools and is applied ONCE, never multiplied/compounded across multiple
+  // 5h/7d pools. A balance pool is always 1; a missing/empty pool set defaults
+  // to 1.
   const boundPools = binding?.pools ?? []
-  const quotaPoolDiscountRate = boundPools.length === 0
+  const effectivePoolIds = quotaEntry?.quotaPoolIds
+  const effectivePools = effectivePoolIds === undefined
+    ? boundPools
+    : effectivePoolIds.map((poolId) =>
+        boundPools.find((pool) => pool.quotaPoolId === poolId)
+        ?? (poolId === CHATGPT_CREDITS_POOL.quotaPoolId ? CHATGPT_CREDITS_POOL : undefined),
+      ).filter((pool): pool is NonNullable<typeof pool> => pool !== undefined)
+  const quotaPoolDiscountRate = effectivePools.length === 0
     ? 1
-    : Math.max(...boundPools.map((pool) => pool.kind === 'balance' ? 1 : (pool.routingDiscountRate ?? 1)))
+    : Math.max(...effectivePools.map((pool) => pool.kind === 'balance' ? 1 : (pool.routingDiscountRate ?? 1)))
   return {
     snapshotId: context.snapshotId,
     canonicalId: choice.exactAgentRuntime,

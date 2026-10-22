@@ -61,7 +61,7 @@ import { acquireInstanceLock, releaseInstanceLock } from './instance-lock.mts'
 import { createTaskGraphService } from './services/taskgraph-service.mts'
 import { TaskGraphService } from '../core/taskgraph/index.mts'
 import { TaskSettingsService } from './services/task-settings-service.mts'
-import { AutoRoutingQuotaSnapshotService } from './services/auto-routing-snapshot-service.mts'
+import { AutoRoutingQuotaSnapshotService, type AutoRoutingQuotaSnapshotSource } from './services/auto-routing-snapshot-service.mts'
 import {
   evaluateNativeRouteReadiness,
   projectModelAvailability,
@@ -892,6 +892,63 @@ async function createForemanDaemonResources(
     observedPoolExhaustion: observedPoolExhaustionSnapshot,
     workBuddyAccountKinds: readWorkBuddyAccountKinds,
   })
+  // Every routing snapshot refresh republishes the effective per-model pool
+  // set so gateway admission sees the same source the snapshot chose (the
+  // ChatGPT subscription→Credits switch). Keys are `provider\0model` with the
+  // entry's own modelId; a model whose binding resolved to the provider `*`
+  // entry is looked up under `*` by the wildcard fallback below.
+  const publishEffectiveQuotaPools = (
+    snapshot: { validUntilMs: number; entries: readonly { providerId: string; modelId: string; quotaPoolIds: readonly string[] }[] },
+    generation: number,
+  ) => {
+    latestEffectiveQuotaPools.clear()
+    for (const entry of snapshot.entries) {
+      latestEffectiveQuotaPools.set(`${entry.providerId}\0${entry.modelId}`, {
+        quotaPoolIds: entry.quotaPoolIds,
+        validUntilMs: snapshot.validUntilMs,
+        publishedGeneration: generation,
+      })
+    }
+  }
+  // Single invalidation path for the effective-pool cache: clears the
+  // provider's published entries immediately, bumps the publication
+  // generation so any in-flight snapshot result is fenced off, and drops the
+  // service's cached evidence for the provider. Both the observed wrapper and
+  // the real account-switch path use this so no switch leaves stale
+  // previous-account pools behind.
+  const invalidateEffectiveQuotaPools = (providerId: string): void => {
+    const prefix = `${providerId}\0`
+    for (const key of [...latestEffectiveQuotaPools.keys()]) {
+      if (key.startsWith(prefix)) latestEffectiveQuotaPools.delete(key)
+    }
+    effectiveQuotaPoolsGeneration++
+    autoRoutingQuotaSnapshots.invalidateProviderEvidence(providerId)
+  }
+  const observedAutoRoutingQuotaSnapshots: AutoRoutingQuotaSnapshotSource = {
+    routingSnapshot: async () => {
+      const generation = effectiveQuotaPoolsGeneration
+      const bound = await autoRoutingQuotaSnapshots.routingSnapshot()
+      // Discard a result that resolved after an account switch or
+      // invalidation: the generation bump proves the snapshot was requested
+      // against the previous account, so its pools must not be republished.
+      if (effectiveQuotaPoolsGeneration === generation) {
+        publishEffectiveQuotaPools(bound.snapshot, generation)
+      }
+      return bound
+    },
+    snapshot: async () => {
+      const generation = effectiveQuotaPoolsGeneration
+      const snapshot = await autoRoutingQuotaSnapshots.snapshot()
+      if (effectiveQuotaPoolsGeneration === generation) {
+        publishEffectiveQuotaPools(snapshot, generation)
+      }
+      return snapshot
+    },
+    invalidateProviderEvidence: (providerId) => invalidateEffectiveQuotaPools(providerId),
+  }
+  // Gateway admission resolves effective pools per route model inside
+  // `providerRuntime.quotaPools` (exact `provider\0model` entry, else the
+  // provider `*` default entry — see createBuiltinProviderRuntime options).
   // Authoritative, non-inference native auth/model readiness now comes from the
   // clients' own native observations (AgentClient.readReadiness), not a Wrenyard
   // subprocess. The daemon boundary only maps each native client to its known
@@ -1262,7 +1319,7 @@ async function createForemanDaemonResources(
       workspaceRoot,
       configPath: authoritativeConfigPath,
       resolver: taskDispatchResolver,
-      quotaSnapshots: autoRoutingQuotaSnapshots,
+      quotaSnapshots: observedAutoRoutingQuotaSnapshots,
       // The same shared Gateway instance and route-status callable already used
       // by session and auxiliary routing: automatic Task candidates observe the
       // one in-memory route circuit, with no second Gateway or duplicated
@@ -1309,7 +1366,7 @@ async function createForemanDaemonResources(
     }
     const auxiliaryRoutingOptions: SelectorInputPort = {
       catalog,
-      quotaSnapshots: autoRoutingQuotaSnapshots,
+      quotaSnapshots: observedAutoRoutingQuotaSnapshots,
       // The Gateway model directory is the only source of per-model protocols.
       gatewayModels: async () => (await gateway.connection(gatewayOrigin(boundPort))).models,
       routeStatus: model => gateway.routeStatus(model),
@@ -1885,7 +1942,7 @@ async function createForemanDaemonResources(
         // The previous account's measured credit windows must not survive:
         // without a retained row a missing or failed read cannot rebuild the
         // switch-away account's constraints during the grace period.
-        autoRoutingQuotaSnapshots.invalidateProviderEvidence(providerId)
+        invalidateEffectiveQuotaPools(providerId)
         // A pool exhaustion or route fault observed for the previous account
         // must not be inherited by the newly bound one. Both WorkBuddy builds
         // are covered and each stays scoped to its own provider id.
@@ -2877,6 +2934,39 @@ interface ForemanDaemonRuntime {
   taskDispatchResolver: TaskDispatchResolver
 }
 
+/**
+ * Latest effective quota pool set per `provider\0model`, refreshed whenever
+ * the shared routing snapshot is rebuilt. Gateway admission reads it
+ * synchronously through `ProviderRuntime.quotaPools`; entries keep their
+ * stable declared pool ids (e.g. `chatgpt/credits` when the Credits source is
+ * active), so stored holds keep their attribution instead of being orphaned.
+ */
+interface EffectiveQuotaPoolEntry {
+  readonly quotaPoolIds: readonly string[]
+  /** Freshness boundary from the routing snapshot that produced this entry. */
+  readonly validUntilMs: number
+  /** Publication generation captured when this entry was published. */
+  readonly publishedGeneration: number
+}
+/**
+ * Latest effective quota pool set per `provider\0model`, refreshed whenever
+ * the shared routing snapshot is rebuilt. Gateway admission reads it
+ * synchronously through `ProviderRuntime.quotaPools`; entries keep their
+ * stable declared pool ids (e.g. `chatgpt/credits` when the Credits source is
+ * active), so stored holds keep their attribution instead of being orphaned.
+ *
+ * Each entry carries the `validUntilMs` of the producing snapshot and the
+ * publication generation; the reader rejects expired or unknown-validity
+ * entries, and account switches/invalidations bump the generation so a
+ * late pre-switch snapshot result is discarded instead of republishing the
+ * previous account's pools.
+ */
+const latestEffectiveQuotaPools = new Map<string, EffectiveQuotaPoolEntry>()
+// Bumped on every account switch or provider-evidence invalidation. A snapshot
+// result requested before the bump is discarded by the wrapper's generation
+// guard rather than republishing the previous account's effective pools.
+let effectiveQuotaPoolsGeneration = 0
+
 async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
   // Startup-only migration: convert a legacy auto_vacuum=NONE database to
   // INCREMENTAL on a worker thread before initDb opens it and before IPC
@@ -2966,6 +3056,23 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
     codexGatewayAuth: {
       read: () => readCodexGatewayCredential(),
       refresh: (credential, signal) => refreshCodexGatewayCredential(credential, { signal }),
+    },
+    // Gateway admission consumes the latest effective funding source the
+    // routing snapshot computed: a confirmed subscription→Credits switch
+    // narrows ChatGPT routes to the Credits pool so a subscription-pool hold
+    // stops blocking them, without ever clearing stored holds. An exact
+    // `provider\0model` entry wins; the provider `*` default entry covers
+    // models bound through the provider-default binding.
+    effectiveQuotaPools: (provider, model) => {
+      const entry = latestEffectiveQuotaPools.get(`${provider}\0${model}`)
+        ?? latestEffectiveQuotaPools.get(`${provider}\0*`)
+      if (entry === undefined) return undefined
+      const now = Date.now()
+      // Reject expired or unknown-validity evidence; the runtime then falls
+      // back to its mandatory declared subscription pools (5h/7d) instead of
+      // the previous account's or an unbounded Credits pool set.
+      if (!Number.isFinite(entry.validUntilMs) || entry.validUntilMs <= now) return undefined
+      return entry.quotaPoolIds
     },
   })
   // The dispatch resolver re-enumerates task candidates and derives their

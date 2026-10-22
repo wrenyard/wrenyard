@@ -42,10 +42,13 @@ interface RawQuotaEntry {
    * than being silently dropped.
    */
   not_applicable_windows?: string[];
-  /** Monetary balances from quota feature snapshots */
+  /** Monetary and unit-denominated balances from quota feature snapshots */
   balances?: Array<{
+    id?: unknown;
     currency?: unknown;
     amount?: unknown;
+    unit?: unknown;
+    unlimited?: unknown;
   }>;
   /** Daemon-computed estimated spend per quota window (Devin only). */
   estimatedSpend?: Array<{
@@ -180,10 +183,25 @@ function currencySymbol(currency: string): string | null {
 }
 
 /**
- * Parse the quota feature `balances` array defensively into structured monetary
- * rows distinct from percentage windows. Each row validates an uppercase
- * three-letter currency and a non-negative decimal-string amount. A malformed
- * array entry is dropped rather than becoming an ok zero balance; an entirely
+ * Display text of one balance row, chosen at parse time: an explicit
+ * provider-declared unlimited row, a reported-but-absent amount, a unit row
+ * (`amount unit`), or a formatted monetary amount. Chinese labels match the
+ * surrounding quota copy; the unit itself stays the provider's word.
+ */
+function balanceDisplay(row: { currency?: string; unit?: string; amount: string | null; unlimited?: boolean }): string {
+  if (row.unlimited === true) return '不限量';
+  if (row.amount === null) return '未知';
+  if (row.unit !== undefined) return `${row.amount} ${row.unit}`;
+  return formatBalanceAmount(row.currency!, row.amount);
+}
+
+/**
+ * Parse the quota feature `balances` array defensively into structured rows
+ * distinct from percentage windows. A monetary row validates an uppercase
+ * three-letter currency and a non-negative decimal-string amount; a
+ * unit-denominated row validates a non-empty `id` + `unit` and accepts a null
+ * amount (reported-but-unknown) or an explicit `unlimited` flag. Malformed
+ * entries are dropped rather than becoming an ok zero balance; an entirely
  * malformed/non-array `balances` yields `undefined` (no balances).
  */
 function parseBalances(e: RawQuotaEntry): QuotaProviderState['balances'] {
@@ -191,14 +209,31 @@ function parseBalances(e: RawQuotaEntry): QuotaProviderState['balances'] {
   const rows: QuotaProviderState['balances'] = [];
   for (const b of e.balances) {
     if (!b || typeof b !== 'object') continue;
+    const id = typeof b.id === 'string' && b.id.length > 0 ? b.id : undefined;
+    const unit = typeof b.unit === 'string' && b.unit.length > 0 ? b.unit : undefined;
     const currency = b.currency;
-    const amount = b.amount;
+    const amount = b.amount === null ? null : b.amount;
+    const unlimited = b.unlimited === true;
+    if (unit !== undefined) {
+      // Unit-denominated row: id + unit required; amount may be null or decimal.
+      if (id === undefined) continue;
+      if (amount !== null && !isValidDecimalString(amount)) continue;
+      rows.push({
+        id,
+        unit,
+        amount,
+        ...(unlimited ? { unlimited: true } : {}),
+        display: balanceDisplay({ unit, amount, unlimited }),
+      });
+      continue;
+    }
     if (typeof currency !== 'string' || !CURRENCY_RE.test(currency)) continue;
     if (!isValidDecimalString(amount)) continue;
     rows.push({
+      ...(id !== undefined ? { id } : {}),
       currency,
       amount,
-      display: formatBalanceAmount(currency, amount),
+      display: balanceDisplay({ currency, amount }),
     });
   }
   return rows.length > 0 ? rows : undefined;

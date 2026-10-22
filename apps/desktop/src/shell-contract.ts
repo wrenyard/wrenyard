@@ -463,9 +463,11 @@ export const DISPLAY_CURRENCY_OPTIONS: ReadonlyArray<{ value: DisplayCurrency; l
 export const CNY_PER_USD = 7;
 
 export function formatQuotaBalance(
-  balance: { currency?: string; amount: string; display: string },
+  balance: { currency?: string; amount: string | null; display: string; unit?: string },
   displayCurrency: DisplayCurrency,
 ): string {
+  // Unit-denominated and currency-less rows are never converted.
+  if (balance.currency === undefined) return balance.display;
   if (balance.currency === 'USD' && displayCurrency === 'CNY') {
     return `¥${(Number(balance.amount) * CNY_PER_USD).toFixed(2)}`;
   }
@@ -928,8 +930,17 @@ export interface QuotaWindowSnapshot {
 }
 
 export interface QuotaBalanceSnapshot {
-  currency: string;
-  amount: string;
+  /** Stable balance identity when the provider distinguishes one (e.g.
+   * `chatgpt/credits`); absent for a plain monetary row. */
+  id?: string;
+  /** Uppercase ISO-4217 code of a monetary row; absent on a unit row. */
+  currency?: string;
+  /** Verbatim decimal-string amount; null means reported-but-unknown. */
+  amount: string | null;
+  /** Non-currency display unit of a unit-denominated row (e.g. `Credits`). */
+  unit?: string;
+  /** Provider-declared unlimited balance. */
+  unlimited?: boolean;
   display: string;
   /** Per-pool state from the shared quota rules; a balance is never abundant. */
   state?: QuotaPoolState;

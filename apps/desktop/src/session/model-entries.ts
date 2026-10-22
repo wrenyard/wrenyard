@@ -1,23 +1,59 @@
 /** Projects current daemon route metadata; a defective row never breaks the list. */
 import { REASONING_EFFORTS, isMainstreamModelId } from '@wrenyard/models';
 import type { WrenyardGatewayModel } from '@wrenyard/control';
-import type { ProviderListResult, ProviderQuotaSnapshot } from '@wrenyard/protocol/provider';
+import type { ProviderListResult, ProviderQuotaBalance, ProviderQuotaSnapshot } from '@wrenyard/protocol/provider';
+import { selectChatGptFundingSource } from '@wrenyard/providers/chatgpt';
 import { selectSessionProtocol } from '@wrenyard/session/model-metadata';
 import { floorQuotaPercentage } from '../pet/shared/quota-percentage.js';
 import type { SessionBridgeModelEntry } from './preload.js';
 
+/** Short label for one balance row: a unit row keeps its unit (e.g. Credits). */
+function balanceSummary(balance: ProviderQuotaBalance): string | undefined {
+  const unit = balance.unit ?? balance.currency;
+  if (unit === undefined) return undefined;
+  if (balance.unlimited === true) return `不限量 ${unit}`;
+  const amount = balance.amount;
+  // Unknown Credits render as unknown, never as a fabricated paid amount.
+  if (amount === null) return `${unit}未知`;
+  if (balance.unit !== undefined) return `${amount} ${unit}`;
+  return `${amount} ${unit}`;
+}
+
 /**
- * One provider group's quota summary: the first balance, else the tightest
- * remaining window, else an explicit unknown label. A failed or unavailable
- * read is unknown, never a zero balance.
+ * One provider group's quota summary. ChatGPT applies the shared
+ * subscription-first funding rule: any confirmed-exhausted applicable
+ * subscription window hands the compact summary to a fresh positive/unlimited
+ * Credits balance, while an unknown balance renders as unknown (never paid)
+ * and stale or missing subscription evidence alone never selects Credits.
+ * Other providers keep their historical balance-first order. A failed or
+ * unavailable read is unknown, never a zero balance.
  */
 function providerQuotaSummary(row: ProviderQuotaSnapshot | undefined): string | undefined {
   if (row === undefined) return undefined;
   if (row.status === 'error' || row.status === 'unavailable') return '用量未知';
   const balance = row.balances?.[0];
-  if (balance !== undefined) return `${balance.currency} ${balance.amount}`;
-  if (row.windows !== undefined && row.windows.length > 0) {
-    const tightest = Math.min(...row.windows.map((window) => 100 - window.pct));
+  const windows = row.windows ?? [];
+  if (row.provider === 'chatgpt' && windows.length > 0) {
+    const notApplicable = new Set(row.not_applicable_windows ?? []);
+    // Stale observations never confirm exhaustion: unknown/stale subscription
+    // data alone keeps the subscription summary rather than switching to paid.
+    const applicable = row.stale === true ? [] : windows.filter((window) => !notApplicable.has(window.name));
+    const subscriptionExhausted = applicable.some((window) => 100 - window.pct <= 0);
+    const balanceKnown = row.stale !== true
+      && balance !== undefined && (balance.unlimited === true || balance.amount !== null);
+    const credits = !balanceKnown ? 'unknown' as const
+      : balance!.unlimited === true || (balance!.amount !== null && /[1-9]/.test(balance!.amount))
+        ? 'available' as const
+        : 'empty' as const;
+    const source = selectChatGptFundingSource({ subscriptionExhausted, credits });
+    if (source === 'credits') return balanceSummary(balance!);
+    if (source === 'unresolved') return '用量未知';
+    const remaining = windows.map((window) => 100 - window.pct);
+    return `${floorQuotaPercentage(Math.min(...remaining))}%`;
+  }
+  if (balance !== undefined) return balanceSummary(balance) ?? '用量未知';
+  if (windows.length > 0) {
+    const tightest = Math.min(...windows.map((window) => 100 - window.pct));
     return `${floorQuotaPercentage(tightest)}%`;
   }
   return '用量未知';

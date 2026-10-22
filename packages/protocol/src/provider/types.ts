@@ -127,10 +127,24 @@ export interface ProviderEstimatedSpend {
   totalUsd: number
 }
 
-/** One monetary balance row. */
+/**
+ * One balance row. Monetary rows carry `currency` + `amount` (uppercase
+ * ISO-4217 code plus decimal string). A unit-denominated row carries a stable
+ * `id`, a non-currency `unit` (e.g. `Credits`), `amount` (decimal string, or
+ * `null` when the provider reported the balance slot without a value) and an
+ * optional provider-declared `unlimited` flag. Currency conversion and
+ * low-balance thresholds apply only to monetary rows.
+ */
 export interface ProviderQuotaBalance {
-  currency: string
-  amount: string
+  /** Stable balance identity (e.g. `chatgpt/credits`); absent for monetary rows. */
+  id?: string
+  currency?: string
+  /** Verbatim decimal-string amount; null means reported-but-unknown. */
+  amount: string | null
+  /** Non-currency display unit of a unit-denominated row. */
+  unit?: string
+  /** Provider-declared unlimited balance; never a fabricated large amount. */
+  unlimited?: boolean
 }
 
 /** One usage window row. */

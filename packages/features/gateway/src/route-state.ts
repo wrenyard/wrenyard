@@ -125,6 +125,13 @@ export class RouteStateStore {
     private readonly pools: (provider: string, model: string) => readonly string[],
     private readonly emit: (event: RouteStateChangedEvent) => void,
     private readonly random: () => number = Math.random,
+    /**
+     * Optional admission/effective pool reader. When supplied it governs ONLY the
+     * pool-hold filtering in {@link applying}; the stable `pools` superset still
+     * drives fault attribution (`scopeFor`) and guard capture (`applicableKeys`).
+     * Absent keeps the previous admission behavior unchanged.
+     */
+    private readonly effectivePools?: (provider: string, model: string) => readonly string[],
   ) {}
 
   status(provider: string, model: string): RouteStatus | undefined {
@@ -250,6 +257,9 @@ export class RouteStateStore {
    * never clears a fault a newer call recorded.
    */
   success(provider: string, model: string, guard?: RouteGuard): void {
+    // Clear every fault scope that applied when the call started, limited to
+    // the effective admission pool set: a successful draw on the active source
+    // clears its holds only and leaves an inactive pool's hold untouched.
     for (const [key] of this.applying(provider, model, true)) {
       if (guard !== undefined && guard.generations.get(key) !== this.generations.get(key)) continue;
       this.remove(key, 'success', 200);
@@ -292,7 +302,12 @@ export class RouteStateStore {
    * expired ones too (their failure count still drives the next backoff).
    */
   private applying(provider: string, model: string, withExpired = false): [string, Block][] {
-    const pools = this.pools(provider, model);
+    const stablePools = this.pools(provider, model);
+    // The effective reader, when supplied, narrows admission to the active
+    // funding source; absent it equals the stable superset, preserving prior
+    // behavior. Fault attribution (`scopeFor`) and guard capture
+    // (`applicableKeys`) still use `this.pools` regardless.
+    const admissionPools = this.effectivePools?.(provider, model) ?? stablePools;
     const publicModel = `${provider}/${model}`;
     const result: [string, Block][] = [];
     for (const [key, block] of [...this.blocks]) {
@@ -303,7 +318,7 @@ export class RouteStateStore {
       if (!this.blocks.has(key) || (!withExpired && block.phase !== 'open')) continue;
       if (block.scope === 'provider'
         || (block.scope === 'route' && block.publicModel === publicModel)
-        || (block.scope === 'pool' && pools.includes(block.quotaPoolId!))) result.push([key, block]);
+        || (block.scope === 'pool' && admissionPools.includes(block.quotaPoolId!))) result.push([key, block]);
     }
     return result;
   }
