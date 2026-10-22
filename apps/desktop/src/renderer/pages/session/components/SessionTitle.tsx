@@ -160,6 +160,7 @@ export function SessionTitle({ title, session, draft, onRename, onRegenerate }: 
   // Display and edit states share one inline box: the ghost button keeps the
   // saved title's geometry (invisible while editing) and the input overlays it.
   return (
+    <span className="inline-flex items-center gap-1">
     <span className="relative inline-flex min-w-0 max-w-80 flex-col">
       <Button
         variant="ghost"
@@ -175,7 +176,7 @@ export function SessionTitle({ title, session, draft, onRename, onRegenerate }: 
         aria-label="会话标题"
         aria-invalid={error !== ''}
         disabled={regenerating}
-        className="absolute inset-x-0 top-0 h-8 rounded-[4px] border-transparent bg-transparent py-0 pl-3 pr-9 text-base font-medium outline-none ring-0 focus-visible:border-ring focus-visible:ring-0 aria-invalid:ring-0 md:text-base dark:bg-transparent"
+        className="absolute inset-x-0 top-0 h-8 rounded-[4px] border-transparent bg-transparent py-0 pl-3 pr-3 text-base font-medium outline-none ring-0 focus-visible:border-ring focus-visible:ring-0 aria-invalid:ring-0 md:text-base dark:bg-transparent"
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
@@ -199,24 +200,25 @@ export function SessionTitle({ title, session, draft, onRename, onRegenerate }: 
         onBlur={() => { void commit(); }}
       />
       )}
-      {editing && onRegenerate !== undefined && (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="absolute right-1 top-1 text-muted-foreground"
-          aria-label="重新生成标题"
-          title="重新生成标题"
-          disabled={regenerating}
-          // Keep the input focused, so its blur does not save first.
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => { void regenerate(); }}
-        >
-          {regenerating ? <Spinner className="size-3" /> : <Sparkles />}
-        </Button>
-      )}
       {editing && error !== '' && (
         <span className="px-1 pt-0.5 text-xs text-destructive">{error}</span>
       )}
+    </span>
+    {editing && onRegenerate !== undefined && (
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="shrink-0 text-muted-foreground"
+        aria-label="重新生成标题"
+        title="重新生成标题"
+        disabled={regenerating}
+        // Keep the input focused, so its blur does not save first.
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => { void regenerate(); }}
+      >
+        {regenerating ? <Spinner className="size-3" /> : <Sparkles />}
+      </Button>
+    )}
     </span>
   );
 }
