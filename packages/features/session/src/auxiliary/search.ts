@@ -17,7 +17,8 @@ import { fail, isObject, renderRunFiles } from './shared.ts';
 import { messageOf } from '../errors.ts';
 import type { DocCatalogEntry } from '../workspace.ts';
 import type { SessionFile } from '../media.ts';
-import type { ToolCall, ToolSpec } from '../transport/index.ts';
+import type { ToolCall, ToolSpec, Usage } from '../transport/index.ts';
+import type { TaskUsage } from '@wrenyard/protocol';
 import type {
   ActionExecutionOutcome,
   ActionRunContext,
@@ -186,6 +187,25 @@ export async function runSearchAction(
   if (needSearch) {
     const system = SEARCH_SYSTEM;
     const user = buildDocSearchUser({ catalog, loadedPaths: [...loadedDocs], intent: action.intent, directoryHints });
+    // The single forced-pick call is still one auxiliary run: record it once
+    // through the unified hook whatever its terminal state, so the run ledger
+    // sees this search exactly like a loop-based auxiliary run.
+    const startedAt = new Date().toISOString();
+    let route: { provider?: string; model?: string; effort?: string } | undefined;
+    let usage: Usage | undefined;
+    const finish = (status: 'done' | 'failed', summary: string): void => {
+      deps.calls.recordAuxiliaryRun?.({
+        id: ctx.actionId,
+        role: 'search',
+        callerSessionId: ctx.sessionId,
+        status,
+        ...(route === undefined ? {} : { route }),
+        ...(usage === undefined ? {} : { usage: toTaskUsage(usage) }),
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        summary,
+      });
+    };
     let pick: ReturnType<typeof readPick>;
     try {
       const result = await deps.calls.run({
@@ -201,13 +221,23 @@ export async function runSearchAction(
         toolChoice: { name: PICK_TOOL.name },
         signal: ctx.signal,
       });
-      const provider = result.route?.provider;
+      if (result.route !== undefined) route = result.route;
+      else if (result.model !== '') route = { model: result.model };
+      usage = result.usage;
+      const provider = route?.provider;
       const proseFallback = provider !== undefined && deps.host.resolveInferenceProvider(provider)?.ignoresForcedToolChoice === true;
       pick = readPick(result.toolCalls, result.text, proseFallback, catalog);
     } catch (error) {
-      return fail(withMissing(`The model call failed: ${messageOf(error)}`, missing));
+      const summary = withMissing(`The model call failed: ${messageOf(error)}`, missing);
+      finish('failed', summary);
+      return fail(summary);
     }
-    if (pick === undefined) return fail(withMissing('search did not return a valid pick call', missing));
+    if (pick === undefined) {
+      const summary = withMissing('search did not return a valid pick call', missing);
+      finish('failed', summary);
+      return fail(summary);
+    }
+    finish('done', pick.paths.length === 0 ? 'search found no matching document' : `picked: ${pick.paths.join(', ')}`);
     if (pick.paths.length === 0) notes.push('search found no matching document');
     deferred.push({
       type: 'document.found',
@@ -268,6 +298,24 @@ export async function runSearchAction(
 
 function withMissing(message: string, missing: readonly string[]): string {
   return missing.length === 0 ? message : `${message}\nmissing: ${missing.join(', ')}`;
+}
+
+/** Map the one pick call's usage onto the protocol `TaskUsage` shape. */
+function toTaskUsage(usage: Usage): TaskUsage {
+  const input = usage.inputTokens ?? 0;
+  const cached = usage.cachedInputTokens ?? 0;
+  const output = usage.outputTokens ?? 0;
+  const total = input + cached + output;
+  return {
+    completeness: 'partial',
+    attempt_count: 1,
+    usage_event_count: 1,
+    ...(input > 0 ? { input_tokens: input } : {}),
+    ...(cached > 0 ? { cached_input_tokens: cached } : {}),
+    ...(output > 0 ? { output_tokens: output } : {}),
+    ...(total > 0 ? { total_tokens: total } : {}),
+    reference_cost_complete: false,
+  };
 }
 
 async function readSessionFile(
