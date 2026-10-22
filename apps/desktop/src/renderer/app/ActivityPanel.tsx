@@ -9,7 +9,6 @@ import {
   ChevronRight,
   Square,
   SquareArrowOutUpRight,
-  Trash2,
   X,
 } from 'lucide-react';
 import { cn } from 'cn';
@@ -74,10 +73,6 @@ function formatNodeCounts(counts: Record<string, number>): string {
   return parts.join(' · ');
 }
 
-function graphRowKey(graph: ListedGraph): ExpandedKey {
-  return `graph:${graph.taskgraphId}`;
-}
-
 function taskRowKey(taskRunId: string): ExpandedKey {
   return `task:${taskRunId}`;
 }
@@ -119,7 +114,6 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
   const [runningGroupOpen, setRunningGroupOpen] = useState(true);
   const [finishedGroupOpen, setFinishedGroupOpen] = useState(false);
   const [expandedKey, setExpandedKey] = useState<ExpandedKey | null>(null);
-  const [hiddenFinished, setHiddenFinished] = useState<Set<string>>(() => new Set());
   const persistedSessionLinksRef = useRef<Map<string, TaskSessionLink>>(new Map());
   const sessionLinks = useMemo(() => {
     const merged = new Map(persistedSessionLinksRef.current);
@@ -327,11 +321,8 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
     return [...byId.values()];
   }, [finishedGraphsInSnapshot, retainedFinishedGraphs]);
 
-  const visibleFinishedTasks = finishedTasksList.filter((task) => !hiddenFinished.has(taskRowKey(task.taskRunId)));
-  const visibleFinishedGraphs = finishedGraphsList.filter((graph) => !hiddenFinished.has(graphRowKey(graph)));
-
   const runningCount = runningTasks.length + runningGraphs.length;
-  const finishedCount = visibleFinishedTasks.length + visibleFinishedGraphs.length;
+  const finishedCount = finishedTasksList.length + finishedGraphsList.length;
   const empty = runningCount === 0 && finishedCount === 0;
 
   const stale = snapshot.stale || sessions.isError || details.isError;
@@ -363,15 +354,6 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
         throw error;
       }),
     );
-  };
-
-  const hideVisibleFinished = (): void => {
-    setHiddenFinished((current) => {
-      const next = new Set(current);
-      for (const task of visibleFinishedTasks) next.add(taskRowKey(task.taskRunId));
-      for (const graph of visibleFinishedGraphs) next.add(graphRowKey(graph));
-      return next;
-    });
   };
 
   const toggleExpand = (key: ExpandedKey): void => {
@@ -612,22 +594,6 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  aria-label="清除已结束"
-                  disabled={finishedCount === 0}
-                  onClick={hideVisibleFinished}
-                />
-              )}
-            >
-              <Trash2 />
-            </TooltipTrigger>
-            <TooltipContent>清除已结束</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={(
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
                   aria-label="关闭"
                   onClick={closeActivityPanel}
                 />
@@ -673,8 +639,8 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
             </button>
             {finishedGroupOpen ? (
               <div className="flex flex-col gap-1">
-                {visibleFinishedGraphs.map((graph) => renderGraphRow(graph, false))}
-                {visibleFinishedTasks.map((task) => renderTaskRow(task, false))}
+                {finishedGraphsList.map((graph) => renderGraphRow(graph, false))}
+                {finishedTasksList.map((task) => renderTaskRow(task, false))}
               </div>
             ) : null}
           </>
