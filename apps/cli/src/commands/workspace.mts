@@ -305,7 +305,7 @@ export async function handleWorkspaceDocUpdate(args: string[]): Promise<number> 
 }
 
 export async function handleWorkspaceDocEdit(args: string[]): Promise<number> {
-  const usage = 'Usage: wrenyard workspace doc edit <project> <kind> <name> --old <text> --new <text> [--base <version>] [--config path] [--json]'
+  const usage = 'Usage: wrenyard workspace doc edit <project> <kind> <name> --old <text> --new <text> --base <version> [--config path] [--json]'
   if (isHelpRequest(args)) {
     console.log(usage)
     return 0
@@ -322,7 +322,7 @@ export async function handleWorkspaceDocEdit(args: string[]): Promise<number> {
     allowPositionals: true,
     strict: true,
   })
-  if (positionals.length !== 3 || values.old === undefined || values.new === undefined) {
+  if (positionals.length !== 3 || values.old === undefined || values.new === undefined || !values.base) {
     console.error(usage)
     return 1
   }
@@ -335,7 +335,7 @@ export async function handleWorkspaceDocEdit(args: string[]): Promise<number> {
       kind: kind as WorkspaceDocKind,
       name,
       edits: [{ old: values.old, new: values.new }],
-      ...(values.base === undefined ? {} : { base_version: values.base }),
+      base_version: values.base,
     })
     writeServicePayload(servicePayload(result))
     return 0

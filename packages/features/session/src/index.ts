@@ -239,7 +239,12 @@ export type {
  * automatic main reasoning turn without `selectAutomaticRoutes` keeps the model
  * it started with, and retries without `retryPolicy` are on.
  */
+export { Ledger } from './ledger/store.ts';
+export type { DocumentCommit, DocumentCommitContext } from './document-commit.ts';
+
 export interface CreateSessionOptions {
+  /** Shared authority for workspace documents and session events. */
+  ledger?: Ledger;
   /**
    * Fresh ranked routes for an automatic main reasoning turn, read only when
    * such a turn switches model.
@@ -251,7 +256,7 @@ export interface CreateSessionOptions {
 
 /** Create the session feature over a host. */
 export function createSession(host: SessionHost, options?: CreateSessionOptions): Session {
-  const ledger = new Ledger({ stateRoot: host.stateRoot, workspaceRoot: host.workspaceRoot, now: host.now });
+  const ledger = options?.ledger ?? new Ledger({ stateRoot: host.stateRoot, workspaceRoot: host.workspaceRoot, now: host.now });
 
   // The request executor is session-scoped: it reports every request to the
   // session's span recorder, the only way a span reaches the owning timeline. The gateway is resolved inside

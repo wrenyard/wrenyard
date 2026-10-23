@@ -238,7 +238,7 @@ async function runRounds(options: AuxiliaryLoopOptions, spanId: string, startedA
         // completion.
         if (done.status === 'done' && options.record !== undefined
           && role !== 'memory-search'
-          && options.record.changes.length === 0 && options.record.documents.length === 0
+          && options.record.changes.length === 0
           && options.record.observations.length === 0) {
           return finish(
             'failed',
@@ -442,18 +442,10 @@ export interface LoopRecord {
   changes: string[];
   /** Deferred `workspace.changed` drafts, in the order the changes happened. */
   updates: LedgerEventDraft[];
-  /** Deferred `document.content` drafts, in the order the writes happened. */
-  documents: LedgerEventDraft[];
   /** Authoritative successful read or write results, in call order. */
   observations: string[];
   /** Evidence-backed tool diagnoses worth surfacing in the action result. */
   notes: string[];
-  /**
-   * Host hook for a successful document write: read the written document back
-   * and queue its `document.content` draft. Supplied by the record adapter so
-   * the loop never depends on the session document helpers.
-   */
-  captureDocument?(args: Record<string, unknown>, result: unknown): void | Promise<void>;
   /**
    * Host hook for one returned tool result. Todo records successful todo
    * payloads; project and vcs record successful tool results through a shared
@@ -463,7 +455,7 @@ export interface LoopRecord {
 }
 
 export function createLoopRecord(): LoopRecord {
-  return { changes: [], updates: [], documents: [], observations: [], notes: [] };
+  return { changes: [], updates: [], observations: [], notes: [] };
 }
 
 /** One recorded workspace change, independent of the ledger's own fields. */
@@ -579,7 +571,6 @@ function capObservationsForCaller(observations: readonly string[]): string[] {
 export function toActionOutcome(
   result: AuxiliaryLoopResult,
   record: LoopRecord,
-  extraDrafts: readonly LedgerEventDraft[] = [],
 ): ActionExecutionOutcome {
   const lines = [
     result.summary,
@@ -591,7 +582,7 @@ export function toActionOutcome(
   return {
     status: result.status === 'done' ? 'done' : 'failed',
     result: lines.join('\n'),
-    deferred: [...record.updates, ...extraDrafts],
+    deferred: [...record.updates],
   };
 }
 
@@ -732,7 +723,7 @@ export async function protocolTools(
       async run(args: Record<string, unknown>): Promise<string> {
         let result: unknown;
         try {
-          result = await catalog.call(info.name, args, { sessionId: ctx.sessionId });
+          result = await catalog.call(info.name, args, { sessionId: ctx.sessionId, turn: ctx.turn, step: ctx.step, actionId: ctx.actionId });
         } catch (error) {
           const message = helpers.messageOf(error);
           if (TOOL_NOT_FOUND.test(message) || NO_MCP.test(message)) {
@@ -791,6 +782,10 @@ function recordMethodEffect(
   const hash = readStringField(result, 'hash');
   const files = readStringListField(result, 'files');
   const version = readStringField(result, 'version');
+  if (effect.scope === 'document') {
+    record.changes.push('- ' + change + ' ' + target);
+    return;
+  }
   recordWorkspaceUpdate(record, ctx, {
     scope: effect.scope,
     target,

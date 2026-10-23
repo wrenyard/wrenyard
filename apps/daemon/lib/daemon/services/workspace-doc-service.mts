@@ -7,7 +7,8 @@
  */
 
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs'
+import type { Ledger, DocumentCommitContext } from '@wrenyard/session'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { ProjectManager } from '../../core/project/manager.mts'
 import type {
@@ -52,7 +53,7 @@ export class WorkspaceDocError extends Error {
 export class WorkspaceDocService {
   private readonly workspaceRoot: string
 
-  constructor(workspaceRoot: string) {
+  constructor(workspaceRoot: string, private readonly commits: Pick<Ledger, 'init' | 'commitDocument'>) {
     // Resolve the supplied root once, ensure the directory exists, then
     // canonicalize to handle symlinks (e.g. macOS /var -> /private/var)
     const resolvedRoot = resolve(workspaceRoot)
@@ -61,6 +62,7 @@ export class WorkspaceDocService {
   }
 
   async listDocuments(params: WorkspaceDocListParams): Promise<WorkspaceDocListResult> {
+    await this.commits.init()
     const { project } = params
     this.assertKnownProject(project)
     const kinds: WorkspaceDocKind[] = params.kind === undefined
@@ -92,6 +94,7 @@ export class WorkspaceDocService {
   }
 
   async readDocument(params: WorkspaceDocReadParams): Promise<WorkspaceDocReadResult> {
+    await this.commits.init()
     const { absolute, name, identity } = this.resolveDocumentTarget(params)
     if (!existsSync(absolute)) {
       throw new WorkspaceDocError('missing', `Document not found: ${identity.project}/${identity.id ?? `${identity.kind}/${identity.name}`}`)
@@ -103,7 +106,8 @@ export class WorkspaceDocService {
     return { ...identity, title: documentTitle(name, content), content, version: docVersion(content) }
   }
 
-  async createDocument(params: WorkspaceDocCreateParams): Promise<WorkspaceDocCreateResult> {
+  async createDocument(params: WorkspaceDocCreateParams, context?: DocumentCommitContext): Promise<WorkspaceDocCreateResult> {
+    await this.commits.init()
     const { project, kind, name, content } = params
     if (!CREATE_SLUG_RE.test(name)) {
       throw new WorkspaceDocError('bad_name', `New document name must be a short lowercase slug: ${name}`)
@@ -113,8 +117,7 @@ export class WorkspaceDocService {
     if (existsSync(absolute)) {
       throw new WorkspaceDocError('exists', `Document already exists: ${fullName}`)
     }
-    mkdirSync(dirname(absolute), { recursive: true })
-    writeFileSync(absolute, content, { encoding: 'utf-8', flag: 'wx' })
+    await this.commit(absolute, documentTitle(fullName, content), null, content, context)
     return {
       project,
       kind,
@@ -125,7 +128,8 @@ export class WorkspaceDocService {
     }
   }
 
-  async updateDocument(params: WorkspaceDocUpdateParams): Promise<WorkspaceDocUpdateResult> {
+  async updateDocument(params: WorkspaceDocUpdateParams, context?: DocumentCommitContext): Promise<WorkspaceDocUpdateResult> {
+    await this.commits.init()
     const { content, base_version } = params
     const { absolute, name, identity } = this.resolveDocumentTarget(params)
     if (!existsSync(absolute)) {
@@ -138,11 +142,12 @@ export class WorkspaceDocService {
     if (docVersion(currentContent) !== base_version) {
       throw new WorkspaceDocError('conflict', `Document changed since it was read: ${name}`)
     }
-    writeFileSync(absolute, content, 'utf-8')
+    await this.commit(absolute, documentTitle(name, content), currentContent, content, context)
     return { ...identity, title: documentTitle(name, content), change: 'updated', version: docVersion(content) }
   }
 
-  async editDocument(params: WorkspaceDocEditParams): Promise<WorkspaceDocUpdateResult> {
+  async editDocument(params: WorkspaceDocEditParams, context?: DocumentCommitContext): Promise<WorkspaceDocUpdateResult> {
+    await this.commits.init()
     const { edits, base_version } = params
     const { absolute, name, identity } = this.resolveDocumentTarget(params)
     if (identity.id !== undefined && (base_version === undefined || base_version === '' || edits.length === 0 || edits.some((edit) => edit.old === ''))) {
@@ -155,7 +160,7 @@ export class WorkspaceDocService {
       throw new WorkspaceDocError('not_a_file', `Document is not a regular document: ${name}`)
     }
     const currentContent = readFileSync(absolute, 'utf-8')
-    if ((identity.id !== undefined || base_version !== undefined) && docVersion(currentContent) !== base_version) {
+    if (!base_version || docVersion(currentContent) !== base_version) {
       throw new WorkspaceDocError('conflict', `Document changed since it was read: ${name}`)
     }
     let content = currentContent
@@ -171,8 +176,12 @@ export class WorkspaceDocService {
       // semantics, so `$&`, `$1`, `$$`, etc. in `new` are written verbatim.
       content = content.replace(edit.old, () => edit.new)
     })
-    writeFileSync(absolute, content, 'utf-8')
+    await this.commit(absolute, documentTitle(name, content), currentContent, content, context)
     return { ...identity, title: documentTitle(name, content), change: 'updated', version: docVersion(content) }
+  }
+
+  private commit(absolute: string, title: string, before: string | null, content: string | null, context?: DocumentCommitContext): Promise<void> {
+    return this.commits.commitDocument({ path: relative(this.workspaceRoot, absolute).split(sep).join('/'), title, before, content, context })
   }
 
   /**
@@ -218,7 +227,8 @@ export class WorkspaceDocService {
     return { absolute: resolved.absolute, name: params.name, identity: { project: params.project, kind: params.kind, name: params.name } }
   }
 
-  async deleteDocument(params: WorkspaceDocDeleteParams): Promise<WorkspaceDocDeleteResult> {
+  async deleteDocument(params: WorkspaceDocDeleteParams, context?: DocumentCommitContext): Promise<WorkspaceDocDeleteResult> {
+    await this.commits.init()
     const { project, kind, name, base_version } = params
     const { absolute } = this.resolveDocument(project, kind, name)
     if (!existsSync(absolute)) {
@@ -234,7 +244,7 @@ export class WorkspaceDocService {
       throw new WorkspaceDocError('conflict', `Document changed since it was read: ${name}`)
     }
     // Remove exactly the one document; no parent is removed.
-    unlinkSync(absolute)
+    await this.commit(absolute, documentTitle(name, currentContent), currentContent, null, context)
     return { project, kind, name, change: 'deleted', version: base_version }
   }
 

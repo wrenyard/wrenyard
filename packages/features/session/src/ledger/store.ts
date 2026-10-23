@@ -38,6 +38,8 @@ import type { SessionFile } from '@wrenyard/protocol';
 import type { SessionSummary } from '@wrenyard/protocol/session';
 import type { LedgerEvent, LedgerEventDraft } from './events.ts';
 import { normalizeStoredEvent } from './compat.ts';
+import { DocumentCommitter, type DocumentCommit } from '../document-commit.ts';
+import { contentVersion, currentDocument, documentChange } from '../documents.ts';
 
 // ─── Event model ───────────────────────────────────────────────────────────
 
@@ -101,6 +103,7 @@ export class Ledger {
   private readonly now: () => Date;
   private readonly sessionsDir: string;
   private readonly indexPath: string;
+  private readonly documents: DocumentCommitter;
   private readonly summaries = new Map<string, SessionSummary>();
   /** Loaded timelines in access order: the oldest entry is evicted first. */
   private readonly events = new Map<string, LoadedSession>();
@@ -127,21 +130,40 @@ export class Ledger {
     this.sessionsDir = join(rootDir, 'sessions');
     this.indexPath = join(rootDir, 'index.json');
     // Loading is synchronous, so `listSessions` and `read` work immediately
-    // after construction; `init` only exists to satisfy the async port.
+    // after construction; `init` recovers any pending document commit before use.
     // Constructor work is metadata-only: the index plus one stat per timeline
     // file, never a JSONL body.
     mkdirSync(this.sessionsDir, { recursive: true });
     this.loadIndexSync();
     this.reconcileIndexSync();
+    this.documents = new DocumentCommitter(options.workspaceRoot, rootDir,
+      sessionId => this.read(sessionId), (sessionId, draft) => this.appendNow(sessionId, draft, true),
+      async sessionId => {
+        const handle = await open(this.sessionFile(sessionId), 'r+');
+        try { await handle.sync(); } finally { await handle.close(); }
+      });
   }
 
   init(): Promise<void> {
-    return Promise.resolve();
+    return this.enqueue(() => this.documents.recover());
   }
 
   /** Durable append: the event is on disk (`fsync`ed) before this resolves. */
   append(sessionId: string, draft: LedgerEventDraft): Promise<LedgerEvent> {
-    const run = this.queue.then(() => this.appendNow(sessionId, draft));
+    return this.enqueue(async () => {
+      await this.documents.recover();
+      return this.appendNow(sessionId, draft);
+    });
+  }
+
+  /** The sole file-and-ledger document mutation entry point. */
+  commitDocument(input: DocumentCommit): Promise<void> {
+    const captured = structuredClone(input);
+    return this.enqueue(() => this.documents.commit(captured));
+  }
+
+  private enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(work);
     // Keep the chain alive after a failed append so later appends still run.
     this.queue = run.then(
       () => undefined,
@@ -229,7 +251,7 @@ export class Ledger {
    * rejected before any filesystem work.
    */
   async deleteSession(sessionId: string): Promise<void> {
-    const run = this.queue.then(() => this.deleteSessionNow(sessionId));
+    const run = this.queue.then(async () => { await this.documents.recover(); await this.deleteSessionNow(sessionId); });
     this.queue = run.then(
       () => undefined,
       () => undefined,
@@ -257,7 +279,7 @@ export class Ledger {
 
   // ── append internals ───────────────────────────────────────────────────
 
-  private async appendNow(sessionId: string, draft: LedgerEventDraft): Promise<LedgerEvent> {
+  private async appendNow(sessionId: string, draft: LedgerEventDraft, documentCommit = false): Promise<LedgerEvent> {
     assertSessionId(sessionId);
     // The file write below awaits, so the event loop can serve readers in
     // between and evict this timeline: a reload would parse the file while the
@@ -268,6 +290,22 @@ export class Ledger {
     this.pinned.add(sessionId);
     try {
       const events = this.loadSessionSync(sessionId);
+      if (draft.type === 'workspace.changed' && draft.scope === 'document' && !documentCommit) {
+        throw new Error('Document changes must use commitDocument');
+      }
+      if (draft.type === 'document.content') {
+        const { path, version } = draft;
+        if (!documentCommit) this.documents.validateSnapshot(path, version);
+        if (draft.source === 'write' && !documentCommit) throw new Error('Document writes must use commitDocument');
+        if (draft.format !== 'full' || draft.base !== undefined || contentVersion(draft.content) !== version) {
+          throw new Error('Document append requires a verified full snapshot');
+        }
+        const change = documentChange(path, currentDocument(events, path)?.content, draft.content);
+        if (change === undefined) return events.findLast(event => event.type === 'document.content'
+          && event.path === path && event.version === version)!;
+        draft = { ...draft, ...change };
+        currentDocument([...events, { ...draft, seq: 0, at: '' }], draft.path);
+      }
       const previousSeq = events.length > 0 ? events[events.length - 1]!.seq : 0;
       // Clone before freezing so caller-owned nested objects stay untouched.
       const event = deepFreeze(
@@ -293,6 +331,10 @@ export class Ledger {
       else this.scheduleIndexWrite();
       this.emit(sessionId, event);
       return event;
+    } catch (error) {
+      this.dropSession(sessionId);
+      this.staleSummaries.add(sessionId);
+      throw error;
     } finally {
       // Release the pin however the append ended, a failed write included, then
       // re-apply the caps so a timeline only the pin kept resident (an

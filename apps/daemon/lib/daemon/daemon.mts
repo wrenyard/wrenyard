@@ -43,7 +43,7 @@ import type {
   WorkspaceSwitchResult,
 } from '../protocol/registry.mts'
 import { TaskService, isTaskRunRejection } from '../core/task/service.mts'
-import { createSession, createWorkspaceMemory, resolveModelMetadata, type Session } from '@wrenyard/session'
+import { Ledger, createSession, createWorkspaceMemory, resolveModelMetadata, type Session } from '@wrenyard/session'
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
 import { createScheduler, type Scheduler } from './services/scheduler.mts'
@@ -1345,7 +1345,9 @@ async function createForemanDaemonResources(
       runtimeAvailability,
       gatewayHealth: () => gateway.health(),
     })
-    const workspaceDocService = new WorkspaceDocService(workspaceRoot)
+    const documentLedger = new Ledger({ workspaceRoot, stateRoot: sessionStateRoot })
+    await documentLedger.init()
+    const workspaceDocService = new WorkspaceDocService(workspaceRoot, documentLedger)
     // The todo index is disposable and lives under the daemon local state root
     // (keyed by workspace), never inside the workspace tree or the runtime DB.
     const workspaceTodoService = new WorkspaceTodoService(
@@ -1475,7 +1477,7 @@ async function createForemanDaemonResources(
     })
     // A bot turn that fails twice on the same model continues on the next route
     // of the same automatic selection, inside the same turn.
-    const session = createSession(daemonSessionHost, { selectAutomaticRoutes: async () => selectModels() })
+    const session = createSession(daemonSessionHost, { ledger: documentLedger, selectAutomaticRoutes: async () => selectModels() })
     // The daemon-owned scheduler persists to the same state root as the session
     // ledger. A due routine wakes its owning bot agent through the `wake`
     // callback instead of sending into a session; the bot agent kernel owns the

@@ -70,7 +70,7 @@ export interface WorkspaceDocEdit {
 export type WorkspaceDocEditParams = {
   project: string
   edits: WorkspaceDocEdit[]
-  base_version?: string
+  base_version: string
 } & ({ kind: WorkspaceDocKind; name: string; id?: never } | { id: 'AGENTS.md'; kind?: never; name?: never; base_version: string })
 
 // ─── workspace.doc.delete ──────────────────────────────────────────

@@ -323,6 +323,9 @@ export interface MethodInfo {
 
 /** The context a catalog call carries; the loop sets the definition id. */
 export interface MethodCallContext {
+  turn?: number;
+  step?: number;
+  actionId?: string;
   sessionId?: string;
   auxiliaryDefinitionId?: string;
 }

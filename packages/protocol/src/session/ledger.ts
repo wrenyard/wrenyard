@@ -518,6 +518,8 @@ export interface FilesAttachedEvent extends LedgerEventBase {
 }
 
 export interface WorkspaceChangedEvent extends LedgerEventBase {
+  /** Durable document transaction receipt, used for crash recovery. */
+  transactionId?: string;
   type: 'workspace.changed';
   /** The action that made the change. */
   parent: string;

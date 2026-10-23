@@ -428,7 +428,7 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
      * otherwise the numeric protocol code, and whose message is the protocol
      * message.
      */
-    async call(method: string, params: unknown, context?: { sessionId?: string; auxiliaryDefinitionId?: string }) {
+    async call(method: string, params: unknown, context?: { sessionId?: string; auxiliaryDefinitionId?: string; turn?: number; step?: number; actionId?: string }) {
       const allowlist = auxiliaryAllowlist(context) ?? SESSION_CALLABLE_METHODS
       if (!allowlist.has(method)) {
         throw new ProtocolError(METHOD_NOT_FOUND, { method })
@@ -442,7 +442,13 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
         effective = context?.sessionId ? { ...rest, lock: `session:${context.sessionId}` } : rest
       }
       try {
-        return await options.router.invoke(method, effective, { transport: 'session' })
+        if (method.startsWith('workspace.doc.') && !['workspace.doc.read', 'workspace.doc.list'].includes(method)
+          && (!context?.sessionId || !context.actionId || !context.turn || !context.step)) {
+          throw new Error('Document writes require session provenance')
+        }
+        return await options.router.invoke(method, effective, { transport: 'session',
+          document: context?.sessionId && context.actionId && context.turn && context.step
+            ? { sessionId: context.sessionId, parent: context.actionId, turn: context.turn, step: context.step } : undefined })
       } catch (error) {
         if (!(error instanceof ProtocolError)) throw error
         const data = error.data

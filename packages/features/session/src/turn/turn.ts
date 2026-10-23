@@ -822,10 +822,6 @@ export class TurnRunner {
         await this.engine.ledger.append(session.sessionId, finished);
         for (const draft of bundle.deferred) {
           if (isReadDraft(draft) && (turn.dropDeferred || turn.abort.signal.aborted)) continue;
-          // Parallel reads snapshot the timeline before any of them lands, so the
-          // same document version can be queued more than once; append it once.
-          if (draft.type === 'document.content' && this.engine.ledger.read(session.sessionId).some((event) =>
-            event.type === 'document.content' && event.path === draft.path && event.version === draft.version)) continue;
           await this.engine.ledger.append(session.sessionId, draft);
         }
       }

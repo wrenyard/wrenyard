@@ -64,24 +64,11 @@ function documentTarget(args: Record<string, unknown>, result: unknown): string 
   return `${project}/${kind}/${name}`;
 }
 
-/**
- * Hand a successful document write to the record adapter, which reads the
- * document back and queues its `document.content` draft. A host without the
- * hook records only the workspace change, exactly as before it was supplied.
- */
-function captureDocument(
-  args: Record<string, unknown>,
-  result: unknown,
-  record: LoopRecord,
-): void | Promise<void> {
-  return record.captureDocument?.(args, result);
-}
-
-/** The document side effects: a write records a change and queues its content. */
+/** Document effects are already durable when the service returns. */
 const DOCUMENT_EFFECTS: Readonly<Record<string, MethodEffect>> = {
-  'workspace.doc.create': { scope: 'document', change: 'created', target: documentTarget, after: captureDocument },
-  'workspace.doc.update': { scope: 'document', change: 'updated', target: documentTarget, after: captureDocument },
-  'workspace.doc.edit': { scope: 'document', change: 'updated', target: documentTarget, after: captureDocument },
+  'workspace.doc.create': { scope: 'document', change: 'created', target: documentTarget },
+  'workspace.doc.update': { scope: 'document', change: 'updated', target: documentTarget },
+  'workspace.doc.edit': { scope: 'document', change: 'updated', target: documentTarget },
   // A delete has no after hook: there is no new content to load back.
   'workspace.doc.delete': { scope: 'document', change: 'deleted', target: documentTarget },
 };
@@ -112,6 +99,7 @@ function documentSystemPrompt(ports: DefinitionPorts): string {
     '- Prefer workspace_doc_edit for local changes; give exact old text that occurs exactly once.',
     '- Use workspace_doc_update only for a full rewrite, and pass base_version taken from workspace_doc_read.',
     '- When a call returns conflict or missing, read the document again before retrying.',
+    '- commit_pending means the durable commit may already have taken effect. Do not repeat the write; read again after recovery, and report recovery_conflict for intervention.',
     '- For project AGENTS.md, read with workspace_doc_read using {project, id: "AGENTS.md"} before revision. It returns version; pass that value as base_version to workspace_doc_edit or workspace_doc_update.',
     '- Prefer exact local edits and preserve unrelated instructions. Use full update only when the intent explicitly requests a full rewrite.',
     '- After conflict or missing, read again before retrying. Never create or delete AGENTS.md.',

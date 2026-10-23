@@ -196,5 +196,5 @@ export async function runAuxiliary(
     spanIdPrefix: definition.spanIdPrefix,
     record,
   });
-  return toActionOutcome(result, record, record.documents);
+  return toActionOutcome(result, record);
 }

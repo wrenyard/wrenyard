@@ -6,6 +6,7 @@
  * this module has no node:fs/node:path imports.
  */
 
+import type { DocumentCommitContext } from '@wrenyard/session'
 import { INVALID_PARAMS, ProtocolError } from '../../protocol/errors.mts'
 import type {
   WorkspaceDocListParams, WorkspaceDocListResult,
@@ -21,10 +22,10 @@ import { mapServiceError } from './project.mts'
 export interface WorkspaceDocHandlerService {
   listDocuments(params: WorkspaceDocListParams): Promise<WorkspaceDocListResult>
   readDocument(params: WorkspaceDocReadParams): Promise<WorkspaceDocReadResult>
-  createDocument(params: WorkspaceDocCreateParams): Promise<WorkspaceDocCreateResult>
-  updateDocument(params: WorkspaceDocUpdateParams): Promise<WorkspaceDocUpdateResult>
-  editDocument(params: WorkspaceDocEditParams): Promise<WorkspaceDocUpdateResult>
-  deleteDocument(params: WorkspaceDocDeleteParams): Promise<WorkspaceDocDeleteResult>
+  createDocument(params: WorkspaceDocCreateParams, context?: DocumentCommitContext): Promise<WorkspaceDocCreateResult>
+  updateDocument(params: WorkspaceDocUpdateParams, context?: DocumentCommitContext): Promise<WorkspaceDocUpdateResult>
+  editDocument(params: WorkspaceDocEditParams, context?: DocumentCommitContext): Promise<WorkspaceDocUpdateResult>
+  deleteDocument(params: WorkspaceDocDeleteParams, context?: DocumentCommitContext): Promise<WorkspaceDocDeleteResult>
 }
 
 export function registerWorkspaceDocHandlers(router: RpcRouter, service?: WorkspaceDocHandlerService): void {
@@ -61,32 +62,38 @@ export function registerWorkspaceDocHandlers(router: RpcRouter, service?: Worksp
       throw mapServiceError(error, 'workspace-doc', 'doc_error')
     }
   })
-  router.register('workspace.doc.create', async (params) => {
+  router.register('workspace.doc.create', async (params, _message, context) => {
     try {
-      return await service.createDocument(params)
+      return await service.createDocument(params, documentContext(context))
     } catch (error) {
       throw mapServiceError(error, 'workspace-doc', 'doc_error')
     }
   })
-  router.register('workspace.doc.update', async (params) => {
+  router.register('workspace.doc.update', async (params, _message, context) => {
     try {
-      return await service.updateDocument(params)
+      return await service.updateDocument(params, documentContext(context))
     } catch (error) {
       throw mapServiceError(error, 'workspace-doc', 'doc_error')
     }
   })
-  router.register('workspace.doc.edit', async (params) => {
+  router.register('workspace.doc.edit', async (params, _message, context) => {
     try {
-      return await service.editDocument(params)
+      return await service.editDocument(params, documentContext(context))
     } catch (error) {
       throw mapServiceError(error, 'workspace-doc', 'doc_error')
     }
   })
-  router.register('workspace.doc.delete', async (params) => {
+  router.register('workspace.doc.delete', async (params, _message, context) => {
     try {
-      return await service.deleteDocument(params)
+      return await service.deleteDocument(params, documentContext(context))
     } catch (error) {
       throw mapServiceError(error, 'workspace-doc', 'doc_error')
     }
   })
+}
+
+/** Provenance is supplied by the in-process host, never by tool arguments. */
+function documentContext(context: unknown): DocumentCommitContext | undefined {
+  const caller = context as { transport?: string; document?: DocumentCommitContext } | undefined
+  return caller?.transport === 'session' ? caller.document : undefined
 }

@@ -178,7 +178,7 @@ export const workspaceDocEditParamsSchema = {
   type: 'object',
   properties: { project: { type: 'string', minLength: 1 }, kind: docKindProperty, name: { type: 'string', minLength: 1 }, id: { type: 'string', const: 'AGENTS.md' }, edits: { type: 'array', minItems: 1, items: workspaceDocEditEntrySchema }, base_version: { type: 'string', minLength: 1 } },
   oneOf: [
-  { type: 'object', description: 'Apply ordered literal edits to an ordinary document. Each old must occur exactly once. base_version from doc.read is optional.', required: ['project', 'kind', 'name', 'edits'], properties: {
+  { type: 'object', description: 'Apply ordered literal edits to an ordinary document. Each old must occur exactly once. base_version from doc.read is required.', required: ['project', 'kind', 'name', 'edits', 'base_version'], properties: {
     project: { type: 'string', minLength: 1 }, kind: docKindProperty, name: { type: 'string', minLength: 1 }, edits: {
       type: 'array',
       minItems: 1,

@@ -1,7 +1,7 @@
 /**
  * session documents: the current-only document view of the ledger.
  *
- * Documents are reconstructible from `doc.content` events alone. A document
+ * Document content is reconstructible from content events; deletion receipts reset it. A document
  * enters the context as one `full` event; every later change is one or more
  * unified diff hunks whose base is the content that already entered the
  * context, so the timeline never hides a second full snapshot and nothing has
@@ -19,8 +19,8 @@ import { diffArrays } from 'diff';
 import { estimateTokens } from './model/request.ts';
 import type { DocumentContentEvent, LedgerEvent } from './ledger/store.ts';
 
-/** One `document.content` event body, without the `seq` / `at` the ledger assigns. */
-export type DocContentDraft = Omit<DocumentContentEvent, 'seq' | 'at'>;
+/** A captured full snapshot; the serialized ledger append computes its durable diff. */
+export type DocContentDraft = Omit<DocumentContentEvent, 'seq' | 'at' | 'format' | 'base'> & { format: 'full' };
 
 /** How much unchanged context surrounds each changed run of a diff hunk. */
 const CONTEXT_LINES = 3;
@@ -253,6 +253,11 @@ export function currentDocument(
   let content: string | undefined;
   let version: string | undefined;
   for (const event of events) {
+    if (event.type === 'workspace.changed' && event.scope === 'document' && event.change === 'deleted' && event.target === path) {
+      content = undefined;
+      version = undefined;
+      continue;
+    }
     if (event.type !== 'document.content' || event.path !== path) continue;
     if (event.format === 'full') {
       if (contentVersion(event.content) !== event.version) {
@@ -294,19 +299,17 @@ export function headerField(content: string, labels: readonly string[]): string 
 export type DocumentDraftMeta = Pick<DocumentContentEvent, 'turn' | 'step' | 'parent' | 'source'>;
 
 /**
- * Build the `document.content` draft for a document read or write. When the
- * prior content already entered the context the change is the diff against that
- * content (never the disk copy); a document that never entered the context is
- * written once as `full`. Returns `undefined` when nothing changed.
+ * Capture the full text observed by a read or durable write. Diff generation
+ * belongs exclusively to the serialized storage boundary. Unchanged content
+ * needs no new snapshot.
  */
 export function makeDocumentDraft(
   file: { path: string; title: string; content: string },
   events: readonly LedgerEvent[],
   meta: DocumentDraftMeta,
 ): DocContentDraft | undefined {
-  const previous = currentDocument(events, file.path);
-  const change = documentChange(file.path, previous?.content, file.content);
-  if (change === undefined) return undefined;
+  const version = contentVersion(file.content);
+  if (currentDocument(events, file.path)?.version === version) return undefined;
   return {
     type: 'document.content',
     turn: meta.turn,
@@ -314,11 +317,10 @@ export function makeDocumentDraft(
     path: file.path,
     title: file.title,
     updated: headerField(file.content, ['更新', '更新时间', 'updated', 'update']),
-    version: change.version,
+    version,
     tokens: estimateTokens(file.content),
-    content: change.content,
-    format: change.format,
-    ...(change.base === undefined ? {} : { base: change.base }),
+    content: file.content,
+    format: 'full',
     source: meta.source,
     ...(meta.parent === undefined ? {} : { parent: meta.parent }),
   };
