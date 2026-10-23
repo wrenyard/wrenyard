@@ -172,14 +172,29 @@ export function floorDecimalInteger(amount: string): string {
 }
 
 /**
+ * Two-decimal presentation of a non-negative decimal-string amount:
+ * zero-pads to two fraction digits ("12" -> "12.00", "12.3" -> "12.30") and
+ * uses ordinary rounding beyond the second place ("12.346" -> "12.35").
+ * Non-numeric input falls back to the raw string rather than NaN.
+ */
+export function twoDecimalAmount(amount: string): string {
+  const value = Number(amount);
+  if (!Number.isFinite(value)) return amount;
+  return value.toFixed(2);
+}
+
+/**
  * Format a monetary amount for a currency: CNY/UZS use the CNY prefix form
  * (¥/₩ style symbol), other ISO currencies use a symbol + amount form where
- * a common symbol exists, falling back to `AMOUNT CURRENCY`.
+ * a common symbol exists, falling back to `AMOUNT CURRENCY`. USD/CNY amounts
+ * are shown with exactly two decimals so raw upstream decimals never leak
+ * into the human-facing balance string.
  */
 function formatBalanceAmount(currency: string, amount: string): string {
   const symbol = currencySymbol(currency);
-  if (symbol) return `${symbol}${amount}`;
-  return `${amount} ${currency}`;
+  const formatted = currency === 'USD' || currency === 'CNY' ? twoDecimalAmount(amount) : amount;
+  if (symbol) return `${symbol}${formatted}`;
+  return `${formatted} ${currency}`;
 }
 
 function currencySymbol(currency: string): string | null {

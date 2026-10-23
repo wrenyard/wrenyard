@@ -9,6 +9,15 @@ function floorAmount(amount: string): string {
   return head.length > 0 ? head : '0'
 }
 
+/** Two-decimal display of a decimal-string amount: zero-padding ("12" -> "12.00",
+ * "12.3" -> "12.30") and ordinary rounding ("12.346" -> "12.35"). Non-numeric
+ * input falls back to the raw string rather than NaN. */
+function twoDecimalAmount(amount: string): string {
+  const value = Number(amount)
+  if (!Number.isFinite(value)) return amount
+  return value.toFixed(2)
+}
+
 const USAGE = 'Usage: wrenyard quota [provider] [--json] [--refresh] [--config path]'
 
 /** CLI and Desktop consume the same daemon-owned provider observations. */
@@ -46,7 +55,7 @@ export async function handleQuota(args: string[]): Promise<number> {
           ? `unlimited ${balance.unit ?? balance.currency ?? ''}`.trim()
           : balance.unit !== undefined
             ? `${balance.amount !== null && balance.amount !== undefined ? floorAmount(balance.amount) : 'unknown'} ${balance.unit}`.trim()
-            : `${balance.amount ?? 'unknown'} ${balance.currency ?? ''}`.trim()).join(', ')
+            : `${balance.amount !== null && balance.amount !== undefined && (balance.currency === 'USD' || balance.currency === 'CNY') ? twoDecimalAmount(balance.amount) : balance.amount ?? 'unknown'} ${balance.currency ?? ''}`.trim()).join(', ')
         || row.message || row.error || 'No observable quota'
       console.log(`${row.provider} [${row.status}] plan: ${row.plan || 'unknown'} ${detail}`)
     }

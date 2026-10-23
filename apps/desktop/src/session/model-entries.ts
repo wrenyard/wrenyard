@@ -5,7 +5,7 @@ import type { ProviderListResult, ProviderQuotaBalance, ProviderQuotaSnapshot } 
 import { selectChatGptFundingSource } from '@wrenyard/providers/chatgpt';
 import { selectSessionProtocol } from '@wrenyard/session/model-metadata';
 import { floorQuotaPercentage } from '../pet/shared/quota-percentage.js';
-import { floorDecimalInteger } from '../main/projections/quota-service.js';
+import { floorDecimalInteger, twoDecimalAmount } from '../main/projections/quota-service.js';
 import type { SessionBridgeModelEntry } from './preload.js';
 
 /** Short label for one balance row: a unit row keeps its unit (e.g. Credits). */
@@ -17,7 +17,10 @@ function balanceSummary(balance: ProviderQuotaBalance): string | undefined {
   // Unknown Credits render as unknown, never as a fabricated paid amount.
   if (amount === null) return `${unit}未知`;
   if (balance.unit !== undefined) return `${floorDecimalInteger(amount)} ${unit}`;
-  return `${amount} ${unit}`;
+  // Human-facing USD/CNY amounts show exactly two decimals (zero-padded,
+  // ordinarily rounded); other currencies keep the provider's precision.
+  const displayAmount = unit === 'USD' || unit === 'CNY' ? twoDecimalAmount(amount) : amount;
+  return `${displayAmount} ${unit}`;
 }
 
 /**
