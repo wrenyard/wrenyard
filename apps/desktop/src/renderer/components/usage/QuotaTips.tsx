@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 import { QuotaBar, quotaVerdict, QUOTA_POOL_STATE_LABEL, quotaPoolStateTone, type QuotaVerdict } from '@/renderer/components/usage/QuotaBar';
-import { useDisplayCurrency } from '@/renderer/lib/queries';
-import { formatQuotaBalance, type DisplayCurrency, type QuotaProviderSnapshot } from '@/shell-contract';
+import { type QuotaProviderSnapshot } from '@/shell-contract';
 import { cn } from 'cn';
 
 /**
@@ -57,11 +56,10 @@ function VerdictLine({ verdict, inverse }: { verdict: QuotaVerdict; inverse: boo
   );
 }
 
-function ProviderTips({ provider, now, inverse, currency }: {
+function ProviderTips({ provider, now, inverse }: {
   provider: QuotaProviderSnapshot;
   now: number;
   inverse: boolean;
-  currency: DisplayCurrency;
 }) {
   const name = provider.label || provider.id;
   const failed = provider.status === 'error' || provider.status === 'unavailable';
@@ -95,7 +93,7 @@ function ProviderTips({ provider, now, inverse, currency }: {
           {provider.balances.map((balance) => (
             <span key={`${balance.id ?? balance.currency}:${balance.display}`} className="flex items-baseline gap-1">
               <span className={muted}>{BALANCE_LABEL}</span>
-              <strong className="tabular-nums">{formatQuotaBalance(balance, currency)}</strong>
+              <strong className="tabular-nums">{balance.display}</strong>
               {balance.state !== undefined && (
                 <span className={cn(quotaPoolStateTone(balance.state) ?? muted)}>
                   {QUOTA_POOL_STATE_LABEL[balance.state]}
@@ -118,7 +116,6 @@ export function QuotaTips({
   className,
 }: QuotaTipsProps) {
   const inverse = surface === 'inverse';
-  const currency = useDisplayCurrency();
   const provider = useMemo(() => {
     if (focusedProvider !== null) {
       return providers.find((entry) => entry.id === focusedProvider) ?? providers[0] ?? null;
@@ -159,7 +156,7 @@ export function QuotaTips({
       data-slot="quota-tips"
     >
       {!unknown && <VerdictLine verdict={quotaVerdict(provider.windows)} inverse={inverse} />}
-      <ProviderTips provider={provider} now={now} inverse={inverse} currency={currency} />
+      <ProviderTips provider={provider} now={now} inverse={inverse} />
     </div>
   );
 }

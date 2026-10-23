@@ -96,7 +96,10 @@ export function buildQuotaTips(
     if (bar) entry.bars = [bar];
     if (errorRow) entry.errorRow = errorRow;
     if (provider.balances && provider.balances.length > 0) {
-      entry.balances = provider.balances;
+      entry.balances = provider.balances.map((balance) => ({
+        ...balance,
+        display: formatQuotaBalance(balance, displayCurrency),
+      }));
       entry.balanceLabel = provider.id;
     }
     tips.push(entry);
