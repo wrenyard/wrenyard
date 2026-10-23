@@ -161,6 +161,17 @@ function isValidDecimalString(v: unknown): v is string {
 }
 
 /**
+ * Whole-unit display of a non-negative decimal string: the exact integer
+ * portion (text before '.') with any sign/whitespace stripped, so
+ * "60691.4641665000" -> "60691" and "0.999" -> "0". No Number() conversion,
+ * so arbitrarily long decimals never lose precision or round up.
+ */
+export function floorDecimalInteger(amount: string): string {
+  const head = amount.trim().split('.')[0].replace(/^[+-]/, '');
+  return head.length > 0 ? head : '0';
+}
+
+/**
  * Format a monetary amount for a currency: CNY/UZS use the CNY prefix form
  * (¥/₩ style symbol), other ISO currencies use a symbol + amount form where
  * a common symbol exists, falling back to `AMOUNT CURRENCY`.
@@ -191,7 +202,7 @@ function currencySymbol(currency: string): string | null {
 function balanceDisplay(row: { currency?: string; unit?: string; amount: string | null; unlimited?: boolean }): string {
   if (row.unlimited === true) return '不限量';
   if (row.amount === null) return '未知';
-  if (row.unit !== undefined) return `${row.amount} ${row.unit}`;
+  if (row.unit !== undefined) return `${floorDecimalInteger(row.amount)} ${row.unit}`;
   return formatBalanceAmount(row.currency!, row.amount);
 }
 

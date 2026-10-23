@@ -2,6 +2,13 @@ import { parseArgs } from 'node:util'
 import { findProviderQuotaPool, providerQuotaPoolLabel } from '@wrenyard/providers'
 import { connectConfiguredForemanClient, errorMessage } from '../shared.mts'
 
+/** Whole-unit display of a non-negative decimal string (exact integer part,
+ * sign/whitespace stripped) — e.g. "60691.4641665000" -> "60691", "0.999" -> "0". */
+function floorAmount(amount: string): string {
+  const head = amount.trim().split('.')[0].replace(/^[+-]/, '')
+  return head.length > 0 ? head : '0'
+}
+
 const USAGE = 'Usage: wrenyard quota [provider] [--json] [--refresh] [--config path]'
 
 /** CLI and Desktop consume the same daemon-owned provider observations. */
@@ -37,7 +44,9 @@ export async function handleQuota(args: string[]): Promise<number> {
       }).join(', ')
         || row.balances?.map(balance => balance.unlimited === true
           ? `unlimited ${balance.unit ?? balance.currency ?? ''}`.trim()
-          : `${balance.amount ?? 'unknown'} ${balance.currency ?? balance.unit ?? ''}`.trim()).join(', ')
+          : balance.unit !== undefined
+            ? `${balance.amount !== null && balance.amount !== undefined ? floorAmount(balance.amount) : 'unknown'} ${balance.unit}`.trim()
+            : `${balance.amount ?? 'unknown'} ${balance.currency ?? ''}`.trim()).join(', ')
         || row.message || row.error || 'No observable quota'
       console.log(`${row.provider} [${row.status}] plan: ${row.plan || 'unknown'} ${detail}`)
     }
