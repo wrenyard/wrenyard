@@ -381,10 +381,17 @@ export function applyMountedFeatureRoutingPreferences(
   const base = dispatch ?? {}
   // Feature id mounted for desktop control; no shared exported constant exists.
   if (!mountedFeatures?.includes('computer-use')) return base
-  if (base.intelligenceMin !== undefined && INTELLIGENCE_ORDER[base.intelligenceMin] >= INTELLIGENCE_ORDER.high) {
-    return base
+  const liftedMin =
+    base.intelligenceMin !== undefined && INTELLIGENCE_ORDER[base.intelligenceMin] >= INTELLIGENCE_ORDER.high
+      ? base.intelligenceMin
+      : 'high'
+  if (
+    base.intelligenceExpected !== undefined &&
+    INTELLIGENCE_ORDER[base.intelligenceExpected] < INTELLIGENCE_ORDER[liftedMin]
+  ) {
+    return { ...base, intelligenceMin: liftedMin, intelligenceExpected: liftedMin }
   }
-  return { ...base, intelligenceMin: 'high' }
+  return { ...base, intelligenceMin: liftedMin }
 }
 
 /** Synthetic task name used only to key the read-only routing form; it never
