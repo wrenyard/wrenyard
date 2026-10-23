@@ -11,7 +11,7 @@ import {
 } from './product.ts';
 
 // Gateway admission is iOA-only; every other environment publishes offerings with no protocols.
-const CODEBUDDY_GATEWAY_PROTOCOLS: readonly GatewayProtocol[] = ['openai_chat', 'anthropic_messages'];
+const CODEBUDDY_GATEWAY_PROTOCOLS: readonly GatewayProtocol[] = ['openai_chat', 'openai_responses', 'anthropic_messages'];
 
 /**
  * Product-file ids whose WY identity is a genuine rename rather than a
@@ -344,6 +344,14 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
       {
         protocol: 'openai_chat',
         endpoint: 'https://copilot.tencent.com/v2/chat/completions',
+        authScheme: 'bearer',
+        upstreamModels: state.upstreamModels,
+      },
+      {
+        protocol: 'openai_responses',
+        // The official TCodex client posts to the bare /responses path on the
+        // shared copilot host, not an OpenAI-style /v1/responses route.
+        endpoint: 'https://copilot.tencent.com/responses',
         authScheme: 'bearer',
         upstreamModels: state.upstreamModels,
       },

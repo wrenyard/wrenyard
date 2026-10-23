@@ -145,7 +145,7 @@ export function applyCodeBuddyNativeHeaders(
   if (
     provider.id !== 'codebuddy' ||
     provider.credentialResolver !== 'codebuddy' ||
-    (protocol !== 'openai_chat' && protocol !== 'anthropic_messages')
+    (protocol !== 'openai_chat' && protocol !== 'openai_responses' && protocol !== 'anthropic_messages')
   ) return;
   const nativeHeaders = codeBuddyNativeHeaders.get(credential);
   if (!nativeHeaders) return;
@@ -177,6 +177,21 @@ const CODEBUDDY_MESSAGES_OFFICIAL_IDENTITY = {
   productVersion: '0.1.9',
 } as const;
 
+/**
+ * Measured official product identity observed on the Responses endpoint. The
+ * user agent is composed as productName/productVersion plus platform/codex-sdk
+ * version, matching the official client's header build. Both versions come
+ * from the same measured official package manifest (the 0.0.16 package
+ * bundles codex-sdk 0.144.5); newer published CLI versions are not locally
+ * evidenced, so the measured pair stays pinned.
+ */
+const CODEBUDDY_RESPONSES_OFFICIAL_IDENTITY = {
+  userAgent: 'TCodex/0.0.16 CLI/0.144.5',
+  ideName: 'TCodex',
+  ideVersion: '0.144.5',
+  productVersion: '0.0.16',
+} as const;
+
 /** CodeBuddy ids are UUIDs with the dashes stripped. */
 function codeBuddyId(): string {
   return randomUUID().replace(/-/gu, '');
@@ -202,6 +217,16 @@ function hasBlock(entry: Record<string, unknown>, type: string): boolean {
 }
 
 function codeBuddyContinuesTurn(body: Record<string, unknown>): boolean {
+  const input = body.input;
+  if (Array.isArray(input) && input.length > 0) {
+    const last = input[input.length - 1];
+    if (last !== null && typeof last === 'object' && !Array.isArray(last)) {
+      // Responses tool results replay as typed function_call_output input
+      // items, mirroring the tool/function rows of the Messages and Chat body.
+      return (last as Record<string, unknown>).type === 'function_call_output';
+    }
+    return false;
+  }
   const messages = body.messages;
   if (!Array.isArray(messages) || messages.length === 0) return false;
   const last = messages[messages.length - 1];
@@ -224,27 +249,33 @@ function codeBuddyContinuesTurn(body: Record<string, unknown>): boolean {
  */
 function codeBuddyConversationKey(executionId: string | undefined, body: Record<string, unknown>): string {
   if (executionId !== undefined) return `execution:${executionId}`;
-  const messages = Array.isArray(body.messages) ? body.messages : [];
-  const firstUser = messages.findIndex(
+  const fromMessages = Array.isArray(body.messages);
+  const rows = fromMessages
+    ? (body.messages as unknown[])
+    : Array.isArray(body.input)
+      ? (body.input as unknown[])
+      : [];
+  const firstUser = rows.findIndex(
     (entry) =>
       entry !== null &&
       typeof entry === 'object' &&
       !Array.isArray(entry) &&
       (entry as Record<string, unknown>).role === 'user',
   );
-  const prefix = messages.slice(0, firstUser >= 0 ? firstUser + 1 : 1);
-  // Chat and Messages bodies encode the same conversation differently (role
-  // 'tool' rows and tool_calls versus content blocks), so the digest keys on
-  // the request's shape: a Messages-shaped prefix cannot collide with the
-  // identical logical history sent through the Chat endpoint.
-  const messagesShaped = prefix.some(
+  const prefix = rows.slice(0, firstUser >= 0 ? firstUser + 1 : 1);
+  // Chat, Messages and Responses bodies encode the same conversation
+  // differently (role 'tool' rows and tool_calls, content blocks, versus typed
+  // input items), so the digest keys on the request's shape: one endpoint's
+  // prefix cannot collide with the identical logical history sent through
+  // another.
+  const messagesShaped = fromMessages && prefix.some(
     (entry) =>
       entry !== null &&
       typeof entry === 'object' &&
       !Array.isArray(entry) &&
       Array.isArray((entry as Record<string, unknown>).content),
   );
-  const shape = messagesShaped ? 'messages' : 'chat';
+  const shape = messagesShaped ? 'messages' : !fromMessages && Array.isArray(body.input) ? 'responses' : 'chat';
   return `prefix:${createHash('sha256').update(`${shape}:${JSON.stringify(prefix)}`).digest('hex')}`;
 }
 
@@ -375,7 +406,7 @@ export function createCodeBuddyRuntime(
      * never knows these headers are CodeBuddy-specific.
      */
     async beforeRequest(context: ProviderRequestHookContext): Promise<void> {
-      if (context.protocol !== 'openai_chat' && context.protocol !== 'anthropic_messages') return;
+      if (context.protocol !== 'openai_chat' && context.protocol !== 'openai_responses' && context.protocol !== 'anthropic_messages') return;
       // The /v2/chat/completions upstream accepts only a string tool_choice and rejects the object form.
       // The Messages endpoint keeps its native tool_choice structure, so this rewrite stays Chat-only.
       if (context.protocol === 'openai_chat' && context.body.tool_choice !== null && typeof context.body.tool_choice === 'object') {
@@ -418,10 +449,21 @@ export function createCodeBuddyRuntime(
         context.headers.set('x-request-trace-id', codeBuddyId());
         context.headers.set('x-trace-id', codeBuddyId());
       }
+      // Responses-only: the official TCodex client sends its own product
+      // identity on the Responses endpoint, so the shared Chat identity
+      // headers are overridden here. The openai_chat path keeps the headers
+      // exactly as the shared block above sets them.
+      if (context.protocol === 'openai_responses') {
+        context.headers.set('user-agent', CODEBUDDY_RESPONSES_OFFICIAL_IDENTITY.userAgent);
+        context.headers.set('x-ide-name', CODEBUDDY_RESPONSES_OFFICIAL_IDENTITY.ideName);
+        context.headers.set('x-ide-version', CODEBUDDY_RESPONSES_OFFICIAL_IDENTITY.ideVersion);
+        context.headers.set('x-product-version', CODEBUDDY_RESPONSES_OFFICIAL_IDENTITY.productVersion);
+        context.headers.set('x-request-trace-id', codeBuddyId());
+      }
     },
     /** Correct only the CodeBuddy departures from the official Chat contract. */
     afterResponse(context: ProviderResponseHookContext): ProviderResponseHookResult | undefined {
-      if ((context.protocol !== 'openai_chat' && context.protocol !== 'anthropic_messages') || context.status < 400) return undefined;
+      if ((context.protocol !== 'openai_chat' && context.protocol !== 'openai_responses' && context.protocol !== 'anthropic_messages') || context.status < 400) return undefined;
       const mapped = codeBuddyProtocolError({ status: context.status, body: context.errorBody, protocol: context.protocol });
       return mapped === undefined ? undefined : { status: mapped.status, errorBody: mapped.body };
     },
