@@ -454,6 +454,24 @@ export function createCodeBuddyRuntime(
       // headers are overridden here. The openai_chat path keeps the headers
       // exactly as the shared block above sets them.
       if (context.protocol === 'openai_responses') {
+        const input = context.body.input;
+        // Measured endpoint behavior: array input items that carry a role but
+        // no item type are rejected; the official client always sends typed
+        // items. Stamp the documented message type on role-bearing items so
+        // existing Responses requests stay valid.
+        if (Array.isArray(input)) {
+          for (const item of input) {
+            if (
+              item !== null &&
+              typeof item === 'object' &&
+              !Array.isArray(item) &&
+              typeof (item as Record<string, unknown>).role === 'string' &&
+              (item as Record<string, unknown>).type === undefined
+            ) {
+              (item as Record<string, unknown>).type = 'message';
+            }
+          }
+        }
         context.headers.set('user-agent', CODEBUDDY_RESPONSES_OFFICIAL_IDENTITY.userAgent);
         context.headers.set('x-ide-name', CODEBUDDY_RESPONSES_OFFICIAL_IDENTITY.ideName);
         context.headers.set('x-ide-version', CODEBUDDY_RESPONSES_OFFICIAL_IDENTITY.ideVersion);
