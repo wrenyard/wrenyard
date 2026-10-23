@@ -38,7 +38,7 @@ export function createCodeBuddy(options: CodeBuddyOptions = {}): CodeBuddy {
     ? { status: 'ready' as const, environment: 'unknown' as const, entries: options.productModels }
     : undefined);
   const entries = product?.status === 'ready' ? product.entries : [];
-  const state = createCodeBuddyModels(entries);
+  const state = createCodeBuddyModels(entries, product?.status === 'ready' ? product.environment : 'unknown');
   const runtime = createCodeBuddyRuntime(product, state, options.account, options.discover);
   // The supplier request/response hooks (client identity, per-turn round cache,
   // private-error correction) are part of the registered definition, so the

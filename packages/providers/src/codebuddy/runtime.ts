@@ -285,7 +285,7 @@ export function createCodeBuddyRuntime(
     discoveryReason = ready ? undefined : next?.reason;
     environment = ready?.environment ?? 'unknown';
     last = ready?.account?.accessToken ? bind(ready.account) : undefined;
-    state.publish(ready?.entries ?? []);
+    state.publish(ready?.entries ?? [], environment);
   }
   /**
    * Run the injected discovery again and publish the result: install,

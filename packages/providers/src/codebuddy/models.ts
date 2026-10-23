@@ -1,5 +1,5 @@
 import { codeBuddyRouteFailure } from './route-errors.ts';
-import type { ClientDefinition, ModelDefinition, ProviderDefinition, ReasoningEffort } from '../base/index.ts';
+import type { ClientDefinition, GatewayProtocol, ModelDefinition, ProviderDefinition, ReasoningEffort } from '../base/index.ts';
 import { resolveProviderModel, type CanonicalModelOverrides } from '../base/model-defaults.ts';
 import { validateOfferingSnapshot } from '../base/catalog.ts';
 import { models, isMainstreamModelId, REASONING_EFFORTS } from '@wrenyard/models';
@@ -7,7 +7,11 @@ import {
   codeBuddyCanonicalModelId,
   productCreditsAreFree,
   type CodeBuddyProductModelEntry,
+  type CodeBuddyEnvironment,
 } from './product.ts';
+
+// Gateway admission is iOA-only; every other environment publishes offerings with no protocols.
+const CODEBUDDY_GATEWAY_PROTOCOLS: readonly GatewayProtocol[] = ['openai_chat', 'anthropic_messages'];
 
 /**
  * Product-file ids whose WY identity is a genuine rename rather than a
@@ -228,7 +232,7 @@ function reasoningEffortMappingsFor(offerings: readonly ModelDefinition[]): NonN
   return mappings;
 }
 
-function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelEntry[]): {
+function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelEntry[], gatewayProtocols: readonly GatewayProtocol[]): {
   models: ModelDefinition[];
   upstreamByCanonical: Record<string, string>;
 } {
@@ -270,7 +274,7 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
           ...productMetadataOverrides(entry, registered.defaults.contextWindow),
           ...claudeMetadataOverrides(canonicalId),
           reasoningEfforts: codeBuddyReasoningEfforts(canonicalId, entry),
-          protocols: ['openai_chat', 'anthropic_messages'],
+          protocols: gatewayProtocols,
         },
       }),
     };
@@ -286,7 +290,7 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
   return { models: offerings, upstreamByCanonical };
 }
 
-export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEntry[]) {
+export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEntry[], environment: CodeBuddyEnvironment = 'unknown') {
   // Mutable bindings swapped in place by publish(): routing reads state through
   // this same object, so a fresh discovery replaces every dependent view
   // (offerings, aliases, wire map, effort ladders) atomically without
@@ -324,8 +328,8 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     },
   };
 
-  const publish = (next: readonly CodeBuddyProductModelEntry[]): void => {
-    const built = buildCodeBuddyOfferings(next);
+  const publish = (next: readonly CodeBuddyProductModelEntry[], environment: CodeBuddyEnvironment): void => {
+    const built = buildCodeBuddyOfferings(next, environment === 'ioa' ? CODEBUDDY_GATEWAY_PROTOCOLS : []);
     state.upstreamModels = Object.freeze(built.upstreamByCanonical);
     // The declared ladder of each offering that has one, keyed by the
     // offering's own id. A route with no ladder has no level to materialize.
@@ -361,7 +365,7 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     definition.modelAliases = historicalAliasesFor(built.models);
     definition.reasoningEffortMappings = reasoningEffortMappingsFor(built.models);
   };
-  publish(entries);
+  publish(entries, environment);
 
 
   return { definition, publish, get upstreamModels() { return state.upstreamModels; } };
