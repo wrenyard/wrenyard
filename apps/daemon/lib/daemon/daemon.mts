@@ -1345,6 +1345,8 @@ async function createForemanDaemonResources(
       runtimeAvailability,
       gatewayHealth: () => gateway.health(),
     })
+    // init never blocks on document state: it only emits a bounded
+    // presence-only diagnostic for a preserved legacy document-commit.json.
     const documentLedger = new Ledger({ workspaceRoot, stateRoot: sessionStateRoot })
     await documentLedger.init()
     const workspaceDocService = new WorkspaceDocService(workspaceRoot, documentLedger)

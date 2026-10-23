@@ -1,5 +1,5 @@
-/** Durable workspace document commits, serialized by the owning ledger. */
-import { createHash, randomUUID } from 'node:crypto';
+/** Workspace document commits, serialized by the owning ledger's process-local queue. */
+import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { contentVersion, currentDocument, makeDocumentDraft } from './documents.ts';
@@ -22,12 +22,6 @@ export interface DocumentCommit {
   context?: DocumentCommitContext;
 }
 
-interface Transaction extends DocumentCommit { id: string }
-
-function checksum(transaction: Transaction): string {
-  return createHash('sha256').update(JSON.stringify(transaction)).digest('hex');
-}
-
 function conflict(code: string, message: string): Error {
   return Object.assign(new Error(message), { code });
 }
@@ -39,21 +33,28 @@ function syncDirectory(directory: string): void {
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
-function syncFile(file: string): void {
-  const fd = openSync(file, 'r+');
-  try { fsyncSync(fd); } finally { closeSync(fd); }
-}
-
 function replaceFile(file: string, content: string, id: string): void {
   mkdirSync(dirname(file), { recursive: true });
   const temp = resolve(dirname(file), '.' + basename(file) + '.' + id + '.tmp');
   const fd = openSync(temp, 'w', existsSync(file) ? lstatSync(file).mode : 0o600);
   try { writeFileSync(fd, content, 'utf8'); fsyncSync(fd); } finally { closeSync(fd); }
   renameSync(temp, file);
-  syncDirectory(dirname(file));
 }
 
-/** One write-ahead intent per workspace; callers must hold the ledger queue. */
+/** Coarse parent-facing error category; never embeds raw paths or stack text. */
+function errorCategory(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && /^E[A-Z0-9]+$/u.test(code) ? code : 'io_error';
+}
+
+/**
+ * The document file is the sole content authority: the mutation completes at
+ * the atomic replacement (or the unlink for a delete). Session history is then
+ * recorded once; a crash between the two may leave the last operation out of
+ * history, which an explicit reread of the file resolves. A pre-existing
+ * document-commit.json from an older format is preserved verbatim and never
+ * replayed or removed.
+ */
 export class DocumentCommitter {
   private readonly journal: string;
   private readonly workspaceRoot: string;
@@ -69,97 +70,66 @@ export class DocumentCommitter {
     this.journal = resolve(directory, 'document-commit.json');
   }
 
+  /**
+   * Presence-only legacy check: a pending document-commit.json left by the
+   * durable-transaction format is preserved untouched and never blocks use.
+   * Callers must treat the current file on disk as authoritative and reread it.
+   */
+  hasLegacyPending(): boolean {
+    return existsSync(this.journal);
+  }
+
+  /** Serialized by the caller's queue; re-validates `before` immediately before replacing. */
   async commit(input: DocumentCommit): Promise<void> {
-    await this.recover();
     if (input.context !== undefined && (!input.context.sessionId || !input.context.parent
       || !Number.isSafeInteger(input.context.turn) || input.context.turn < 1
       || !Number.isSafeInteger(input.context.step) || input.context.step < 1)) {
       throw new Error('Invalid document commit provenance');
     }
-    const transaction: Transaction = { ...input, id: randomUUID() };
-    const file = this.target(transaction.path);
+    const file = this.target(input.path);
+    // The caller holds the process-local queue, so this read and the
+    // replacement below are serialized against every cooperating writer. A
+    // mutation computed from a stale snapshot is rejected, never overwritten.
     if (this.content(file) !== input.before) throw conflict('conflict', 'Document changed before commit; read it again');
+    let events: LedgerEvent[] = [];
     if (input.context !== undefined) {
-      const events = this.read(input.context.sessionId);
+      events = this.read(input.context.sessionId);
       if (!events.some(event => event.type === 'session.created')) throw conflict('missing_session', 'Document commit requires an existing session');
       currentDocument(events, input.path);
     }
-    // Publishing this durable intent is the commit decision. Recovery completes
-    // it before any later mutation; a tool success is returned only after cleanup.
-    let published = false;
+    // The atomic replacement is the completion point of the mutation.
+    if (input.content === null) unlinkSync(file);
+    else replaceFile(file, input.content, randomUUID());
+    // Post-mutation durability confirmation: the document is already changed,
+    // so a directory fsync failure must surface as a distinct partial outcome,
+    // never as a raw fs error indistinguishable from "nothing was written".
     try {
-      replaceFile(this.journal, JSON.stringify({ transaction, checksum: checksum(transaction) }), transaction.id);
-      published = true;
-      await this.recover();
-    } catch (error) {
-      if (published || existsSync(this.journal)) {
-        throw conflict('commit_pending', 'Document commit ' + transaction.id
-          + ' may already have taken effect; recover and read before retrying: ' + String(error));
-      }
-      throw error;
-    }
-  }
-
-  async recover(): Promise<void> {
-    if (!existsSync(this.journal)) return;
-    const journal = JSON.parse(readFileSync(this.journal, 'utf8')) as { transaction: Transaction; checksum: string };
-    const transaction = journal.transaction;
-    if (transaction === null || typeof transaction !== 'object' || checksum(transaction) !== journal.checksum) {
-      throw new Error('Document commit journal checksum mismatch; refusing recovery');
-    }
-    if (typeof transaction.id !== 'string' || !/^[a-f0-9-]{36}$/u.test(transaction.id)
-      || typeof transaction.path !== 'string' || typeof transaction.title !== 'string'
-      || (transaction.before !== null && typeof transaction.before !== 'string')
-      || (transaction.content !== null && typeof transaction.content !== 'string')) {
-      throw new Error('Invalid document commit journal; recovery requires intervention');
-    }
-    const { context } = transaction;
-    if (context !== undefined && (typeof context.sessionId !== 'string' || typeof context.parent !== 'string'
-      || !Number.isSafeInteger(context.turn) || context.turn < 1 || !Number.isSafeInteger(context.step) || context.step < 1)) {
-      throw new Error('Invalid document commit provenance');
-    }
-    const events = context === undefined ? [] : this.read(context.sessionId);
-    const committed = events.some(event => event.type === 'workspace.changed' && event.transactionId === transaction.id);
-    if (!committed) {
-      if (context !== undefined && !events.some(event => event.type === 'session.created')) {
-        throw conflict('missing_session', 'Pending document commit refers to a missing session');
-      }
-      const file = this.target(transaction.path);
-      const current = this.content(file);
-      // Never overwrite an unrelated edit discovered after a crash.
-      if (current !== transaction.before && current !== transaction.content) {
-        throw conflict('recovery_conflict', 'Pending document commit conflicts with an external edit; preserve the journal for recovery');
-      }
-      if (context !== undefined) currentDocument(events, transaction.path);
-      if (current !== transaction.content) {
-        if (transaction.content === null) { unlinkSync(file); syncDirectory(dirname(file)); }
-        else replaceFile(file, transaction.content, transaction.id);
-      }
-      // A prior attempt may have completed a rename but failed its directory
-      // sync. Confirm durability even when the target already has the new text.
-      if (transaction.content !== null) syncFile(file);
       syncDirectory(dirname(file));
-      if (context !== undefined) {
-        if (transaction.content !== null) {
-          const draft = makeDocumentDraft({ path: transaction.path, title: transaction.title, content: transaction.content }, events,
-            { turn: context.turn, step: context.step, parent: context.parent, source: 'write' });
-          if (draft !== undefined) await this.append(context.sessionId, draft);
-        }
-        // The receipt is last: its fsynced transaction id makes replay idempotent,
-        // including a crash between the content event and this receipt.
-        await this.append(context.sessionId, {
-          type: 'workspace.changed', turn: context.turn, step: context.step, parent: context.parent,
-          scope: 'document', target: transaction.path, transactionId: transaction.id,
-          change: transaction.content === null ? 'deleted' : transaction.before === null ? 'created' : 'updated',
-          version: contentVersion(transaction.content ?? transaction.before ?? ''),
-        });
-      }
+    } catch (error) {
+      throw conflict('durability_failed',
+        'Document was already changed but durability confirmation failed; read it again instead of retrying the write: ' + errorCategory(error));
     }
-    // A complete receipt observed after an fsync error is not yet a durability
-    // acknowledgement. Flush its file again before discarding the recovery intent.
-    if (context !== undefined) await this.sync(context.sessionId);
-    unlinkSync(this.journal);
-    syncDirectory(dirname(this.journal));
+    // Session history follows the file change. When it cannot be recorded the
+    // document is already changed, so the error must say so: callers may fix
+    // history or reread, but must never blind-retry the mutation.
+    if (input.context === undefined) return;
+    try {
+      const context = input.context;
+      if (input.content !== null) {
+        const draft = makeDocumentDraft({ path: input.path, title: input.title, content: input.content }, events,
+          { turn: context.turn, step: context.step, parent: context.parent, source: 'write' });
+        if (draft !== undefined) await this.append(context.sessionId, draft);
+      }
+      await this.append(context.sessionId, {
+        type: 'workspace.changed', turn: context.turn, step: context.step, parent: context.parent,
+        scope: 'document', target: input.path,
+        change: input.content === null ? 'deleted' : input.before === null ? 'created' : 'updated',
+        version: contentVersion(input.content ?? input.before ?? ''),
+      });
+      await this.sync(context.sessionId);
+    } catch (error) {
+      throw conflict('history_failed', 'Document was already changed but its session history could not be recorded; read it again instead of retrying the write: ' + errorCategory(error));
+    }
   }
 
   /** A delayed read must not replace the current view with an obsolete snapshot. */

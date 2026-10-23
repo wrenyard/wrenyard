@@ -53,7 +53,7 @@ export class WorkspaceDocError extends Error {
 export class WorkspaceDocService {
   private readonly workspaceRoot: string
 
-  constructor(workspaceRoot: string, private readonly commits: Pick<Ledger, 'init' | 'commitDocument'>) {
+  constructor(workspaceRoot: string, private readonly commits: Pick<Ledger, 'commitDocument'>) {
     // Resolve the supplied root once, ensure the directory exists, then
     // canonicalize to handle symlinks (e.g. macOS /var -> /private/var)
     const resolvedRoot = resolve(workspaceRoot)
@@ -62,7 +62,6 @@ export class WorkspaceDocService {
   }
 
   async listDocuments(params: WorkspaceDocListParams): Promise<WorkspaceDocListResult> {
-    await this.commits.init()
     const { project } = params
     this.assertKnownProject(project)
     const kinds: WorkspaceDocKind[] = params.kind === undefined
@@ -94,7 +93,6 @@ export class WorkspaceDocService {
   }
 
   async readDocument(params: WorkspaceDocReadParams): Promise<WorkspaceDocReadResult> {
-    await this.commits.init()
     const { absolute, name, identity } = this.resolveDocumentTarget(params)
     if (!existsSync(absolute)) {
       throw new WorkspaceDocError('missing', `Document not found: ${identity.project}/${identity.id ?? `${identity.kind}/${identity.name}`}`)
@@ -107,7 +105,6 @@ export class WorkspaceDocService {
   }
 
   async createDocument(params: WorkspaceDocCreateParams, context?: DocumentCommitContext): Promise<WorkspaceDocCreateResult> {
-    await this.commits.init()
     const { project, kind, name, content } = params
     if (!CREATE_SLUG_RE.test(name)) {
       throw new WorkspaceDocError('bad_name', `New document name must be a short lowercase slug: ${name}`)
@@ -129,7 +126,6 @@ export class WorkspaceDocService {
   }
 
   async updateDocument(params: WorkspaceDocUpdateParams, context?: DocumentCommitContext): Promise<WorkspaceDocUpdateResult> {
-    await this.commits.init()
     const { content, base_version } = params
     const { absolute, name, identity } = this.resolveDocumentTarget(params)
     if (!existsSync(absolute)) {
@@ -147,7 +143,6 @@ export class WorkspaceDocService {
   }
 
   async editDocument(params: WorkspaceDocEditParams, context?: DocumentCommitContext): Promise<WorkspaceDocUpdateResult> {
-    await this.commits.init()
     const { edits, base_version } = params
     const { absolute, name, identity } = this.resolveDocumentTarget(params)
     if (identity.id !== undefined && (base_version === undefined || base_version === '' || edits.length === 0 || edits.some((edit) => edit.old === ''))) {
@@ -228,7 +223,6 @@ export class WorkspaceDocService {
   }
 
   async deleteDocument(params: WorkspaceDocDeleteParams, context?: DocumentCommitContext): Promise<WorkspaceDocDeleteResult> {
-    await this.commits.init()
     const { project, kind, name, base_version } = params
     const { absolute } = this.resolveDocument(project, kind, name)
     if (!existsSync(absolute)) {

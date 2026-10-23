@@ -130,9 +130,8 @@ export class Ledger {
     this.sessionsDir = join(rootDir, 'sessions');
     this.indexPath = join(rootDir, 'index.json');
     // Loading is synchronous, so `listSessions` and `read` work immediately
-    // after construction; `init` recovers any pending document commit before use.
-    // Constructor work is metadata-only: the index plus one stat per timeline
-    // file, never a JSONL body.
+    // after construction. Constructor work is metadata-only: the index plus
+    // one stat per timeline file, never a JSONL body.
     mkdirSync(this.sessionsDir, { recursive: true });
     this.loadIndexSync();
     this.reconcileIndexSync();
@@ -144,16 +143,23 @@ export class Ledger {
       });
   }
 
+  /**
+   * Non-blocking startup: the only document check is a bounded presence-only
+   * diagnostic for a pre-existing document-commit.json left by the removed
+   * durable-transaction format. The file is preserved verbatim, never replayed
+   * or removed, and never gates startup. The current document on disk is the
+   * authority and should simply be reread.
+   */
   init(): Promise<void> {
-    return this.enqueue(() => this.documents.recover());
+    if (this.documents.hasLegacyPending()) {
+      console.warn('wrenyard: a preserved legacy document-commit.json exists; it is left untouched and the current document on disk should be reread');
+    }
+    return Promise.resolve();
   }
 
   /** Durable append: the event is on disk (`fsync`ed) before this resolves. */
   append(sessionId: string, draft: LedgerEventDraft): Promise<LedgerEvent> {
-    return this.enqueue(async () => {
-      await this.documents.recover();
-      return this.appendNow(sessionId, draft);
-    });
+    return this.enqueue(() => this.appendNow(sessionId, draft));
   }
 
   /** The sole file-and-ledger document mutation entry point. */
@@ -251,7 +257,7 @@ export class Ledger {
    * rejected before any filesystem work.
    */
   async deleteSession(sessionId: string): Promise<void> {
-    const run = this.queue.then(async () => { await this.documents.recover(); await this.deleteSessionNow(sessionId); });
+    const run = this.queue.then(async () => { await this.deleteSessionNow(sessionId); });
     this.queue = run.then(
       () => undefined,
       () => undefined,

@@ -99,7 +99,7 @@ function documentSystemPrompt(ports: DefinitionPorts): string {
     '- Prefer workspace_doc_edit for local changes; give exact old text that occurs exactly once.',
     '- Use workspace_doc_update only for a full rewrite, and pass base_version taken from workspace_doc_read.',
     '- When a call returns conflict or missing, read the document again before retrying.',
-    '- commit_pending means the durable commit may already have taken effect. Do not repeat the write; read again after recovery, and report recovery_conflict for intervention.',
+    '- history_failed or durability_failed means the document itself may already have changed: history_failed means only recording its session history failed; durability_failed means persistence could not be confirmed. Do not repeat the write; read the document again to see its actual state and report the truthful partial outcome instead of claiming it is unchanged.',
     '- For project AGENTS.md, read with workspace_doc_read using {project, id: "AGENTS.md"} before revision. It returns version; pass that value as base_version to workspace_doc_edit or workspace_doc_update.',
     '- Prefer exact local edits and preserve unrelated instructions. Use full update only when the intent explicitly requests a full rewrite.',
     '- After conflict or missing, read again before retrying. Never create or delete AGENTS.md.',
