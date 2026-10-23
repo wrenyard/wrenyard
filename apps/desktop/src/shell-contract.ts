@@ -941,6 +941,8 @@ export interface QuotaBalanceSnapshot {
   unit?: string;
   /** Provider-declared unlimited balance. */
   unlimited?: boolean;
+  /** Parser-attested flag availability (ChatGPT Credits only). */
+  availability?: 'available' | 'unavailable' | 'unknown';
   display: string;
   /** Per-pool state from the shared quota rules; a balance is never abundant. */
   state?: QuotaPoolState;

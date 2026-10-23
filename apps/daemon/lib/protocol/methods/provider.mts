@@ -141,6 +141,7 @@ export const providerQuotaResultSchema = {
             amount: { anyOf: [{ type: 'string', maxLength: 64 }, { type: 'null' }] },
             unit: { type: 'string', minLength: 1, maxLength: 64 },
             unlimited: { type: 'boolean' },
+            availability: { type: 'string', enum: ['available', 'unavailable', 'unknown'] },
           }, additionalProperties: false,
         } },
         fetched_at: { type: 'string', maxLength: 64 },

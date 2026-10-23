@@ -79,6 +79,23 @@ function measuredBalance(
   const observedAtMs = balance.observedAtMs;
   if (!isFiniteNumber(observedAtMs)) return rejected('observation_time_not_finite');
   if (observedAtMs > nowMs) return rejected('future_observation');
+  // An explicit parser-attested availability (ChatGPT Credits) is
+  // authoritative: 'available' is sufficient while fresh regardless of the
+  // display-only amount; 'unavailable' is a confirmed exhaustion never
+  // relaxed by age, even beside a positive amount; 'unknown' is insufficient
+  // and never falls through to the amount/unlimited branches below.
+  if (balance.availability !== undefined) {
+    if (balance.availability === 'unavailable') {
+      return { state: 'exhausted', headroom: 0, rejectCode: null };
+    }
+    if (balance.availability === 'unknown') {
+      return { state: 'insufficient', headroom: null, rejectCode: null };
+    }
+    const flagValidForMs = balance.validForMs;
+    if (!isFiniteNumber(flagValidForMs) || flagValidForMs <= 0) return rejected('invalid_freshness_window');
+    if (nowMs - observedAtMs > flagValidForMs) return rejected('stale_observation');
+    return { state: 'sufficient', headroom: null, rejectCode: null };
+  }
   // An explicit provider-declared unlimited balance is usable while fresh; it
   // is never abundant and never fabricated as a large number.
   if (balance.unlimited === true) {

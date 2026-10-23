@@ -222,6 +222,7 @@ function projectProvider(id: string, provider: QuotaProviderState, lastSuccessAt
       amount: balance.amount,
       ...(balance.unit === undefined ? {} : { unit: balance.unit }),
       ...(balance.unlimited === undefined ? {} : { unlimited: balance.unlimited }),
+      ...(balance.availability === undefined ? {} : { availability: balance.availability }),
       display: sanitizeQuotaText(balance.display),
     };
     return { ...row, state: balancePoolState(row, observedAtMs, nowMs) };
@@ -430,18 +431,26 @@ function windowPoolState(
  * Per-pool state of one balance: exhausted at zero, insufficient at or below
  * its currency threshold. A unit row has no threshold (zero exhausts it); an
  * explicit unlimited row is sufficient; a reported-but-absent amount is
- * insufficient, never a fabricated zero.
+ * insufficient, never a fabricated zero. When the parser attested an explicit
+ * flag availability (ChatGPT Credits), that classification is authoritative:
+ * `unknown` short-circuits to insufficient before any amount/unlimited
+ * handling, `available` is sufficient while the observation is fresh
+ * regardless of the display-only amount, and `unavailable` is a confirmed
+ * exhaustion that age never relaxes.
  */
 function balancePoolState(
   balance: QuotaBalanceSnapshot,
   observedAtMs: number,
   nowMs: number,
 ): QuotaPoolState {
+  const availability = balance.availability;
   const balanceEvidence: BalanceEvidence = {
     ...(balance.amount === null ? {} : { amount: balance.amount }),
     currency: balance.currency ?? null,
     ...(balance.unit === undefined ? {} : { unit: balance.unit }),
     ...(balance.unlimited === true ? { unlimited: true } : {}),
+    ...(availability === 'available' || availability === 'unavailable' || availability === 'unknown'
+      ? { availability } : {}),
     observedAtMs,
     validForMs: QUOTA_EVIDENCE_GRACE_MS,
   };

@@ -89,7 +89,7 @@ import type {
   AutoRoutingQuotaSnapshotEntry,
 } from '@wrenyard/auto-routing';
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
-import { CHATGPT_CREDITS_POOL, selectChatGptFundingSource } from '@wrenyard/providers/chatgpt';
+import { CHATGPT_CREDITS_POOL, selectChatGptFundingSource, type ChatGptCreditsAvailability } from '@wrenyard/providers/chatgpt';
 import { codeBuddyPoolsForModel } from '@wrenyard/providers/codebuddy';
 import { WORKBUDDY_PROVIDER_IDS, workBuddyPoolsForModel } from '@wrenyard/providers/workbuddy';
 import type { WorkBuddyAccountKind } from '@wrenyard/providers/workbuddy';
@@ -212,13 +212,15 @@ interface RawWindow {
 }
 
 /** One raw Wrenyard balance entry: a monetary `{ currency, amount }` row or a
- * unit-denominated `{ id, unit, amount|null, unlimited? }` row. */
+ * unit-denominated `{ id, unit, amount|null, unlimited?, availability? }` row. */
 interface RawBalance {
   readonly id: string | null;
   readonly currency: string | null;
   readonly amount: string | null;
   readonly unit: string | null;
   readonly unlimited: boolean;
+  /** Parser-attested flag-derived availability (ChatGPT Credits only). */
+  readonly availability: ChatGptCreditsAvailability | null;
 }
 
 interface RawRow {
@@ -295,16 +297,19 @@ function normalizeRow(item: unknown): RawRow | null {
   if (Array.isArray(raw.balances)) {
     for (const entry of raw.balances) {
       if (entry === null || typeof entry !== 'object') {
-        balances.push({ id: null, currency: null, amount: null, unit: null, unlimited: false });
+        balances.push({ id: null, currency: null, amount: null, unit: null, unlimited: false, availability: null });
         continue;
       }
       const balance = entry as Record<string, unknown>;
+      const rawAvailability = balance.availability;
       balances.push({
         id: stringOrNull(balance.id),
         currency: stringOrNull(balance.currency),
         amount: stringOrNull(balance.amount),
         unit: stringOrNull(balance.unit),
         unlimited: balance.unlimited === true,
+        availability: rawAvailability === 'available' || rawAvailability === 'unavailable' || rawAvailability === 'unknown'
+          ? rawAvailability : null,
       });
     }
   }
@@ -584,8 +589,10 @@ function balanceEvidence(row: RawRow, validForMs = QUOTA_SNAPSHOT_VALID_FOR_MS):
  * Evidence for one explicitly identified unit-denominated balance (e.g.
  * `chatgpt/credits`), matched by stable `id` — never by the monetary
  * first-positive heuristic, so an unrelated balance row can never fund it.
- * A reported-but-absent amount stays unknown (`amount` omitted); an explicit
- * `unlimited` flag is preserved verbatim.
+ * Availability comes from the parser's `availability` classification (derived
+ * from the upstream `unlimited`/`hasCredits` flags), never from the numeric
+ * amount. A present amount is carried verbatim as display-only metadata — it
+ * does not gate admission.
  */
 function unitBalanceEvidence(
   row: RawRow,
@@ -595,24 +602,36 @@ function unitBalanceEvidence(
   if (row.fetchedAtMs === null) return null;
   const entry = row.balances.find((balance) => balance.id === balanceId && balance.unit !== null);
   if (entry === undefined) return null;
-  if (entry.unlimited) {
+  const amount = entry.amount !== null && /^[+-]?\d+(?:\.\d+)?$/.test(entry.amount)
+    ? entry.amount : undefined;
+  if (entry.availability === 'available') {
     return {
-      unlimited: true,
+      availability: 'available',
+      unlimited: entry.unlimited || undefined,
       unit: entry.unit ?? undefined,
+      amount,
       observedAtMs: row.fetchedAtMs,
       validForMs,
     };
   }
-  if (entry.amount === null || !/^\d+(?:\.\d+)?$/.test(entry.amount)) {
+  if (entry.availability === 'unavailable') {
     return {
+      availability: 'unavailable',
       unit: entry.unit ?? undefined,
+      amount,
       observedAtMs: row.fetchedAtMs,
       validForMs,
     };
   }
+  // Unknown — including a legacy Credits row emitted before the availability
+  // field existed — is an explicit parser-attested classification, so the
+  // policy never falls through to amount/unlimited inference.
+  const unknownAvailability: 'unknown' | undefined =
+    entry.availability === 'unknown' || entry.unit === 'Credits' ? 'unknown' : undefined;
   return {
-    amount: entry.amount,
+    ...(unknownAvailability === undefined ? {} : { availability: unknownAvailability }),
     unit: entry.unit ?? undefined,
+    amount,
     observedAtMs: row.fetchedAtMs,
     validForMs,
   };
@@ -639,10 +658,12 @@ function chatGptCreditsConstraint(
 }
 
 /**
- * One measured state classification for the Credits constraint: `available`
- * means a fresh positive/unlimited balance, `empty` a confirmed zero, and
- * `unknown` anything else. The shared policy classifies it; this wrapper only
- * maps its four-level result onto the funding rule's three cases.
+ * One measured state classification for the Credits constraint: availability
+ * comes from the parser's flag-derived `availability` field, never from the
+ * numeric amount — `available` includes hasCredits-true rows whose amount is
+ * absent, zero, negative or malformed, and `empty` means both flags valid and
+ * false. The shared policy classifies it; this wrapper only maps its
+ * four-level result onto the funding rule's three cases.
  */
 function chatGptCreditsState(nowMs: number, constraint: RequiredQuotaConstraint): 'available' | 'empty' | 'unknown' {
   const state = assessRequiredQuota(nowMs, [constraint]).state;

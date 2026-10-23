@@ -49,12 +49,20 @@ export const quota = {
  * - `subscription`: no applicable subscription window is confirmed exhausted —
  *   the subscription is preferred even while Credits are zero or absent.
  * - `credits`: an applicable subscription window is confirmed exhausted AND
- *   fresh Credits evidence is a positive balance or explicit unlimited.
+ *   the parser's flag-derived availability is `available` (`unlimited` or
+ *   `hasCredits` true).
  * - `exhausted`: subscription exhausted AND Credits confirmed empty.
  * - `unresolved`: subscription exhausted but Credits unknown — never asserted
  *   as zero or as paid eligibility.
  */
 export type ChatGptFundingSource = 'subscription' | 'credits' | 'exhausted' | 'unresolved';
+
+/**
+ * The normalized ChatGPT Credits availability carried on the balance row and
+ * consumed identically by routing and display: derived exclusively from the
+ * upstream `unlimited`/`hasCredits` flags, never from the numeric balance.
+ */
+export type ChatGptCreditsAvailability = 'available' | 'unavailable' | 'unknown';
 
 export function selectChatGptFundingSource(input: {
   /** True when at least one applicable subscription pool is confirmed exhausted. */
@@ -75,29 +83,58 @@ function record(value: unknown): Record<string, unknown> | undefined {
     ? value as Record<string, unknown> : undefined;
 }
 
+/** Only a JSON boolean is a valid upstream flag; anything else is unknown. */
+function strictBool(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+/**
+ * Upstream `rateLimitReachedType` values that hard-stop Credits funding. The
+ * generic literal `rate_limit_reached` is NOT a hard stop and never changes
+ * availability.
+ */
+const CREDITS_HARD_STOP_TYPES: ReadonlySet<string> = new Set([
+  'workspace_owner_credits_depleted',
+  'workspace_member_credits_depleted',
+  'workspace_owner_usage_limit_reached',
+  'workspace_member_usage_limit_reached',
+]);
+
 /**
  * Interpret the Codex `credits` block: `{ hasCredits, unlimited, balance }`.
- * The verbatim decimal string is preserved; `balance: null` stays unknown
- * (never fabricated zero), and an absent/malformed block yields no row at all.
- * A consistent `hasCredits: false` with a reported balance is still carried
- * verbatim — the funding rule treats missing balances as unknown, and a
- * positive reported amount keeps its own evidence.
+ * A snapshot is well-formed only when BOTH `hasCredits` and `unlimited` are
+ * real JSON booleans; any missing/null/non-boolean flag yields 'unknown' —
+ * the row is then never an effective `unlimited` and its amount is display
+ * only. Availability is `(unlimited || hasCredits) ? 'available' :
+ * 'unavailable'`; a malformed flag is never OR-ed into truthiness.
+ * Hard-stop signals sit on the same entry (siblings of `credits`):
+ * `spendControlReached === true` or a workspace credits/usage-limit
+ * `rateLimitReachedType` forces 'unavailable' regardless of the flags.
+ * The verbatim signed decimal string is preserved for display: `balance`
+ * absent/null/non-numeric stays null (unknown, never zero) and a negative
+ * amount keeps its sign. An absent/malformed block yields no row at all.
  */
 function creditsBalanceOf(entry: Record<string, unknown>): QuotaSnapshot['balances'] {
   const credits = record(entry.credits);
   if (credits === undefined) return undefined;
+  const hasCredits = strictBool(credits.hasCredits);
+  const unlimited = strictBool(credits.unlimited);
   const balance = credits.balance;
-  const unlimited = credits.unlimited === true;
-  const amount = typeof balance === 'string' && /^\d+(?:\.\d+)?$/.test(balance) ? balance : null;
-  if (credits.hasCredits === false && amount === null && !unlimited) {
-    // Consistent negative with no value: reported-but-unknown, not zero.
-    return [{ id: CHATGPT_CREDITS_BALANCE_ID, unit: CHATGPT_CREDITS_UNIT, amount: null }];
-  }
+  const amount = typeof balance === 'string' && balance.length > 0
+    && /^[+-]?\d+(?:\.\d+)?$/.test(balance) ? balance : null;
+  const hardStop = entry.spendControlReached === true
+    || (typeof entry.rateLimitReachedType === 'string' && CREDITS_HARD_STOP_TYPES.has(entry.rateLimitReachedType));
+  const availability: ChatGptCreditsAvailability =
+    hardStop ? 'unavailable'
+    : hasCredits === null || unlimited === null ? 'unknown'
+    : (unlimited || hasCredits) ? 'available'
+    : 'unavailable';
   return [{
     id: CHATGPT_CREDITS_BALANCE_ID,
     unit: CHATGPT_CREDITS_UNIT,
     amount,
-    ...(unlimited ? { unlimited: true } : {}),
+    availability,
+    ...(availability === 'available' && unlimited === true ? { unlimited: true } : {}),
   }];
 }
 

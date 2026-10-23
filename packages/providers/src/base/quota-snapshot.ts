@@ -10,6 +10,13 @@
  *   balance slot without a value (unknown, never zero); `unlimited: true`
  *   marks an explicit provider-declared unlimited balance.
  */
+/**
+ * The shared three-state balance availability literal union. Explicit
+ * parser/provider-flag classification only (ChatGPT Credits); absent on all
+ * other balance rows.
+ */
+export type QuotaBalanceAvailability = 'available' | 'unavailable' | 'unknown';
+
 export interface QuotaBalance {
   /** Stable balance identity when the provider distinguishes one (e.g.
    * `chatgpt/credits`); absent for a plain monetary row. */
@@ -21,6 +28,11 @@ export interface QuotaBalance {
   readonly unit?: string;
   /** Provider-declared unlimited balance; never a fabricated large amount. */
   readonly unlimited?: boolean;
+  /**
+   * Explicit provider-flag availability classification (ChatGPT Credits only).
+   * Absent on other rows.
+   */
+  readonly availability?: QuotaBalanceAvailability;
 }
 
 /** Provider-owned observation, serialized using the existing daemon quota DTO. */

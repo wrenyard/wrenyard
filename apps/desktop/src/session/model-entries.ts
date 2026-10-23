@@ -43,12 +43,14 @@ function providerQuotaSummary(row: ProviderQuotaSnapshot | undefined): string | 
     // data alone keeps the subscription summary rather than switching to paid.
     const applicable = row.stale === true ? [] : windows.filter((window) => !notApplicable.has(window.name));
     const subscriptionExhausted = applicable.some((window) => 100 - window.pct <= 0);
-    const balanceKnown = row.stale !== true
-      && balance !== undefined && (balance.unlimited === true || balance.amount !== null);
+    // Credits availability comes from the parser's flag-derived `availability`,
+    // never reconstructed from the numeric amount.
+    const balanceKnown = row.stale !== true && balance !== undefined;
+    const availability = balance?.availability;
     const credits = !balanceKnown ? 'unknown' as const
-      : balance!.unlimited === true || (balance!.amount !== null && /[1-9]/.test(balance!.amount))
-        ? 'available' as const
-        : 'empty' as const;
+      : availability === 'available' || availability === 'unavailable'
+        ? (availability === 'available' ? 'available' as const : 'empty' as const)
+        : 'unknown' as const;
     const source = selectChatGptFundingSource({ subscriptionExhausted, credits });
     if (source === 'credits') return balanceSummary(balance!);
     if (source === 'unresolved') return '用量未知';

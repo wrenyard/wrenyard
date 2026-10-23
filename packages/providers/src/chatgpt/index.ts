@@ -5,5 +5,6 @@ export {
   CHATGPT_SUBSCRIPTION_POOL_IDS,
   quota,
   selectChatGptFundingSource,
+  type ChatGptCreditsAvailability,
   type ChatGptFundingSource,
 } from './quota.ts';

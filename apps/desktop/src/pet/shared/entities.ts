@@ -117,6 +117,8 @@ export interface QuotaBalanceRow {
   unit?: string;
   /** Provider-declared unlimited balance. */
   unlimited?: boolean;
+  /** Parser-attested flag availability (ChatGPT Credits only). */
+  availability?: 'available' | 'unavailable' | 'unknown';
   /** Pre-formatted display value (e.g. `¥12.50`, `120 Credits`, `不限量`). */
   display: string;
 }

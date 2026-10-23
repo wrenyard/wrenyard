@@ -23,6 +23,10 @@ export function snapshotCandidate(input: CandidateInput): CandidateInput {
           kind: "balance",
           balance: {
             amount: balance.amount,
+            currency: balance.currency,
+            unit: balance.unit,
+            unlimited: balance.unlimited,
+            availability: balance.availability,
             observedAtMs: balance.observedAtMs,
             validForMs: balance.validForMs,
           },

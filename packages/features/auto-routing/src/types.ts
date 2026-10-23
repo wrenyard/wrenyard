@@ -98,6 +98,13 @@ export interface BalanceEvidence {
   /** Provider-declared unlimited balance: usable while fresh, never a fake
    *  large amount. */
   unlimited?: boolean;
+  /**
+   * Explicit parser-attested availability (ChatGPT Credits only). When
+   * present it is authoritative for sufficiency and takes precedence over the
+   * numeric amount, which is display-only metadata: 'unknown' is always
+   * insufficient and never falls through to the amount/unlimited branches.
+   */
+  availability?: 'available' | 'unavailable' | 'unknown';
   /** Timestamp (epoch ms) the observation was taken. */
   observedAtMs: number;
   /** How long after observedAtMs the observation is considered fresh. */

@@ -49,6 +49,7 @@ interface RawQuotaEntry {
     amount?: unknown;
     unit?: unknown;
     unlimited?: unknown;
+    availability?: unknown;
   }>;
   /** Daemon-computed estimated spend per quota window (Devin only). */
   estimatedSpend?: Array<{
@@ -160,15 +161,30 @@ function isValidDecimalString(v: unknown): v is string {
   return true;
 }
 
+/** Validate a signed decimal string, preserving the sign for Credits rows. */
+function isValidSignedDecimalString(v: unknown): v is string {
+  return typeof v === 'string' && /^[+-]?\d+(\.\d+)?$/.test(v);
+}
+
 /**
- * Whole-unit display of a non-negative decimal string: the exact integer
- * portion (text before '.') with any sign/whitespace stripped, so
- * "60691.4641665000" -> "60691" and "0.999" -> "0". No Number() conversion,
- * so arbitrarily long decimals never lose precision or round up.
+ * Whole-unit display of a signed decimal string: a true mathematical floor,
+ * not truncation, so "60691.4641665000" -> "60691", "0.999" -> "0",
+ * "-3.2" -> "-4" and "-0.2" -> "-1". String/BigInt arithmetic only — no
+ * Number() conversion — so arbitrarily long decimals never lose precision.
+ * Negative zero and any value in (-1, 0) collapse to "0"/"-1" without a
+ * dangling "-0".
  */
 export function floorDecimalInteger(amount: string): string {
-  const head = amount.trim().split('.')[0].replace(/^[+-]/, '');
-  return head.length > 0 ? head : '0';
+  const trimmed = amount.trim();
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(trimmed);
+  if (match === null) return trimmed.length > 0 ? trimmed : '0';
+  const negative = match[1] === '-';
+  const intPart = match[2].replace(/^0+(?=\d)/, '');
+  const fracPart = match[3] ?? '';
+  // A non-zero fractional part on a negative value floors one unit lower.
+  if (negative && /[1-9]/.test(fracPart)) return `-${(BigInt(intPart) + 1n).toString()}`;
+  if (intPart === '0') return '0';
+  return negative ? `-${intPart}` : intPart;
 }
 
 /**
@@ -217,7 +233,9 @@ function currencySymbol(currency: string): string | null {
 function balanceDisplay(row: { currency?: string; unit?: string; amount: string | null; unlimited?: boolean }): string {
   if (row.unlimited === true) return '不限量';
   if (row.amount === null) return '未知';
-  if (row.unit !== undefined) return `${floorDecimalInteger(row.amount)} ${row.unit}`;
+  if (row.unit !== undefined) {
+    return `${floorDecimalInteger(row.amount)} ${row.unit}`;
+  }
   return formatBalanceAmount(row.currency!, row.amount);
 }
 
@@ -240,15 +258,19 @@ function parseBalances(e: RawQuotaEntry): QuotaProviderState['balances'] {
     const currency = b.currency;
     const amount = b.amount === null ? null : b.amount;
     const unlimited = b.unlimited === true;
+    const availability = b.availability === 'available' || b.availability === 'unavailable' || b.availability === 'unknown'
+      ? b.availability : undefined;
     if (unit !== undefined) {
-      // Unit-denominated row: id + unit required; amount may be null or decimal.
+      // Unit-denominated row: id + unit required; amount may be null or a
+      // signed decimal (a negative Credits amount keeps its sign).
       if (id === undefined) continue;
-      if (amount !== null && !isValidDecimalString(amount)) continue;
+      if (amount !== null && !isValidSignedDecimalString(amount)) continue;
       rows.push({
         id,
         unit,
         amount,
         ...(unlimited ? { unlimited: true } : {}),
+        ...(availability !== undefined ? { availability } : {}),
         display: balanceDisplay({ unit, amount, unlimited }),
       });
       continue;

@@ -52,16 +52,18 @@ export function QuotaRingButton() {
     // The shared subscription-first rule decides the ring source: any
     // confirmed-exhausted applicable window may hand off to Credits, while a
     // stale/unknown observation never fabricates a paid fallback and an
-    // absent/zero balance stays a real subscription window.
+    // absent/zero balance stays a real subscription window. Credits
+    // availability comes from the parser's flag-derived `availability`,
+    // never reconstructed from the numeric amount.
     const stale = full.stale === true;
     const balance = full.balances.find((entry) => entry.id === 'chatgpt/credits');
+    const availability = balance?.availability;
     const source = selectChatGptFundingSource({
       subscriptionExhausted: stale ? false : finite.some((entry) => entry.remainingPct <= 0),
       credits: stale || balance === undefined ? 'unknown'
-        : balance.unlimited === true ? 'available'
-        : balance.state === 'sufficient' ? 'available'
-        : balance.state === 'exhausted' ? 'empty'
-        : 'unknown',
+        : availability === 'available' || availability === 'unavailable'
+          ? (availability === 'available' ? 'available' : 'empty')
+          : 'unknown',
     });
     if (source === 'credits' && balance !== undefined) {
       return { window: tightest, fallbackBalance: balance, creditsUnknown: false };

@@ -271,6 +271,7 @@ export function toQuotaSnapshot(row: ProviderQuotaSnapshot): ProviderQuotaSnapsh
         amount: balance.amount,
         ...(balance.unit === undefined ? {} : { unit: balance.unit }),
         ...(balance.unlimited === undefined ? {} : { unlimited: balance.unlimited }),
+        ...(balance.availability === undefined ? {} : { availability: balance.availability }),
       })),
     }),
     ...(row.fetched_at === undefined ? {} : { fetched_at: row.fetched_at }),

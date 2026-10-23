@@ -2,11 +2,19 @@ import { parseArgs } from 'node:util'
 import { findProviderQuotaPool, providerQuotaPoolLabel } from '@wrenyard/providers'
 import { connectConfiguredForemanClient, errorMessage } from '../shared.mts'
 
-/** Whole-unit display of a non-negative decimal string (exact integer part,
- * sign/whitespace stripped) — e.g. "60691.4641665000" -> "60691", "0.999" -> "0". */
+/** Whole-unit display of a signed decimal string: a true mathematical floor,
+ * not truncation — "60691.4641665000" -> "60691", "0.999" -> "0",
+ * "-3.2" -> "-4", "-0.2" -> "-1". String/BigInt only, matching the shared
+ * desktop helper's signed-floor semantics. */
 function floorAmount(amount: string): string {
-  const head = amount.trim().split('.')[0].replace(/^[+-]/, '')
-  return head.length > 0 ? head : '0'
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(amount.trim())
+  if (match === null) return amount.trim().length > 0 ? amount.trim() : '0'
+  const negative = match[1] === '-'
+  const intPart = match[2].replace(/^0+(?=\d)/, '')
+  const fracPart = match[3] ?? ''
+  if (negative && /[1-9]/.test(fracPart)) return `-${(BigInt(intPart) + 1n).toString()}`
+  if (intPart === '0') return '0'
+  return negative ? `-${intPart}` : intPart
 }
 
 /** Two-decimal display of a decimal-string amount: zero-padding ("12" -> "12.00",

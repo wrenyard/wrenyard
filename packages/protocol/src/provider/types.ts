@@ -135,6 +135,13 @@ export interface ProviderEstimatedSpend {
  * optional provider-declared `unlimited` flag. Currency conversion and
  * low-balance thresholds apply only to monetary rows.
  */
+/**
+ * The shared three-state balance availability literal union, mirroring the
+ * provider-side `QuotaBalanceAvailability`. Explicit parser/provider-flag
+ * classification only (ChatGPT Credits); absent on all other balance rows.
+ */
+export type ProviderQuotaBalanceAvailability = 'available' | 'unavailable' | 'unknown'
+
 export interface ProviderQuotaBalance {
   /** Stable balance identity (e.g. `chatgpt/credits`); absent for monetary rows. */
   id?: string
@@ -145,6 +152,11 @@ export interface ProviderQuotaBalance {
   unit?: string
   /** Provider-declared unlimited balance; never a fabricated large amount. */
   unlimited?: boolean
+  /**
+   * Explicit provider-flag availability classification (ChatGPT Credits only).
+   * Absent on other rows.
+   */
+  availability?: ProviderQuotaBalanceAvailability
 }
 
 /** One usage window row. */
