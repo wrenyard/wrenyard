@@ -349,7 +349,8 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
       },
       {
         protocol: 'anthropic_messages',
-        endpoint: 'https://copilot.tencent.com/v1/messages',
+        // The beta query matches the Anthropic Messages URL used by the official client.
+        endpoint: 'https://copilot.tencent.com/v1/messages?beta=true',
         authScheme: 'bearer',
         upstreamModels: state.upstreamModels,
       },

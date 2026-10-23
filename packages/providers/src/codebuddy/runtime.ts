@@ -165,6 +165,18 @@ interface CodeBuddyRound {
 const CODEBUDDY_ROUND_TTL_MS = 30 * 60 * 1000;
 const CODEBUDDY_ROUND_CACHE_LIMIT = 512;
 
+/**
+ * Measured official product identity observed on the Anthropic Messages
+ * endpoint. The user agent is composed as productName/productVersion plus
+ * platform/claude-code version, matching the official client's header build.
+ */
+const CODEBUDDY_MESSAGES_OFFICIAL_IDENTITY = {
+  userAgent: 'TClaude-code/0.1.9 CLI/2.1.295',
+  ideName: 'TClaude',
+  ideVersion: '2.1.295',
+  productVersion: '0.1.9',
+} as const;
+
 /** CodeBuddy ids are UUIDs with the dashes stripped. */
 function codeBuddyId(): string {
   return randomUUID().replace(/-/gu, '');
@@ -394,6 +406,18 @@ export function createCodeBuddyRuntime(
       context.headers.set('x-conversation-request-id', next.conversationRequestId);
       context.headers.set('x-conversation-message-id', messageId);
       context.headers.set('x-request-id', messageId);
+      // Messages-only: the official client sends its own product identity on
+      // the Anthropic Messages endpoint, so the shared Chat identity headers
+      // are overridden and the trace headers are added here. The openai_chat
+      // path keeps the headers exactly as the shared block above sets them.
+      if (context.protocol === 'anthropic_messages') {
+        context.headers.set('user-agent', CODEBUDDY_MESSAGES_OFFICIAL_IDENTITY.userAgent);
+        context.headers.set('x-ide-name', CODEBUDDY_MESSAGES_OFFICIAL_IDENTITY.ideName);
+        context.headers.set('x-ide-version', CODEBUDDY_MESSAGES_OFFICIAL_IDENTITY.ideVersion);
+        context.headers.set('x-product-version', CODEBUDDY_MESSAGES_OFFICIAL_IDENTITY.productVersion);
+        context.headers.set('x-request-trace-id', codeBuddyId());
+        context.headers.set('x-trace-id', codeBuddyId());
+      }
     },
     /** Correct only the CodeBuddy departures from the official Chat contract. */
     afterResponse(context: ProviderResponseHookContext): ProviderResponseHookResult | undefined {
