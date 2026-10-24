@@ -21,6 +21,9 @@ overrides:
   hono@<4.13.5: 4.13.5
   katex@<0.18.2: 0.18.10
 
+patchedDependencies:
+  js-tiktoken@1.0.21: 1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39
+
 importers:
 
   .:
@@ -188,7 +191,7 @@ importers:
         version: 1.1.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       js-tiktoken:
         specifier: 1.0.21
-        version: 1.0.21
+        version: 1.0.21(patch_hash=1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39)
     devDependencies:
       '@base-ui/react':
         specifier: ^1.8.0
@@ -718,7 +721,7 @@ importers:
         version: link:../../providers
       js-tiktoken:
         specifier: 1.0.21
-        version: 1.0.21
+        version: 1.0.21(patch_hash=1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39)
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -814,7 +817,7 @@ importers:
         version: 9.0.0
       js-tiktoken:
         specifier: 1.0.21
-        version: 1.0.21
+        version: 1.0.21(patch_hash=1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39)
       sharp:
         specifier: 0.35.5
         version: 0.35.5(@types/node@22.20.1)
@@ -879,7 +882,7 @@ importers:
     dependencies:
       js-tiktoken:
         specifier: 1.0.21
-        version: 1.0.21
+        version: 1.0.21(patch_hash=1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39)
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -5418,7 +5421,7 @@ snapshots:
     dependencies:
       '@cfworker/json-schema': 4.1.1
       '@standard-schema/spec': 1.1.0
-      js-tiktoken: 1.0.21
+      js-tiktoken: 1.0.21(patch_hash=1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39)
       langsmith: 0.8.10(@opentelemetry/api@1.9.1)(openai@6.26.0(ws@8.21.3)(zod@4.4.3))(ws@8.21.3)
       mustache: 4.2.0
       p-queue: 6.6.2
@@ -7311,7 +7314,7 @@ snapshots:
 
   js-binary-schema-parser@2.0.3: {}
 
-  js-tiktoken@1.0.21:
+  js-tiktoken@1.0.21(patch_hash=1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39):
     dependencies:
       base64-js: 1.5.1
 
