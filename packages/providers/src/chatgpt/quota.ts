@@ -165,7 +165,7 @@ function normalizeChatGPTQuota(raw: unknown, now = new Date()): QuotaSnapshot {
   }
   if (windows.length === 0) throw new Error('chatgpt: no rate limit windows available');
   const plan = typeof entry.planType === 'string' ? entry.planType.trim() : '';
-  const weeklyOnly = plan.toLowerCase() === 'pro' && !unknownWindow
+  const weeklyOnly = ['pro', 'prolite'].includes(plan.toLowerCase()) && !unknownWindow
     && windows.some(window => window.name === '7d') && !windows.some(window => window.name === '5h');
   const balances = creditsBalanceOf(entry);
   return {
