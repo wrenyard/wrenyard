@@ -720,12 +720,12 @@ export class Catalog {
 
   /**
    * True when the exact client/provider/model combination has a verified Fast
-   * capability on the transport a task run would actually use. A task run can
-   * only materialize Fast through a provider-owned native model mapping: the
-   * gateway protocol-field mapping is an entry-protocol surface that the task's
-   * native client never injects, so it is not evidence of task Fast support.
-   * The model itself must declare `supportsFast`, and absence is never inferred
-   * as support.
+   * capability on the transport a task run would actually use: a native run
+   * materializes Fast only through a provider-owned native model mapping, while
+   * a gateway run materializes it through the provider's official entry-protocol
+   * request fields, injected by the gateway on the execution-scoped path. The
+   * model itself must declare `supportsFast`, and absence is never inferred as
+   * support.
    */
   supportsFast(clientID: string, providerID: string, modelID: string): boolean {
     const client = this.clientsByID.get(clientID);
@@ -738,7 +738,19 @@ export class Catalog {
     // A client that owns a native Fast capability against its exact
     // nativeProvider needs no provider model mapping: it carries Fast itself.
     if (client.supportsNativeFast === true && client.nativeProvider === providerID) return true;
-    return provider.nativeClients?.includes(clientID) === true && provider.fastMapping?.model !== undefined;
+    // Native transport: a provider-owned model mapping is the only way a native
+    // run carries Fast.
+    if (provider.nativeClients?.includes(clientID) === true) {
+      return provider.fastMapping?.model !== undefined;
+    }
+    // Gateway transport: the gateway injects the mapping's official fields on
+    // the protocol this client would use. A mapping for a protocol that
+    // materializes no field fails closed, so Fast is never enabled silently.
+    const requestMapping = provider.fastMapping?.request;
+    if (requestMapping === undefined) return false;
+    const protocol = client.gatewayProtocols.find((candidate) => modelDef.protocols.includes(candidate));
+    if (protocol === undefined) return false;
+    return Object.keys(requestMapping(modelDef.id, true, protocol)).length > 0;
   }
 
   resolveRun(clientID: string, providerID: string, modelID: string, expected?: ReasoningEffort, fast?: boolean): DispatchPlan {
@@ -811,12 +823,13 @@ export class Catalog {
     const protocol = client.gatewayProtocols.find((candidate) =>
       modelDef.protocols.includes(candidate));
     if (!protocol) throw new Error(`provider ${providerID} cannot serve client ${clientID}`);
-    // A gateway task run has no body injection: neither an on nor an off Fast
-    // request can reach the upstream, because only a provider-owned native
-    // model mapping carries it and gateway mode does not use one. Any explicit
-    // preference fails closed instead of dispatching while ignoring it; an
-    // absent preference keeps Fast off the plan.
-    if (fast !== undefined) {
+    // A gateway task run carries Fast through the gateway itself: the request
+    // reaches the upstream on the execution-scoped path, where the gateway
+    // injects the provider's official protocol fields. An explicit preference
+    // is therefore admitted when this exact pair owns a verified gateway Fast
+    // mapping and stays on the plan; otherwise it fails closed instead of
+    // dispatching while ignoring it. An absent preference keeps Fast off.
+    if (fast !== undefined && !this.supportsFast(clientID, providerID, modelID)) {
       throw new Error(`Fast mode for ${providerID}/${modelID} on client ${clientID} is not injectable by a gateway task run; only a verified native Fast mapping is supported`);
     }
     const effortFields = this.resolveReasoning(provider, modelDef, clientID, expected);
@@ -827,6 +840,7 @@ export class Catalog {
       mode: 'gateway',
       protocol,
       ...effortFields,
+      ...(fast === undefined ? {} : { fast }),
     };
   }
 

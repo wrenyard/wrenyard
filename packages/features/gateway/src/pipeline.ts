@@ -90,6 +90,13 @@ export interface GatewayPipelineOptions {
   availableProviderIDs: () => Promise<ReadonlySet<string>>;
   /** Credential-backed public models, annotated with route state. */
   availableModels: (protocol?: GatewayProtocol) => Promise<PublicGatewayModel[]>;
+  /**
+   * The Fast preference of one scoped execution, consulted only when a request
+   * body carries no Fast field of its own. A task run's Fast preference is
+   * persisted on the execution, and the task gateway path already carries the
+   * execution id, so the client never has to repeat it in the body.
+   */
+  executionFast?: (executionId: string) => Promise<boolean | undefined>;
 }
 
 export interface GatewayPipeline {
@@ -345,7 +352,17 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       // from reasoning effort and is validated against this route's verified
       // capability here, before any upstream call. An unrelated official value
       // yields no Fast preference and is forwarded unchanged.
-      const fastRequested = module.readFast(body);
+      // With no Fast field of its own, a scoped request falls back to its
+      // execution's persisted preference. An absent execution id, an absent
+      // lookup, or a failed lookup leaves the body forwarded unchanged.
+      let fastRequested = module.readFast(body);
+      if (fastRequested === undefined && executionId !== undefined && options.executionFast !== undefined) {
+        try {
+          fastRequested = await options.executionFast(executionId);
+        } catch {
+          fastRequested = undefined;
+        }
+      }
       if (fastRequested === true
         && (resolved.model.supportsFast !== true || resolved.provider.fastMapping?.request === undefined)) {
         return reject(400, `Model ${resolved.model.id} does not support Fast mode`, target);

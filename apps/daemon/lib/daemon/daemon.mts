@@ -1013,9 +1013,22 @@ async function createForemanDaemonResources(
   const gatewayToken = config.gateway.token ?? persistGeneratedGatewayToken(authoritativeConfigPath)
   const runtimeAvailability = createRoutingAvailability({ catalog, providerRuntime, loadNativeProviderReadiness, loadCurrentCodeBuddySnapshot })
   const gatewayEventStore = new ForemanEventStore(runtime.db)
+  // A task gateway request carries the execution id in its path but never
+  // repeats the task's Fast preference in the body, so the gateway reads the
+  // preference this execution was dispatched with from its own dispatch row.
+  const executionFast = async (executionId: string): Promise<boolean | undefined> => {
+    const row = runtime.db.prepare<[string], { fast: number | null }>(
+      `SELECT fast FROM task_run_attempt_dispatch WHERE execution_id = ?`,
+    ).get(executionId)
+    if (row === undefined) return undefined
+    if (row.fast === 1) return true
+    if (row.fast === 0) return false
+    return undefined
+  }
   const gateway = createModelGateway({
     catalog,
     providers: providerRuntime,
+    executionFast,
     onRouteStateChanged: async (event) => {
       if (event.scope === 'pool' && event.quotaPoolId !== undefined) {
         const poolKey = `${event.provider}|${event.quotaPoolId}`

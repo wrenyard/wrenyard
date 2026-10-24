@@ -67,6 +67,8 @@ export interface ModelGatewayOptions {
   fetch?: typeof globalThis.fetch;
   onRouteStateChanged?: (event: RouteStateChangedEvent) => void | Promise<void>;
   onRequestCompleted?: (event: GatewayRequestCompletedEvent) => void | Promise<void>;
+  /** Fast preference of one execution, read when a scoped request body carries none. */
+  executionFast?: (executionId: string) => Promise<boolean | undefined>;
 }
 
 export interface ModelGateway {
@@ -322,6 +324,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
     emit,
     availableProviderIDs,
     availableModels,
+    ...(options.executionFast === undefined ? {} : { executionFast: options.executionFast }),
   });
 
   return {
