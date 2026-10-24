@@ -353,14 +353,14 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       // capability here, before any upstream call. An unrelated official value
       // yields no Fast preference and is forwarded unchanged.
       // With no Fast field of its own, a scoped request falls back to its
-      // execution's persisted preference. An absent execution id, an absent
-      // lookup, or a failed lookup leaves the body forwarded unchanged.
+      // execution's persisted preference. An absent execution id or lookup
+      // leaves the body forwarded unchanged.
       let fastRequested = module.readFast(body);
       if (fastRequested === undefined && executionId !== undefined && options.executionFast !== undefined) {
         try {
           fastRequested = await options.executionFast(executionId);
-        } catch {
-          fastRequested = undefined;
+        } catch (error) {
+          return reject(500, `Failed to read execution Fast preference: ${error instanceof Error ? error.message : String(error)}`, target);
         }
       }
       if (fastRequested === true
