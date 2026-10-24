@@ -67,6 +67,11 @@ export async function launchCodex(request: AgentRequest, env: NodeJS.ProcessEnv,
     }
     if (request.clientReasoningEffort)
         args.push('-c', `model_reasoning_effort=${JSON.stringify(request.clientReasoningEffort)}`);
+    // Native Fast is a client-side service tier override; an explicit off is
+    // passed too so it wins over the user's own machine configuration. Gateway
+    // runs carry no launch flags and stay unchanged.
+    if (request.mode !== 'gateway' && request.fast !== undefined)
+        args.push('-c', `service_tier=${JSON.stringify(request.fast ? 'fast' : 'default')}`);
     // MCP servers are registered as -c overrides ahead of the app-server bridge.
     args.push(...codexMcpArgs(resolveMcpServers(request.mcpServers)));
     args.push('app-server', '--stdio');

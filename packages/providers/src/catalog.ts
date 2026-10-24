@@ -8,7 +8,7 @@ export const BUILTIN_CLIENTS: readonly ClientDefinition[] = [
   ...codeBuddy.clients,
   // Codex --search is live per https://learn.chatgpt.com/docs/web-search?surface=cli
   // (checked 2026-09-10); custom/third-party providers are not implicitly supported.
-  { id: 'codex', nativeProvider: 'chatgpt', gatewayProtocols: ['openai_responses'], taskCapable: true, supportsNativeWebSearch: true },
+  { id: 'codex', nativeProvider: 'chatgpt', gatewayProtocols: ['openai_responses'], taskCapable: true, supportsNativeWebSearch: true, supportsNativeFast: true },
   // Cursor CLI gained WebSearch/WebFetch per https://cursor.com/changelog/cli-jan-16-2026
   // (checked 2026-09-10).
   {

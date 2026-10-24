@@ -190,6 +190,11 @@ export interface ClientDefinition {
    * third-party gateway web search support: a gateway route — even from a flagged
    * client to a non-native provider — is never marked supported. */
   supportsNativeWebSearch?: boolean;
+  /** Native task Fast capability. True ONLY when this client can honor a task
+   * Fast preference natively against its EXACT nativeProvider — for example
+   * through a client-side flag — with no model swap. It is not a claim of
+   * gateway Fast transport or of third-party provider Fast support. */
+  supportsNativeFast?: boolean;
 }
 
 /** A supplier interprets only its own explicit error codes and reset information. */

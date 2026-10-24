@@ -735,6 +735,9 @@ export class Catalog {
     const resolvedModelID = provider.modelAliases?.[modelID] ?? modelID;
     const modelDef = provider.models.find((model) => model.id === resolvedModelID);
     if (modelDef?.supportsFast !== true) return false;
+    // A client that owns a native Fast capability against its exact
+    // nativeProvider needs no provider model mapping: it carries Fast itself.
+    if (client.supportsNativeFast === true && client.nativeProvider === providerID) return true;
     return provider.nativeClients?.includes(clientID) === true && provider.fastMapping?.model !== undefined;
   }
 
@@ -777,7 +780,11 @@ export class Catalog {
       // mapping transforms the model the effort mapping already resolved, so
       // the effort itself is never altered. Both true and false are explicit.
       const fastModel = provider.fastMapping?.model;
-      const mappedModel = fast === undefined || modelDef.supportsFast !== true || fastModel === undefined
+      // A native Fast client delivers Fast itself, so the model stays as resolved.
+      const nativeFast = modelDef.supportsFast === true
+        && client.supportsNativeFast === true
+        && client.nativeProvider === providerID;
+      const mappedModel = nativeFast || fast === undefined || modelDef.supportsFast !== true || fastModel === undefined
         ? effortFields.upstreamModel
         : fastModel(effortFields.upstreamModel ?? modelDef.id, modelDef.id, fast);
       // Native web search is admitted ONLY for an explicitly supported native
