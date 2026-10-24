@@ -61,7 +61,7 @@ export interface GatewayRequestCompletedEvent {
    * the relay (the recorded `status` stays the real upstream status).
    */
   upstream?: UpstreamErrorFact;
-  /** Sanitized local transport fault details for a 502 with no upstream response. */
+  /** Sanitized local gateway fault details (transport 502s with no upstream response, or other local failures such as execution preference lookup). */
   faultCause?: { name?: string; message?: string; code?: string };
   /** Passive health classification; does not affect routing or admission. */
   outcome?: GatewayHealthOutcome;
@@ -360,7 +360,15 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         try {
           fastRequested = await options.executionFast(executionId);
         } catch (error) {
-          return reject(500, `Failed to read execution Fast preference: ${error instanceof Error ? error.message : String(error)}`, target);
+          const diagnosticMessage = (error instanceof Error ? error.message : String(error))
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 200) || 'Unknown execution Fast lookup error';
+          return reject(500, 'Failed to read execution Fast preference', {
+            ...target,
+            faultReason: 'execution_fast_lookup_failed',
+            faultCause: { message: diagnosticMessage },
+          });
         }
       }
       if (fastRequested === true
