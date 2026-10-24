@@ -24,10 +24,25 @@ export type JsonRecord = Record<string, unknown>
 
 interface StatsEventRow {
   type: string
+  /** Execution the event belongs to; NULL when unattributed. */
+  execution_id: string | null
+  /** Canonical task run id resolved through executions/task_id. */
+  task_run_id: string | null
   /** Guarded json_extract sums for turn_usage rows; always 0 for dispatch. */
   u_input: number
   u_cached: number
   u_output: number
+  /**
+   * Gateway fallback contribution for gateway.request.completed rows: each
+   * successful completion carries its own measured usage at its own
+   * created_at. `usage.input` is the full gateway-measured input (it already
+   * includes any cached portion), so `u_fb_input` is the uncached remainder
+   * `max(input - cachedInput, 0)`; `u_fb_cached` is the measured
+   * `usage.cachedInput`; `u_fb_output` is `usage.output`.
+   */
+  u_fb_input: number
+  u_fb_cached: number
+  u_fb_output: number
   created_at: string
   profile: string | null
   resolved_profile: string | null
@@ -293,22 +308,56 @@ const SQL_USAGE_JSON_ALIASES = `
     json_valid(e.data) AS valid,
     json_extract(e.data, '$.input_tokens') AS v_in,
     json_extract(e.data, '$.cached_input_tokens') AS v_cached,
+    json_extract(e.data, '$.cache_read_input_tokens') AS v_read,
+    json_extract(e.data, '$.cache_creation_input_tokens') AS v_write,
     json_extract(e.data, '$.output_tokens') AS v_out,
     json_type(e.data, '$.input_tokens') AS t_in,
     json_type(e.data, '$.cached_input_tokens') AS t_cached,
-    json_type(e.data, '$.output_tokens') AS t_out`
+    json_type(e.data, '$.cache_read_input_tokens') AS t_read,
+    json_type(e.data, '$.cache_creation_input_tokens') AS t_write,
+    json_type(e.data, '$.output_tokens') AS t_out,
+    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
+         THEN json_extract(e.data, '$.data.executionId') END AS exec_nested,
+    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
+              AND json_extract(e.data, '$.schema_version') = 'foreman.event.v1'
+              AND json_extract(e.data, '$.data.status') = 200
+         THEN 1 ELSE 0 END AS gw_ok,
+    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
+         THEN json_extract(e.data, '$.data.usage.input') END AS gw_in,
+    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
+         THEN json_type(e.data, '$.data.usage.input') END AS gw_in_t,
+    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
+         THEN json_extract(e.data, '$.data.usage.output') END AS gw_out,
+    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
+         THEN json_type(e.data, '$.data.usage.output') END AS gw_out_t,
+    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
+         THEN json_extract(e.data, '$.data.usage.cachedInput') END AS gw_cached,
+    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
+         THEN json_type(e.data, '$.data.usage.cachedInput') END AS gw_cached_t`
 
-const SQL_USAGE_U_INPUT_FROM_ALIASES = `CASE WHEN valid AND t_in IN ('integer','real') AND v_in > 0 AND v_in < 1e308 THEN v_in ELSE 0 END`
+const SQL_USAGE_U_INPUT_FROM_ALIASES = `CASE WHEN valid AND t_in IN ('integer','real') AND v_in >= 0 AND v_in < 1e308 THEN v_in ELSE 0 END`
 
-const SQL_USAGE_U_CACHED_FROM_ALIASES = `CASE WHEN valid AND t_cached IN ('integer','real') AND v_cached > 0 AND v_cached < 1e308 THEN v_cached ELSE 0 END`
+// Cached input precedence: a valid cached_input_tokens total wins; otherwise the
+// defined read/creation split fields are summed (a lone split still counts).
+const SQL_USAGE_U_CACHED_FROM_ALIASES = `CASE
+    WHEN valid AND t_cached IN ('integer','real') AND v_cached >= 0 AND v_cached < 1e308 THEN v_cached
+    WHEN valid THEN
+      CASE WHEN t_read IN ('integer','real') AND v_read >= 0 AND v_read < 1e308 THEN v_read ELSE 0 END
+    + CASE WHEN t_write IN ('integer','real') AND v_write >= 0 AND v_write < 1e308 THEN v_write ELSE 0 END
+    ELSE 0 END`
 
-const SQL_USAGE_U_OUTPUT_FROM_ALIASES = `CASE WHEN valid AND t_out IN ('integer','real') AND v_out > 0 AND v_out < 1e308 THEN v_out ELSE 0 END`
+const SQL_USAGE_U_OUTPUT_FROM_ALIASES = `CASE WHEN valid AND t_out IN ('integer','real') AND v_out >= 0 AND v_out < 1e308 THEN v_out ELSE 0 END`
 
-const SQL_USAGE_U_INPUT_LIVE = `CASE WHEN ev.type = 'turn_usage' AND valid AND t_in IN ('integer','real') AND v_in > 0 AND v_in < 1e308 THEN v_in ELSE 0 END`
+const SQL_USAGE_U_INPUT_LIVE = `CASE WHEN e.type = 'turn_usage' AND valid AND t_in IN ('integer','real') AND v_in >= 0 AND v_in < 1e308 THEN v_in ELSE 0 END`
 
-const SQL_USAGE_U_CACHED_LIVE = `CASE WHEN ev.type = 'turn_usage' AND valid AND t_cached IN ('integer','real') AND v_cached > 0 AND v_cached < 1e308 THEN v_cached ELSE 0 END`
+const SQL_USAGE_U_CACHED_LIVE = `CASE
+    WHEN e.type = 'turn_usage' AND valid AND t_cached IN ('integer','real') AND v_cached >= 0 AND v_cached < 1e308 THEN v_cached
+    WHEN e.type = 'turn_usage' AND valid THEN
+      CASE WHEN t_read IN ('integer','real') AND v_read >= 0 AND v_read < 1e308 THEN v_read ELSE 0 END
+    + CASE WHEN t_write IN ('integer','real') AND v_write >= 0 AND v_write < 1e308 THEN v_write ELSE 0 END
+    ELSE 0 END`
 
-const SQL_USAGE_U_OUTPUT_LIVE = `CASE WHEN ev.type = 'turn_usage' AND valid AND t_out IN ('integer','real') AND v_out > 0 AND v_out < 1e308 THEN v_out ELSE 0 END`
+const SQL_USAGE_U_OUTPUT_LIVE = `CASE WHEN e.type = 'turn_usage' AND valid AND t_out IN ('integer','real') AND v_out >= 0 AND v_out < 1e308 THEN v_out ELSE 0 END`
 
 interface StatsDayWindow {
   dayKey: string
@@ -571,8 +620,8 @@ export function readTodayStats(now = new Date()): DailyStatsResponse {
     window.startAt,
     window.endAt,
   )
-  const usageRows = dbQuery<{ data: string | null }>(
-    `SELECT data
+  const usageRows = dbQuery<{ execution_id: string | null; data: string | null }>(
+    `SELECT execution_id, data
     FROM events
     WHERE type = 'turn_usage'
       AND created_at >= ?
@@ -588,6 +637,119 @@ export function readTodayStats(now = new Date()): DailyStatsResponse {
     if (!data || typeof data !== 'object' || Array.isArray(data)) continue
     inputTokens += fullInputTokens(data as JsonRecord)
     outputTokens += nonNegativeNumber((data as JsonRecord).output_tokens)
+  }
+
+  // Gateway fallback: when a task run's client turn_usage events never report
+  // a partition anywhere in the run, every successful gateway completion
+  // contributes its own measured partitions at its own created_at.
+  // usage.input is the full gateway-measured input (it already includes the
+  // cached portion), so the uncached remainder max(input - cachedInput, 0)
+  // fills the input partition while usage.cachedInput fills the cached
+  // partition independently.
+  const gatewayRows = dbQuery<{ created_at: string; data: string | null }>(
+    `SELECT created_at, data
+    FROM events
+    WHERE type = 'gateway.request.completed'
+      AND created_at >= ?
+      AND created_at < ?
+    ORDER BY created_at ASC, id ASC`,
+    window.startAt,
+    window.endAt,
+  )
+  interface GatewayCompletion {
+    executionId: string
+    uncached?: number
+    cached?: number
+    output?: number
+  }
+  const executions: { executionId: string; completions: GatewayCompletion[] }[] = []
+  const completionByExecution = new Map<string, GatewayCompletion[]>()
+  for (const row of gatewayRows) {
+    const data = parseJsonValue(row.data)
+    const record = data && typeof data === 'object' && !Array.isArray(data)
+      ? (data as JsonRecord).data
+      : undefined
+    if (!record || typeof record !== 'object' || Array.isArray(record)) continue
+    const payload = record as JsonRecord
+    if (payload.status !== 200) continue
+    const executionId = typeof payload.executionId === 'string' ? payload.executionId.trim() : ''
+    if (executionId === '') continue
+    const usage = payload.usage && typeof payload.usage === 'object' && !Array.isArray(payload.usage)
+      ? payload.usage as JsonRecord
+      : undefined
+    const completion: GatewayCompletion = { executionId }
+    if (usage && isMeasuredNumber(usage.cachedInput)) completion.cached = usage.cachedInput as number
+    if (usage && isMeasuredNumber(usage.input)) {
+      completion.uncached = Math.max((usage.input as number) - (completion.cached ?? 0), 0)
+    }
+    if (usage && isMeasuredNumber(usage.output)) completion.output = usage.output as number
+    let bucket = completionByExecution.get(executionId)
+    if (!bucket) {
+      bucket = []
+      completionByExecution.set(executionId, bucket)
+      executions.push({ executionId, completions: bucket })
+    }
+    bucket.push(completion)
+  }
+
+  if (executions.length > 0) {
+    // Resolve each execution to its canonical task run, then read that run's
+    // whole client turn_usage set (bounded by execution ids, not time) so a
+    // partition reported on any attempt — including an explicit zero — blocks
+    // the gateway fallback for the entire run. The cached partition is the
+    // normalized total/split union: a defined cached_input_tokens total or a
+    // defined read/creation split counts as reported.
+    const ids = executions.map((e) => e.executionId)
+    const placeholders = ids.map(() => '?').join(', ')
+    const runByExecution = new Map<string, string>()
+    for (const row of dbQuery<{ id: string; task_id: string }>(
+      `SELECT id, task_id FROM executions WHERE id IN (${placeholders})`,
+      ...ids,
+    )) {
+      runByExecution.set(row.id, row.task_id)
+    }
+    const runIds = [...new Set(runByExecution.values())]
+    const clientReported = new Map<string, { input: boolean; cached: boolean; output: boolean }>()
+    if (runIds.length > 0) {
+      const runPlaceholders = runIds.map(() => '?').join(', ')
+      for (const row of dbQuery<{ task_id: string; data: string | null }>(
+        `SELECT ex.task_id AS task_id, ev.data AS data
+         FROM executions ex
+         JOIN events ev ON ev.execution_id = ex.id AND ev.type = 'turn_usage'
+         WHERE ex.task_id IN (${runPlaceholders})`,
+        ...runIds,
+      )) {
+        const data = parseJsonValue(row.data)
+        if (!data || typeof data !== 'object' || Array.isArray(data)) continue
+        const rec = data as JsonRecord
+        const flags = clientReported.get(row.task_id) ?? { input: false, cached: false, output: false }
+        if (isMeasuredNumber(rec.input_tokens)) flags.input = true
+        if (
+          isMeasuredNumber(rec.cached_input_tokens)
+          || isMeasuredNumber(rec.cache_read_input_tokens)
+          || isMeasuredNumber(rec.cache_creation_input_tokens)
+        ) flags.cached = true
+        if (isMeasuredNumber(rec.output_tokens)) flags.output = true
+        clientReported.set(row.task_id, flags)
+      }
+    }
+    const fallbackByRun = new Map<string, { input: number; output: number }>()
+    for (const { executionId, completions } of executions) {
+      const runId = runByExecution.get(executionId)
+      if (!runId) continue
+      const reported = clientReported.get(runId)
+      const sums = fallbackByRun.get(runId) ?? { input: 0, output: 0 }
+      for (const completion of completions) {
+        if (!reported?.input && completion.uncached !== undefined) sums.input += completion.uncached
+        if (!reported?.cached && completion.cached !== undefined) sums.input += completion.cached
+        if (!reported?.output && completion.output !== undefined) sums.output += completion.output
+      }
+      fallbackByRun.set(runId, sums)
+    }
+    for (const sums of fallbackByRun.values()) {
+      inputTokens += sums.input
+      outputTokens += sums.output
+    }
   }
 
   return {
@@ -674,24 +836,102 @@ function readStatsSummaryUncached(
   // Bounded live event scan for the rolling 31-local-day window only. Token
   // fields are extracted in SQL under json_valid so the event `data` blob never
   // crosses to JS; executions wide profile columns are not selected.
+  //
+  // gateway.request.completed events join the same scan as a per-run usage
+  // fallback: a usage partition the run's client turn_usage events never
+  // reported anywhere in the run is filled from that run's successful gateway
+  // completions, with each completion counted at its own created_at and its
+  // own measured partitions. usage.input is the full gateway-measured input
+  // (it already includes the cached portion), so the input partition is
+  // reported as the uncached remainder max(input - cachedInput, 0) and the
+  // cached partition separately; both partitions can come from the same
+  // completion or independently from different completions, and a client
+  // partition reported on any attempt — including an explicit zero — always
+  // wins. The fallback is resolved per partition: client uncached input is
+  // added only when the run never reported input, gateway uncached input only
+  // when the run never reported input, and gateway cached input only when the
+  // run never reported a normalized cached partition.
   const allEventsRows = dbQuery<StatsEventRow>(
     `WITH ev AS MATERIALIZED (
        SELECT e.execution_id, e.task_id, e.type, e.created_at,
               ${SQL_USAGE_JSON_ALIASES}
        FROM events e
-       WHERE e.type IN ('dispatch', 'turn_usage')
+       WHERE e.type IN ('dispatch', 'turn_usage', 'gateway.request.completed')
          AND e.created_at >= ? AND e.created_at < ?
+     ),
+     -- Executions mapped to their canonical task run, covering every attempt
+     -- of any run that produced an in-window gateway completion (presence of
+     -- a client partition is evaluated over the whole run, so sibling
+     -- executions of the same run must be included). Bounded by the windowed
+     -- event scan through the nested executionId join on executions.id.
+     run_exec AS MATERIALIZED (
+       SELECT ex2.id AS execution_id, ex2.task_id AS task_run_id
+       FROM executions ex2
+       WHERE ex2.task_id IN (
+         SELECT ex.task_id
+         FROM executions ex
+         JOIN ev ON ev.exec_nested = ex.id
+       )
+     ),
+     -- Client partition presence over the whole run: a turn_usage row whose
+     -- field is a valid non-negative number counts as reported, including an
+     -- explicit zero. has_cached uses the normalized cached partition: a
+     -- valid cached_input_tokens total wins; otherwise a lone defined
+     -- read/creation split counts.
+     run_report AS MATERIALIZED (
+       SELECT re.task_run_id,
+              MAX(CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
+                       AND json_type(e.data, '$.input_tokens') IN ('integer','real')
+                       AND json_extract(e.data, '$.input_tokens') >= 0
+                  THEN 1 ELSE 0 END) AS has_in,
+              MAX(CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
+                       AND (
+                         (json_type(e.data, '$.cached_input_tokens') IN ('integer','real')
+                          AND json_extract(e.data, '$.cached_input_tokens') >= 0)
+                         OR (json_type(e.data, '$.cache_read_input_tokens') IN ('integer','real')
+                          AND json_extract(e.data, '$.cache_read_input_tokens') >= 0)
+                         OR (json_type(e.data, '$.cache_creation_input_tokens') IN ('integer','real')
+                          AND json_extract(e.data, '$.cache_creation_input_tokens') >= 0)
+                       )
+                  THEN 1 ELSE 0 END) AS has_cached,
+              MAX(CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
+                       AND json_type(e.data, '$.output_tokens') IN ('integer','real')
+                       AND json_extract(e.data, '$.output_tokens') >= 0
+                  THEN 1 ELSE 0 END) AS has_out
+       FROM run_exec re
+       LEFT JOIN events e ON e.execution_id = re.execution_id AND e.type = 'turn_usage'
+       GROUP BY re.task_run_id
      )
-     SELECT ev.type, ev.created_at, COALESCE(t.template, ex_t.template) AS template,
+     SELECT ev.type, ev.execution_id, re.task_run_id, ev.created_at,
+            COALESCE(t.template, ex_t.template, run_t.template) AS template,
             tra.provider AS provider, tra.model AS model, tra.model_id AS model_id,
             ${SQL_USAGE_U_INPUT_LIVE} AS u_input,
             ${SQL_USAGE_U_CACHED_LIVE} AS u_cached,
-            ${SQL_USAGE_U_OUTPUT_LIVE} AS u_output
+            ${SQL_USAGE_U_OUTPUT_LIVE} AS u_output,
+            CASE WHEN ev.type = 'gateway.request.completed' AND ev.gw_ok = 1
+                      AND COALESCE(rr.has_in, 0) = 0
+                      AND ev.gw_in_t IN ('integer','real') AND ev.gw_in >= 0 AND ev.gw_in < 1e308
+                 THEN MAX(ev.gw_in - CASE WHEN ev.gw_cached_t IN ('integer','real')
+                                          AND ev.gw_cached >= 0 AND ev.gw_cached < 1e308
+                                     THEN ev.gw_cached ELSE 0 END, 0)
+                 ELSE 0 END AS u_fb_input,
+            CASE WHEN ev.type = 'gateway.request.completed' AND ev.gw_ok = 1
+                      AND COALESCE(rr.has_cached, 0) = 0
+                      AND ev.gw_cached_t IN ('integer','real') AND ev.gw_cached >= 0 AND ev.gw_cached < 1e308
+                 THEN ev.gw_cached ELSE 0 END AS u_fb_cached,
+            CASE WHEN ev.type = 'gateway.request.completed' AND ev.gw_ok = 1
+                      AND COALESCE(rr.has_out, 0) = 0
+                      AND ev.gw_out_t IN ('integer','real') AND ev.gw_out >= 0 AND ev.gw_out < 1e308
+                 THEN ev.gw_out ELSE 0 END AS u_fb_output
      FROM ev
+     LEFT JOIN run_exec re ON ev.exec_nested = re.execution_id
+     LEFT JOIN run_report rr ON rr.task_run_id = re.task_run_id
      LEFT JOIN executions ex ON ev.execution_id = ex.id
      LEFT JOIN tasks t ON ev.task_id = t.id
      LEFT JOIN tasks ex_t ON ex.task_id = ex_t.id
-     LEFT JOIN task_run_attempt_dispatch tra ON ev.execution_id = tra.execution_id`,
+     LEFT JOIN executions run_ex ON ev.exec_nested = run_ex.id
+     LEFT JOIN tasks run_t ON run_ex.task_id = run_t.id
+     LEFT JOIN task_run_attempt_dispatch tra ON COALESCE(ev.exec_nested, ev.execution_id) = tra.execution_id`,
     windowsStartIso,
     fullEndIso,
   )
@@ -762,6 +1002,9 @@ function readStatsSummaryUncached(
     } else if (row.type === 'turn_usage') {
       bucket.inputTokens += row.u_input + row.u_cached
       bucket.outputTokens += row.u_output
+    } else if (row.type === 'gateway.request.completed') {
+      bucket.inputTokens += row.u_fb_input + row.u_fb_cached
+      bucket.outputTokens += row.u_fb_output
     }
   }
 
@@ -846,6 +1089,9 @@ function readStatsSummaryUncached(
     } else if (row.type === 'turn_usage') {
       g.inputTokens += row.u_input + row.u_cached
       g.outputTokens += row.u_output
+    } else if (row.type === 'gateway.request.completed') {
+      g.inputTokens += row.u_fb_input + row.u_fb_cached
+      g.outputTokens += row.u_fb_output
     }
   }
 
@@ -883,6 +1129,9 @@ function readStatsSummaryUncached(
     } else if (row.type === 'turn_usage') {
       g.inputTokens += row.u_input + row.u_cached
       g.outputTokens += row.u_output
+    } else if (row.type === 'gateway.request.completed') {
+      g.inputTokens += row.u_fb_input + row.u_fb_cached
+      g.outputTokens += row.u_fb_output
     }
   }
 
@@ -1157,18 +1406,31 @@ function nonNegativeNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }
 
+/** True when the field holds a defined finite non-negative number (explicit zero counts). */
+function isMeasuredNumber(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
 /**
  * Full input for a turn_usage event is the untrusted input_tokens plus the
- * optional cached_input_tokens partition the client reported (Cursor exposes
+ * cached input partition the client reported. Cursor exposes
  * cached_input_tokens as the total cached-input partition, of which
  * cache_read_input_tokens and cache_creation_input_tokens are the read/write
- * split). Legacy events that only report input_tokens are unchanged. The cache
- * partition is counted exactly once here; the read/creation split is never
- * added on top, and a separate total_tokens field is never added either
- * because that would double count the same input.
+ * split; Grok-style events may only carry the read/creation split fields, so a
+ * missing total falls back to summing the defined splits (a lone split still
+ * counts). Legacy events that only report input_tokens are unchanged. The
+ * cache partition is counted exactly once here; a valid total is never added
+ * on top of the splits, and a separate total_tokens field is never added
+ * either because that would double count the same input.
  */
 function fullInputTokens(record: JsonRecord): number {
-  return nonNegativeNumber(record.input_tokens) + nonNegativeNumber(record.cached_input_tokens)
+  return nonNegativeNumber(record.input_tokens) + normalizedCachedTokens(record)
+}
+
+/** Defined cached_input_tokens total wins (explicit zero counts); otherwise the sum of defined read/creation splits. */
+function normalizedCachedTokens(record: JsonRecord): number {
+  if (isMeasuredNumber(record.cached_input_tokens)) return record.cached_input_tokens as number
+  return nonNegativeNumber(record.cache_read_input_tokens) + nonNegativeNumber(record.cache_creation_input_tokens)
 }
 
 function localDayKeyOf(iso: string): string {
@@ -1270,6 +1532,16 @@ function buildWindow(
     } else if (row.type === 'turn_usage') {
       const inputTokens = row.u_input + row.u_cached
       const outputTokens = row.u_output
+      totalTokens += inputTokens + outputTokens
+      if (!persisted) continue
+      const identity = resolveStatsModelIdentity(persisted, options.resolveDisplayNames)
+      const g = ensureWindowModel(modelMap, identity)
+      recordModelDisplay(g, identity)
+      g.inputTokens += inputTokens
+      g.outputTokens += outputTokens
+    } else if (row.type === 'gateway.request.completed') {
+      const inputTokens = row.u_fb_input + row.u_fb_cached
+      const outputTokens = row.u_fb_output
       totalTokens += inputTokens + outputTokens
       if (!persisted) continue
       const identity = resolveStatsModelIdentity(persisted, options.resolveDisplayNames)

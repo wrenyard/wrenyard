@@ -154,10 +154,7 @@ export function readTaskRunMetadata(taskRunId: string, deps: TaskRunMetadataDeps
   const gatewayByExecution = readGatewayEvidence(executionIds, deps)
   const eventsByExecution = new Map<string, TurnUsageEvent[]>()
   for (const a of attemptRows) {
-    eventsByExecution.set(
-      a.execution_id,
-      omitUnmeasuredInput(readExecutionEvents(a.execution_id, deps), gatewayByExecution.get(a.execution_id)),
-    )
+    eventsByExecution.set(a.execution_id, readExecutionEvents(a.execution_id, deps))
   }
 
   const taskTps = deps.readTaskTps(taskRunId)
@@ -239,11 +236,6 @@ export function readTaskRunMetadataBatch(taskRunIds: string[], deps: TaskRunMeta
       eventsByExecution.set(row.execution_id, bucket)
     }
   }
-  for (const [executionId, events] of eventsByExecution) {
-    const evidence = gatewayByExecution.get(executionId)
-    if (evidence?.inputUnmeasured) eventsByExecution.set(executionId, omitUnmeasuredInput(events, evidence))
-  }
-
   // Same sum/rate semantics as readTaskTps: aggregate each task's samples and
   // keep only a finite positive tokens-per-second rate.
   const tpsByTask = new Map<string, TaskRunMetadataTps>()
@@ -277,13 +269,16 @@ export function readTaskRunMetadataBatch(taskRunIds: string[], deps: TaskRunMeta
 }
 
 /**
- * Successful gateway completion facts used by both readers. `inputUnmeasured`
- * latches when a status-200 completion carried no usable `usage.input`, which
- * proves the upstream never measured it; `identity` keeps the persisted event
- * id so the latest attributed identity can be selected deterministically.
+ * Successful gateway completion facts used by both readers. `usage`/`measured`
+ * carry the per-executionId usage sums that backfill partitions the client
+ * never reported; `identity` keeps the persisted event id so the latest
+ * attributed identity can be selected deterministically.
  */
 interface GatewayEvidence {
-  inputUnmeasured: boolean
+  /** Summed usage partitions across successful completions. */
+  usage: { input: number; output: number; cached: number }
+  /** Per-partition measurement latch: true when at least one completion carried the field. */
+  measured: { input: boolean; output: boolean; cached: boolean }
   identity?: { provider: string; model: string; eventId: number }
 }
 
@@ -305,9 +300,17 @@ function readGatewayEvidence(executionIds: string[], deps: TaskRunMetadataDeps):
   )) {
     const parsed = parseGatewayCompletion(row.data, row.id)
     if (!parsed) continue
-    const evidence = result.get(parsed.executionId) ?? { inputUnmeasured: false }
-    if (parsed.inputUnmeasured) evidence.inputUnmeasured = true
+    const evidence = result.get(parsed.executionId) ?? {
+      usage: { input: 0, output: 0, cached: 0 },
+      measured: { input: false, output: false, cached: false },
+    }
     if (parsed.identity) evidence.identity = parsed.identity
+    evidence.usage.input += parsed.usage.input
+    evidence.usage.output += parsed.usage.output
+    evidence.usage.cached += parsed.usage.cached
+    if (parsed.measured.input) evidence.measured.input = true
+    if (parsed.measured.output) evidence.measured.output = true
+    if (parsed.measured.cached) evidence.measured.cached = true
     result.set(parsed.executionId, evidence)
   }
   return result
@@ -323,7 +326,12 @@ function readGatewayEvidence(executionIds: string[], deps: TaskRunMetadataDeps):
 function parseGatewayCompletion(
   value: string | null,
   eventId: number,
-): { executionId: string; inputUnmeasured: boolean; identity?: { provider: string; model: string; eventId: number } } | undefined {
+): {
+  executionId: string
+  usage: { input: number; output: number; cached: number }
+  measured: { input: boolean; output: boolean; cached: boolean }
+  identity?: { provider: string; model: string; eventId: number }
+} | undefined {
   if (value === null) return undefined
   let parsed: unknown
   try {
@@ -345,7 +353,22 @@ function parseGatewayCompletion(
   const usage = rawUsage && typeof rawUsage === 'object' && !Array.isArray(rawUsage)
     ? rawUsage as Record<string, unknown>
     : undefined
-  const inputMeasured = readNonNegativeInteger(usage?.input) !== undefined
+  // Gateway contract: `input` is the full measured input (it already includes
+  // any cached portion), so `cachedInput` is summed separately and never added
+  // on top of `input`.
+  const inputValue = readNonNegativeInteger(usage?.input)
+  const outputValue = readNonNegativeInteger(usage?.output)
+  const cachedValue = readNonNegativeInteger(usage?.cachedInput)
+  const usageSums = {
+    input: inputValue ?? 0,
+    output: outputValue ?? 0,
+    cached: cachedValue ?? 0,
+  }
+  const measured = {
+    input: inputValue !== undefined,
+    output: outputValue !== undefined,
+    cached: cachedValue !== undefined,
+  }
 
   const provider = typeof data.provider === 'string' ? data.provider.trim() : ''
   const publicModel = typeof data.publicModel === 'string' ? data.publicModel.trim() : ''
@@ -354,24 +377,7 @@ function parseGatewayCompletion(
     const model = publicModel.slice(provider.length + 1).trim()
     if (model !== '') identity = { provider, model, eventId }
   }
-  return { executionId, inputUnmeasured: !inputMeasured, identity }
-}
-
-/**
- * Drops a parsed input partition when the gateway proved it was never
- * measured. A client compatibility zero is then indistinguishable from a real
- * zero, so the truthful projection is an absent input; output and every other
- * partition are untouched.
- */
-function omitUnmeasuredInput(events: TurnUsageEvent[], evidence: GatewayEvidence | undefined): TurnUsageEvent[] {
-  if (!evidence?.inputUnmeasured) return events
-  let changed = false
-  const next = events.map((event) => {
-    if (event.input === undefined) return event
-    changed = true
-    return { ...event, input: undefined }
-  })
-  return changed ? next : events
+  return { executionId, usage: usageSums, measured, identity }
 }
 
 function isNonBlank(value: string | null): value is string {
@@ -403,8 +409,10 @@ function projectTaskRunMetadata(input: {
   // Unavailable when there are no attempts or no displayable event carries any
   // valid token partition. Otherwise 'complete' requires every attempt to have
   // at least one persisted row, every row to be trusted additive, and every
-  // row to carry valid input, normalized cached total and output. Decoupled
-  // from pricing and TPS completeness.
+  // row to carry valid input, normalized cached total and output. Gateway
+  // backfilled partitions do not count toward completeness: they carry no
+  // client trust evidence, so 'partial' already describes the emitted usage.
+  // Decoupled from pricing and TPS completeness.
   let anyDisplayableValidToken = false
   let everyAttemptHasRow = attemptRows.length > 0
   let everyRowTrusted = true
@@ -430,8 +438,20 @@ function projectTaskRunMetadata(input: {
     }
   }
 
+  // Gateway coverage probe: a run may carry no client turn_usage rows at all
+  // yet still be measurable through its attributed gateway completions, in
+  // which case the emitted usage is useful (but not client-verified).
+  let anyGatewayMeasured = false
+  for (const a of attemptRows) {
+    const evidence = gatewayByExecution.get(a.execution_id)
+    if (evidence && (evidence.measured.input || evidence.measured.output || evidence.measured.cached)) {
+      anyGatewayMeasured = true
+      break
+    }
+  }
+
   let completeness: TaskUsageCompleteness
-  if (attemptRows.length === 0 || !anyDisplayableValidToken) completeness = 'unavailable'
+  if (attemptRows.length === 0 || (!anyDisplayableValidToken && !anyGatewayMeasured)) completeness = 'unavailable'
   else if (everyAttemptHasRow && everyRowTrusted && everyRowFullTokens) completeness = 'complete'
   else completeness = 'partial'
 
@@ -460,6 +480,13 @@ function projectTaskRunMetadata(input: {
   let sumOutput = 0
   let sumRead = 0
   let sumWrite = 0
+  // Whether any displayable client event reported each partition. A partition
+  // entirely absent from client events may be backfilled from summed gateway
+  // usage below; a partially reported partition is never mixed with gateway
+  // values.
+  let anyClientInput = false
+  let anyClientCached = false
+  let anyClientOutput = false
   for (const a of attemptRows) {
     const events = eventsByExecution.get(a.execution_id) ?? []
     for (const e of events) {
@@ -467,17 +494,57 @@ function projectTaskRunMetadata(input: {
         allInput = allCached = allOutput = allRead = allWrite = false
         continue
       }
-      if (e.input !== undefined) sumInput += e.input
+      if (e.input !== undefined) { sumInput += e.input; anyClientInput = true }
       else allInput = false
-      if (e.cached !== undefined) sumCached += e.cached
+      if (e.cached !== undefined) { sumCached += e.cached; anyClientCached = true }
       else allCached = false
-      if (e.output !== undefined) sumOutput += e.output
+      if (e.output !== undefined) { sumOutput += e.output; anyClientOutput = true }
       else allOutput = false
       if (e.read !== undefined) sumRead += e.read
       else allRead = false
       if (e.write !== undefined) sumWrite += e.write
       else allWrite = false
     }
+  }
+
+  // Gateway fallback: a usage partition the client never reported anywhere in
+  // the run is filled from the summed successful gateway completions for the
+  // attempts that measured it. Client-reported partitions always win —
+  // including an explicit zero — and a partition partially reported by clients
+  // is never mixed with gateway sums. Fallback is per-attempt, so a run with
+  // no client rows at all still resolves its gateway-only partitions.
+  let sumGatewayInput = 0
+  let sumGatewayOutput = 0
+  let sumGatewayCached = 0
+  let anyGatewayInput = false
+  let anyGatewayOutput = false
+  let anyGatewayCached = false
+  for (const a of attemptRows) {
+    const evidence = gatewayByExecution.get(a.execution_id)
+    if (!evidence) continue
+    sumGatewayInput += evidence.usage.input
+    sumGatewayOutput += evidence.usage.output
+    sumGatewayCached += evidence.usage.cached
+    if (evidence.measured.input) anyGatewayInput = true
+    if (evidence.measured.output) anyGatewayOutput = true
+    if (evidence.measured.cached) anyGatewayCached = true
+  }
+  if (!anyClientInput && anyGatewayInput) {
+    // Gateway `usage.input` is the full measured input and already includes
+    // the cached portion, so the client-shaped input_tokens partition is the
+    // uncached remainder; subtracting a client-reported cached partition is
+    // avoided because an unrelated client cache total cannot be derived from
+    // the gateway measurements.
+    sumInput = Math.max(sumGatewayInput - sumGatewayCached, 0)
+    allInput = true
+  }
+  if (!anyClientCached && anyGatewayCached) {
+    sumCached = sumGatewayCached
+    allCached = true
+  }
+  if (!anyClientOutput && anyGatewayOutput) {
+    sumOutput = sumGatewayOutput
+    allOutput = true
   }
 
   if (allInput) usage.input_tokens = sumInput
@@ -847,12 +914,12 @@ function parseTurnUsage(value: string | null): TurnUsageEvent {
   const writeSplit = readNonNegativeInteger(rec.cache_creation_input_tokens)
   const output = readNonNegativeInteger(rec.output_tokens)
 
-  // Normalized cached total: full cached when present, otherwise read+creation
-  // only when both optional splits are valid, otherwise undefined. The full
-  // cached value is never added on top of the splits.
+  // Normalized cached total: full cached when present, otherwise the sum of
+  // whichever read/creation splits are defined (a lone split still counts).
+  // The full cached value is never added on top of the splits.
   let cached: number | undefined
   if (fullCached !== undefined) cached = fullCached
-  else if (readSplit !== undefined && writeSplit !== undefined) cached = readSplit + writeSplit
+  else if (readSplit !== undefined || writeSplit !== undefined) cached = (readSplit ?? 0) + (writeSplit ?? 0)
 
   return {
     trust,
