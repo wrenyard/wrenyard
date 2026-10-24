@@ -6,7 +6,6 @@ import { paceView, quotaLevel, quotaPoolLevel, resetView } from '@/renderer/comp
 import { openSessionInspector } from '@/renderer/lib/session-inspector';
 import { useQuotaQuery } from '@/renderer/lib/queries';
 import { getCurrentSession, restoreMain, useMiniMode } from '@/renderer/lib/mini';
-import { selectChatGptFundingSource } from '@wrenyard/providers/chatgpt';
 import { useComposerSelection, useSessionUsage } from '../state/session-usage.js';
 
 function useMinuteNow(): number {
@@ -49,22 +48,9 @@ export function QuotaRingButton() {
     const tightest = finite.reduce((best, entry) =>
       (entry.remainingPct < best.remainingPct ? entry : best));
     if (full.id !== 'chatgpt') return { window: tightest, fallbackBalance: undefined, creditsUnknown: false };
-    // The shared subscription-first rule decides the ring source: any
-    // confirmed-exhausted applicable window may hand off to Credits, while a
-    // stale/unknown observation never fabricates a paid fallback and an
-    // absent/zero balance stays a real subscription window. Credits
-    // availability comes from the parser's flag-derived `availability`,
-    // never reconstructed from the numeric amount.
-    const stale = full.stale === true;
+    // Desktop main applies the subscription-first funding rule.
     const balance = full.balances.find((entry) => entry.id === 'chatgpt/credits');
-    const availability = balance?.availability;
-    const source = selectChatGptFundingSource({
-      subscriptionExhausted: stale ? false : finite.some((entry) => entry.remainingPct <= 0),
-      credits: stale || balance === undefined ? 'unknown'
-        : availability === 'available' || availability === 'unavailable'
-          ? (availability === 'available' ? 'available' : 'empty')
-          : 'unknown',
-    });
+    const source = full.fundingSource;
     if (source === 'credits' && balance !== undefined) {
       return { window: tightest, fallbackBalance: balance, creditsUnknown: false };
     }

@@ -1,5 +1,6 @@
 import { QUOTA_EVIDENCE_GRACE_MS, quotaStateOf } from '@wrenyard/auto-routing';
 import type { BalanceEvidence, QuotaEvidence } from '@wrenyard/auto-routing';
+import { CHATGPT_CREDITS_BALANCE_ID, selectChatGptFundingSource, type ChatGptFundingSource } from '@wrenyard/providers/chatgpt';
 import type { QuotaProviderState } from './main/projections/quota-runtime';
 import type {
   ProviderAuthMode,
@@ -264,12 +265,34 @@ function projectProvider(id: string, provider: QuotaProviderState, lastSuccessAt
     ...(displayLine ? { displayLine } : {}),
     ...(provider.code ? { code: sanitizeQuotaText(provider.code) } : {}),
     ...(provider.estimatedSpend ? { estimatedSpend: provider.estimatedSpend } : {}),
+    ...(id === 'chatgpt' && windows.length > 0
+      ? { fundingSource: chatGptFundingSource(provider.stale, windows, balances) }
+      : {}),
   };
   const identity = {
     ...(accountType ? { accountType } : {}),
     ...(idp ? { idp } : {}),
   };
   return { ...snapshot, ...identity };
+}
+
+/**
+ * The shared subscription-first rule for the ChatGPT ring: any confirmed
+ * exhausted window may hand off to Credits, while a stale observation never
+ * fabricates a paid fallback. Credits availability is the parser's
+ * flag-derived `availability`, never reconstructed from the amount.
+ */
+function chatGptFundingSource(
+  stale: boolean,
+  windows: readonly QuotaWindowSnapshot[],
+  balances: readonly QuotaBalanceSnapshot[],
+): ChatGptFundingSource {
+  const availability = balances.find((entry) => entry.id === CHATGPT_CREDITS_BALANCE_ID)?.availability;
+  return selectChatGptFundingSource({
+    subscriptionExhausted: !stale && windows.some((entry) => entry.remainingPct <= 0),
+    credits: stale || availability === undefined || availability === 'unknown' ? 'unknown'
+      : availability === 'available' ? 'available' : 'empty',
+  });
 }
 
 function projectCatalog(

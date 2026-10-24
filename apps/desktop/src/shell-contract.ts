@@ -978,6 +978,8 @@ export interface QuotaProviderSnapshot {
    * (Devin only). Absent for other providers and when no traffic was recorded.
    */
   estimatedSpend?: QuotaSpendEstimate[];
+  /** ChatGPT subscription-first funding source (Desktop main-computed); absent for other providers. */
+  fundingSource?: 'subscription' | 'credits' | 'exhausted' | 'unresolved';
   displayLine?: string;
   message?: string;
   code?: string;
