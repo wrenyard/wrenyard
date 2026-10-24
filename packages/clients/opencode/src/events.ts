@@ -38,7 +38,7 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
     let emittedTerminal = false;
     let retryStderrBuffer = '';
     const usage = {
-        input: 0, output: 0, reasoning: 0, total: 0,
+        input: 0, output: 0, reasoning: 0, total: 0, cacheRead: 0, cacheWrite: 0,
         seen: false, inputIncomplete: false, outputIncomplete: false,
     };
     const flushUsage = (): AgentEvent | undefined => {
@@ -61,6 +61,14 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
             data.input_tokens = usage.input;
         if (outputComplete)
             data.output_tokens = usage.output;
+        // Cache tokens are input-side: they are emitted whenever the input
+        // partition was measured, independent of the output partition.
+        if (inputComplete) {
+            if (usage.cacheRead > 0)
+                data.cache_read_input_tokens = usage.cacheRead;
+            if (usage.cacheWrite > 0)
+                data.cache_creation_input_tokens = usage.cacheWrite;
+        }
         // Optional partitions are only truthful invocation totals when both
         // required partitions were measured.
         if (inputComplete && outputComplete) {
@@ -140,7 +148,7 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
 }
 
 /** Sums one native step's tokens into the invocation aggregate, per partition. */
-function observeStepUsage(usage: { input: number; output: number; reasoning: number; total: number; seen: boolean; inputIncomplete: boolean; outputIncomplete: boolean }, record: Record<string, unknown>): void {
+function observeStepUsage(usage: { input: number; output: number; reasoning: number; total: number; cacheRead: number; cacheWrite: number; seen: boolean; inputIncomplete: boolean; outputIncomplete: boolean }, record: Record<string, unknown>): void {
     // A step_finish that reports no tokens still proves neither partition was
     // measured for this invocation; skipping it would leave earlier partial
     // sums looking complete.
@@ -179,6 +187,23 @@ function observeStepUsage(usage: { input: number; output: number; reasoning: num
         const sum = addUsageTokens(usage.total, total);
         if (sum !== undefined)
             usage.total = sum;
+    }
+    // Cache counters are optional like reasoning/total: a missing or invalid
+    // cache object or field marks no partition incomplete.
+    const cache = recordOf(tokens, 'cache');
+    if (cache) {
+        const cacheRead = nonnegativeInt(cache.read);
+        if (cacheRead !== undefined) {
+            const sum = addUsageTokens(usage.cacheRead, cacheRead);
+            if (sum !== undefined)
+                usage.cacheRead = sum;
+        }
+        const cacheWrite = nonnegativeInt(cache.write);
+        if (cacheWrite !== undefined) {
+            const sum = addUsageTokens(usage.cacheWrite, cacheWrite);
+            if (sum !== undefined)
+                usage.cacheWrite = sum;
+        }
     }
 }
 
