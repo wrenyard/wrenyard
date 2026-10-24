@@ -1,3 +1,4 @@
+import { countTPSTokens } from '@wrenyard/metrics';
 import {
   GATEWAY_ADMISSION_REFUSED,
   GATEWAY_HEADERS,
@@ -671,6 +672,10 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         }
         response.end();
         usage = observer.result();
+        if (resolved.provider.id === 'devin' && (usage?.input === undefined || usage.input === 0)) {
+          const estimated = countTPSTokens(JSON.stringify(body));
+          if (typeof estimated === 'number') usage = { ...usage, input: estimated };
+        }
         await finish({
           ...forwarded, status: repaired.status,
           ...(streamState === undefined ? {} : { routeState: streamState.state, routeUntil: streamState.until, faultReason: streamState.faultKind, routePhase: streamState.phase }),
