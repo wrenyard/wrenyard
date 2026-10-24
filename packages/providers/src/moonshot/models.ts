@@ -2,9 +2,17 @@ import { defineProvider, model, openAI, REASONING_LOW_HIGH_MAX } from '../base/m
 
 export const definition = defineProvider({
   modelProtocols: ['openai_chat'],
-  id: 'moonshot', displayName: 'Moonshot', credentialResolver: 'managed', defaultModel: 'kimi-k3',
-  models: [model('kimi-k3', 1_048_576, 32_768, undefined, REASONING_LOW_HIGH_MAX)],
+  id: 'moonshot', displayName: 'Moonshot', credentialResolver: 'managed', defaultModel: 'kimi-k3.1-pro',
+  models: [
+    { ...model('kimi-k3.1-pro', 1_048_576, 1_048_576, undefined, REASONING_LOW_HIGH_MAX), supportsFast: true },
+    model('kimi-k3', 1_048_576, 32_768, undefined, REASONING_LOW_HIGH_MAX),
+  ],
   protocols: [openAI('https://api.moonshot.cn/v1/chat/completions')],
+  // Fast is the K3.1 Pro Highspeed wire id and nothing else: only that model
+  // has an upstream fast variant, and the reasoning effort stays untouched.
+  fastMapping: {
+    request: (modelId, fast) => (fast && modelId === 'kimi-k3.1-pro' ? { model: 'kimi-k3.1-pro-highspeed' } : {}),
+  },
   convertReasoningEffort: (_modelId, effort, protocol) => {
       if (protocol === 'openai_responses') return { reasoning: { effort } };
       if (protocol === 'anthropic_messages') return { output_config: { effort } };

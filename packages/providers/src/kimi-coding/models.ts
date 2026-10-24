@@ -3,8 +3,9 @@ import { defineProvider, model, openAI, anthropic, REASONING_LOW_HIGH_MAX, effor
 export const definition = defineProvider({
   modelProtocols: ['openai_chat', 'anthropic_messages'],
   id: 'kimi-coding', displayName: 'Kimi Coding', credentialResolver: 'managed',
-  defaultModel: 'kimi-k3', quotaProvider: 'kimi-coding',
+  defaultModel: 'kimi-k3.1-pro', quotaProvider: 'kimi-coding',
   models: [
+    { ...model('kimi-k3.1-pro', 1_048_576, 131_072, 'k3.1-pro', REASONING_LOW_HIGH_MAX), supportsFast: true },
     model('kimi-k3', 1_048_576, 32_768, 'k3', REASONING_LOW_HIGH_MAX),
     // K2.8 Preview context is 1M; no official max-output or reference token
     // price is published, so neither is registered. `kimi-for-coding` is the
@@ -18,11 +19,22 @@ export const definition = defineProvider({
     openAI('https://api.kimi.com/coding/v1/chat/completions'),
     anthropic('https://api.kimi.com/coding/v1/messages'),
   ],
+  // Fast is the K3.1 Pro Highspeed wire id and nothing else: only that model
+  // has an upstream fast variant, and the reasoning effort stays untouched.
+  fastMapping: {
+    request: (modelId, fast) => (fast && modelId === 'kimi-k3.1-pro' ? { model: 'k3.1-pro-highspeed' } : {}),
+  },
   // Gateway clients may materialize K3 thinking once their native syntax
   // supports it; the exact wire alias is the level itself. K3 never exposes
   // `none` (it swaps to K2.8 upstream); K2.8 Preview supports `none` through
   // the disabled-thinking switch; native clients map only their documented effort levels.
   reasoningEffortMappings: {
+    'kimi-k3.1-pro': {
+      codex: effortLadder(REASONING_LOW_HIGH_MAX),
+      claude: effortLadder(REASONING_LOW_HIGH_MAX),
+      codebuddy: effortLadder(REASONING_LOW_HIGH_MAX),
+      grok: effortLadder(REASONING_LOW_HIGH_MAX),
+    },
     'kimi-k3': {
       codex: effortLadder(REASONING_LOW_HIGH_MAX),
       claude: effortLadder(REASONING_LOW_HIGH_MAX),
@@ -42,6 +54,6 @@ export const definition = defineProvider({
     if (protocol === 'anthropic_messages') return { thinking: { type: 'enabled' }, output_config: { effort } };
     return { reasoning_effort: effort };
   },
-  description: 'Moonshot Kimi K3 与 Kimi K2.8 Preview 编程模型与订阅额度。',
+  description: 'Moonshot Kimi K3.1 Pro、Kimi K3 与 Kimi K2.8 Preview 编程模型与订阅额度。',
   setupHint: '输入 Kimi Coding API Key；Key 仅写入本机 Wrenyard runtime。',
 });
