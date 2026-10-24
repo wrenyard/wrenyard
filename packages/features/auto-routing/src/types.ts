@@ -91,7 +91,7 @@ export interface BalanceEvidence {
    *  only on a provider-declared unlimited row. */
   amount?: string;
   /** ISO-4217 currency code; selects the low-balance threshold. Absent on a
-   *  non-currency unit balance (e.g. Credits), which has no threshold. */
+   *  non-currency unit balance, which may have its own unit-specific bands. */
   currency?: string | null;
   /** Non-currency unit label carried for diagnostics; never a currency. */
   unit?: string;
@@ -100,9 +100,8 @@ export interface BalanceEvidence {
   unlimited?: boolean;
   /**
    * Explicit parser-attested availability (ChatGPT Credits only). When
-   * present it is authoritative for sufficiency and takes precedence over the
-   * numeric amount, which is display-only metadata: 'unknown' is always
-   * insufficient and never falls through to the amount/unlimited branches.
+   * present it gates the numeric balance bands: unavailable is exhausted,
+   * unknown is insufficient, and only available Credits use amount/unlimited.
    */
   availability?: 'available' | 'unavailable' | 'unknown';
   /** Timestamp (epoch ms) the observation was taken. */

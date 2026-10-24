@@ -591,8 +591,8 @@ function balanceEvidence(row: RawRow, validForMs = QUOTA_SNAPSHOT_VALID_FOR_MS):
  * first-positive heuristic, so an unrelated balance row can never fund it.
  * Availability comes from the parser's `availability` classification (derived
  * from the upstream `unlimited`/`hasCredits` flags), never from the numeric
- * amount. A present amount is carried verbatim as display-only metadata — it
- * does not gate admission.
+ * amount. A present amount is carried verbatim for Credits state bands after
+ * the availability gate permits it.
  */
 function unitBalanceEvidence(
   row: RawRow,
@@ -660,15 +660,16 @@ function chatGptCreditsConstraint(
 /**
  * One measured state classification for the Credits constraint: availability
  * comes from the parser's flag-derived `availability` field, never from the
- * numeric amount — `available` includes hasCredits-true rows whose amount is
- * absent, zero, negative or malformed, and `empty` means both flags valid and
- * false. The shared policy classifies it; this wrapper only maps its
- * four-level result onto the funding rule's three cases.
+ * numeric amount alone. Fresh low positive Credits remain an available funding
+ * source while ranking as insufficient; zero or an explicit upstream denial
+ * is empty. The shared policy supplies the state and freshness validation.
  */
 function chatGptCreditsState(nowMs: number, constraint: RequiredQuotaConstraint): 'available' | 'empty' | 'unknown' {
-  const state = assessRequiredQuota(nowMs, [constraint]).state;
-  if (state === 'exhausted') return 'empty';
-  if (state === 'sufficient' || state === 'abundant') return 'available';
+  const assessment = assessRequiredQuota(nowMs, [constraint]);
+  if (assessment.state === 'exhausted') return 'empty';
+  if (assessment.state === 'sufficient' || assessment.state === 'abundant'
+    || (constraint.balance?.availability === 'available' && assessment.evidence === 'measured'
+      && assessment.constraints.every((item) => item.rejectCode === null))) return 'available';
   return 'unknown';
 }
 

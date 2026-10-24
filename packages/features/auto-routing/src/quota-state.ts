@@ -80,8 +80,8 @@ function measuredBalance(
   if (!isFiniteNumber(observedAtMs)) return rejected('observation_time_not_finite');
   if (observedAtMs > nowMs) return rejected('future_observation');
   // An explicit parser-attested availability (ChatGPT Credits) is
-  // authoritative: 'available' is sufficient while fresh regardless of the
-  // display-only amount; 'unavailable' is a confirmed exhaustion never
+  // authoritative: 'available' permits fresh Credits balance bands;
+  // 'unavailable' is a confirmed exhaustion never
   // relaxed by age, even beside a positive amount; 'unknown' is insufficient
   // and never falls through to the amount/unlimited branches below.
   if (balance.availability !== undefined) {
@@ -91,9 +91,22 @@ function measuredBalance(
     if (balance.availability === 'unknown') {
       return { state: 'insufficient', headroom: null, rejectCode: null };
     }
+    const credits = balance.unit === 'Credits' && balance.unlimited !== true
+      && typeof balance.amount === 'string' && /^[+-]?\d+(?:\.\d+)?$/.test(balance.amount)
+      ? Number(balance.amount) : NaN;
+    if (isFiniteNumber(credits) && credits <= 0) {
+      return { state: 'exhausted', headroom: 0, rejectCode: null };
+    }
     const flagValidForMs = balance.validForMs;
     if (!isFiniteNumber(flagValidForMs) || flagValidForMs <= 0) return rejected('invalid_freshness_window');
     if (nowMs - observedAtMs > flagValidForMs) return rejected('stale_observation');
+    if (balance.unit === 'Credits' && balance.unlimited === true) {
+      return { state: 'abundant', headroom: null, rejectCode: null };
+    }
+    if (isFiniteNumber(credits)) {
+      const state = credits < 1_000 ? 'insufficient' : credits > 10_000 ? 'abundant' : 'sufficient';
+      return { state, headroom: null, rejectCode: null };
+    }
     return { state: 'sufficient', headroom: null, rejectCode: null };
   }
   // An explicit provider-declared unlimited balance is usable while fresh; it
@@ -290,9 +303,12 @@ export function assessRequiredQuota(
   else {
     state = worstState(measuredStates);
   }
-  // A confirmed free allowance with no measured evidence at all is abundant;
-  // exhaustion is never promoted, and measured evidence keeps governing.
+  // Confirmed free allowances retain their abundant promotion. CodeBuddy iOA
+  // explicitly stays in the last usable tier despite its free price.
+  const codeBuddyIoa = list.some((constraint) =>
+    constraint?.id === 'codebuddy/monthly' && constraint.usageUnknown === true);
   if (confirmedFreeSupply && state !== 'exhausted'
+    && !codeBuddyIoa
     && !list.some((constraint) => constraint != null && typeof constraint === 'object'
       && (constraint.evidence != null || constraint.balance != null))) {
     state = 'abundant';

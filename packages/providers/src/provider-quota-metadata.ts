@@ -1,6 +1,7 @@
 import { BUILTIN_PROVIDERS, resolveHistoricalOfferedModelId } from './catalog.js';
 import { providerQuotas } from './builtins.ts';
 import { binding, freeQuotaPool } from './base/quota-helpers.ts';
+import { codeBuddyDefaultPools } from './codebuddy/quota.ts';
 import type { ProviderQuotaBinding, ProviderQuotaPool } from './base/quota.ts';
 export type * from './base/quota.ts';
 
@@ -123,14 +124,18 @@ export { freeQuotaPool };
 
 /**
  * The binding selected by live supply evidence. Confirmed-free supply binds the
- * model to its provider's own free pool only; every other candidate keeps the
- * declared binding verbatim, including its paid default pools.
+ * model to its provider's own free pool. CodeBuddy confirms free supply only
+ * for iOA, whose unknown account quota still governs ranking and exhaustion.
+ * Every other candidate keeps the declared binding verbatim.
  */
 export function findProviderQuotaBindingForSupply(
   providerId: string,
   modelId: string,
   confirmedFree: boolean,
 ): ProviderQuotaBinding | undefined {
+  if (confirmedFree && providerId === 'codebuddy') {
+    return binding(providerId, modelId, codeBuddyDefaultPools('ioa'));
+  }
   return confirmedFree
     ? binding(providerId, modelId, [freePoolFor(providerId)])
     : findProviderQuotaBinding(providerId, modelId);

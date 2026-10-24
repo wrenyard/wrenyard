@@ -124,11 +124,12 @@ function requiredQuotaForBinding(
   bucket: ProviderQuotaBinding | undefined,
 ): RequiredQuotaConstraint[] {
   if (bucket === undefined) return [{ id: `${providerId}/usage`, evidence: null }]
-  return bucket.pools.map((pool) =>
-    pool.kind === 'balance'
-      ? { id: pool.quotaPoolId, evidence: null, kind: 'balance' as const, balance: null }
-      : { id: pool.quotaPoolId, evidence: null },
-  )
+  return bucket.pools.map((pool) => {
+    const usageUnknown = pool.usageUnknown === true ? { usageUnknown: true } : {}
+    return pool.kind === 'balance'
+      ? { id: pool.quotaPoolId, evidence: null, kind: 'balance' as const, balance: null, ...usageUnknown }
+      : { id: pool.quotaPoolId, evidence: null, ...usageUnknown }
+  })
 }
 
 /** Builds one policy CandidateInput from truthful resolved dispatch evidence,
@@ -145,8 +146,8 @@ export function toAutomaticCandidateInput(
   const confirmedFree = freeFact?.confirmedFree === true
   const intelligenceRank = INTELLIGENCE_ORDER[choice.intelligence as keyof typeof INTELLIGENCE_ORDER]
   if (intelligenceRank === undefined || !Number.isFinite(intelligenceRank)) return null
-  // A confirmed-free model binds to its provider's own free pool only, so an
-  // exhausted paid pool can never reject it while the live supply fact holds.
+  // Free supply keeps its own pool unless the provider's account quota also
+  // governs it (CodeBuddy iOA); price and quota availability remain separate.
   const binding = findProviderQuotaBindingForSupply(choice.provider, choice.model, confirmedFree)
   // Authenticated confirmed-free supply (`freeFact.confirmedFree === true`) is
   // the only evidence that lets a free route with no published price reach
@@ -167,9 +168,9 @@ export function toAutomaticCandidateInput(
   )
   // When the snapshot carries an explicit entry its required constraints are
   // authoritative, including an upstream-declared empty list (no applicable
-  // quota) — except for confirmed-free supply, which must reference its own
-  // free pool: a blocked paid pool can never reject a confirmed-free model
-  // while SupplyEvidencePolicy zeroes its price. A missing entry must never
+  // quota) — confirmed-free supply instead follows its supply binding, which
+  // retains the account quota for CodeBuddy iOA and otherwise uses a free pool.
+  // A missing entry must never
   // silently bypass quota: build explicit null constraints for every bound
   // pool from the unified provider metadata (both usage `quota` and `balance`
   // kinds), so policy sees incomplete/unknown coverage rather than an unbound

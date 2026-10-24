@@ -10,15 +10,21 @@ export function snapshotCandidate(input: CandidateInput): CandidateInput {
         return { id: "", evidence: null };
       }
       const id = typeof constraint.id === "string" ? constraint.id : "";
+      const flags = {
+        ...(constraint.evidenceStatus === undefined ? {} : { evidenceStatus: constraint.evidenceStatus }),
+        ...(constraint.usageUnknown === true ? { usageUnknown: true } : {}),
+        ...(constraint.observedExhausted === true ? { observedExhausted: true } : {}),
+      };
       // A discriminated balance constraint carries balance evidence instead
       // of percent/replenishment quota evidence; copy it defensively.
       if (constraint.kind === "balance") {
         const balance = constraint.balance;
         if (balance === null || balance === undefined || typeof balance !== "object") {
-          return { id, evidence: null, kind: "balance", balance: null };
+          return { id, ...flags, evidence: null, kind: "balance", balance: null };
         }
         return {
           id,
+          ...flags,
           evidence: null,
           kind: "balance",
           balance: {
@@ -34,7 +40,7 @@ export function snapshotCandidate(input: CandidateInput): CandidateInput {
       }
       const evidence = constraint.evidence;
       if (evidence === null || evidence === undefined || typeof evidence !== "object") {
-        return { id, evidence: null };
+        return { id, ...flags, evidence: null };
       }
       const snapshotEvidence: QuotaEvidence = {
         remainingPercent: evidence.remainingPercent,
@@ -48,7 +54,7 @@ export function snapshotCandidate(input: CandidateInput): CandidateInput {
       if (evidence.windowMs !== undefined) {
         snapshotEvidence.windowMs = evidence.windowMs;
       }
-      return { id, evidence: snapshotEvidence };
+      return { id, ...flags, evidence: snapshotEvidence };
     })
     : [];
   let marginalPrice: MarginalPriceEvidence | null = null;
