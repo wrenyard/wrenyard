@@ -127,6 +127,7 @@ export class ExecService {
   readonly #maxCompletedRuns: number;
   readonly #maxCompletedBytes: number;
   readonly #runs = new Map<ExecId, ExecEntry>();
+  #pendingStarts = 0;
   #sequence = 0;
   #closed = false;
   readonly #shutdown = new AbortController();
@@ -166,6 +167,7 @@ export class ExecService {
     delete clientOptions.id;
     delete clientOptions.queued;
     delete clientOptions.onCancel;
+    this.#pendingStarts += 1;
     try {
       const session = await client.start(prepared.request, { ...clientOptions, signal });
       if (this.#closed || entry.terminal) {
@@ -183,7 +185,22 @@ export class ExecService {
         this.#settle(entry, { error: error instanceof Error ? error.message : 'execution failed' });
       }
       throw error;
+    } finally {
+      this.#pendingStarts -= 1;
     }
+  }
+
+  /**
+   * Synchronous view of work in flight: `true` while a `start()` is between
+   * the pre-client checks and `#bind`, or while any registered entry is a
+   * nonterminal `running` run. Queued-but-not-started entries do not count.
+   */
+  hasActiveRuns(): boolean {
+    if (this.#pendingStarts > 0) return true;
+    for (const entry of this.#runs.values()) {
+      if (!entry.terminal && entry.status === 'running') return true;
+    }
+    return false;
   }
 
   /** Register a queued placeholder before waiting for an external resource. */

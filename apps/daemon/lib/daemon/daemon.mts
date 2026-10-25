@@ -1850,8 +1850,8 @@ async function createForemanDaemonResources(
         refuse('npm_unavailable', 'npm is not available on PATH.')
       }
       const load = readExecutionLoad(runtime.db)
-      if (load.activeExecutions > 0) {
-        refuse('active_executions', 'Stop active executions before installing or upgrading a client.', load.activeExecutions)
+      if (load.activeExecutions > 0 || runtime.execService.hasActiveRuns()) {
+        refuse('active_executions', 'Stop active executions before installing or upgrading a client.')
       }
       const status = await client.inspect()
       const installation = status.installation
@@ -1869,8 +1869,8 @@ async function createForemanDaemonResources(
         refuse('unsupported_source', 'Client was not installed through npm; manage it manually.')
       }
       const finalLoad = readExecutionLoad(runtime.db)
-      if (finalLoad.activeExecutions > 0) {
-        refuse('active_executions', 'Stop active executions before installing or upgrading a client.', finalLoad.activeExecutions)
+      if (finalLoad.activeExecutions > 0 || runtime.execService.hasActiveRuns()) {
+        refuse('active_executions', 'Stop active executions before installing or upgrading a client.')
       }
       if (clientJobs.has(id)) {
         refuse('client_busy', `A ${clientJobs.get(id)!.action} is already in progress for this client.`)
