@@ -4,7 +4,6 @@ import { cn } from 'cn';
 
 export const SIDE_PANEL_DEFAULT_WIDTH = 380;
 export const SIDE_PANEL_MIN_WIDTH = 280;
-export const SIDE_PANEL_MAX_WIDTH = 640;
 export const SIDE_PANEL_MAIN_MIN_WIDTH = 360;
 const HANDLE_HALF_WIDTH = 3;
 const KEYBOARD_STEP = 16;
@@ -41,16 +40,13 @@ export interface SidePanelResize {
 
 export function useSidePanelResize(enabled: boolean, reservedWidth: number): SidePanelResize {
   const [preferred, setPreferred] = useState(() =>
-    clamp(readStoredWidth() ?? SIDE_PANEL_DEFAULT_WIDTH, SIDE_PANEL_MIN_WIDTH, SIDE_PANEL_MAX_WIDTH),
+    Math.max(SIDE_PANEL_MIN_WIDTH, readStoredWidth() ?? SIDE_PANEL_DEFAULT_WIDTH),
   );
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [resizing, setResizing] = useState(false);
   const preferredRef = useRef(preferred);
   preferredRef.current = preferred;
-  const cap = Math.max(
-    SIDE_PANEL_MIN_WIDTH,
-    Math.min(SIDE_PANEL_MAX_WIDTH, viewportWidth - reservedWidth - SIDE_PANEL_MAIN_MIN_WIDTH),
-  );
+  const cap = Math.max(SIDE_PANEL_MIN_WIDTH, viewportWidth - reservedWidth - SIDE_PANEL_MAIN_MIN_WIDTH);
   const width = clamp(preferred, SIDE_PANEL_MIN_WIDTH, cap);
   const widthRef = useRef(width);
   widthRef.current = width;
@@ -88,7 +84,7 @@ export function useSidePanelResize(enabled: boolean, reservedWidth: number): Sid
       const next = clamp(
         Math.round(startWidth - (moveEvent.clientX - startX)),
         SIDE_PANEL_MIN_WIDTH,
-        Math.max(SIDE_PANEL_MIN_WIDTH, Math.min(SIDE_PANEL_MAX_WIDTH, window.innerWidth - reservedWidth - SIDE_PANEL_MAIN_MIN_WIDTH)),
+        Math.max(SIDE_PANEL_MIN_WIDTH, window.innerWidth - reservedWidth - SIDE_PANEL_MAIN_MIN_WIDTH),
       );
       preferredRef.current = next;
       setPreferred(next);
