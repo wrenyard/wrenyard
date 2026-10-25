@@ -889,5 +889,5 @@ let inputEncoder: typeof o200k_base | undefined;
 export function countInputTokens(text: string): number {
   if (text === '') return 0;
   inputEncoder ??= o200k_base;
-  return inputEncoder.encode(text).length;
+  return inputEncoder.encode(text, { allowedSpecial: new Set(), disallowedSpecial: new Set() }).length;
 }

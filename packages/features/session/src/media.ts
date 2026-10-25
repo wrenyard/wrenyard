@@ -122,7 +122,7 @@ function isPixelArt(
 function prepareText(bytes: Buffer): Partial<SessionFile> {
   if (!isUtf8Text(bytes)) return {};
   const content = bytes.toString('utf8');
-  const tokens = TEXT_ENCODING.encode(content);
+  const tokens = TEXT_ENCODING.encode(content, { allowedSpecial: new Set(), disallowedSpecial: new Set() });
   const totalTokens = tokens.length;
   if (totalTokens <= TEXT_TOKEN_CAP) {
     return { text: content, tokens: totalTokens, totalTokens, truncated: false };

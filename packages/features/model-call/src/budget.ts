@@ -23,7 +23,7 @@ export const IMAGE_INPUT_TOKEN_ESTIMATE = 1_200;
 export function estimateTokens(text: string): number {
   if (!text) return 0;
   tokenizer ??= o200k_base;
-  return tokenizer.encode(text).length;
+  return tokenizer.encode(text, { allowedSpecial: new Set(), disallowedSpecial: new Set() }).length;
 }
 
 /**

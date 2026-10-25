@@ -59,7 +59,7 @@ let tokenizer: typeof o200k_base | undefined;
 export function countTPSTokens(text: string): number | undefined {
     if (text === '') return 0;
     tokenizer ??= o200k_base;
-    return tokenizer.encode(text).length;
+    return tokenizer.encode(text, { allowedSpecial: new Set(), disallowedSpecial: new Set() }).length;
 }
 
 /** One measured generation: its counted tokens and the windows they streamed in. */
