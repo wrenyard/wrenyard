@@ -6,7 +6,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "js-tiktoken": "1.0.21"
+    "gpt-tokenizer": "4.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

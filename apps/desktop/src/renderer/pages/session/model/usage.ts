@@ -1,5 +1,5 @@
 import { isUsableTpsSample, rollingTps, tpsOfSample as tpsOf, weightedTps } from '@wrenyard/protocol/tps';
-import { getEncoding, type Tiktoken } from 'js-tiktoken';
+import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
 import type { ContextInspection, ContextItem, ContextItemKind, ContextLayerId, QuotaSnapshot, TaskRunUsage } from '@/shell-contract';
 import type { SessionRoutesPreviewRole } from '@wrenyard/protocol';
 import { boundedOutputReservation } from '@wrenyard/models';
@@ -883,11 +883,11 @@ export function roleContexts(calls: readonly CallModel[], options: RoleContextOp
   return entries;
 }
 
-let inputEncoder: Tiktoken | undefined;
+let inputEncoder: typeof o200k_base | undefined;
 
 /** Shared raw input estimator; calibration is only a display hint. */
 export function countInputTokens(text: string): number {
   if (text === '') return 0;
-  inputEncoder ??= getEncoding('o200k_base');
+  inputEncoder ??= o200k_base;
   return inputEncoder.encode(text).length;
 }

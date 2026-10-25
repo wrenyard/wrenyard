@@ -17,7 +17,7 @@
     "@wrenyard/models": "workspace:*",
     "@wrenyard/protocol": "workspace:*",
     "@wrenyard/providers": "workspace:*",
-    "js-tiktoken": "1.0.21"
+    "gpt-tokenizer": "4.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -21,9 +21,6 @@ overrides:
   hono@<4.13.5: 4.13.5
   katex@<0.18.2: 0.18.10
 
-patchedDependencies:
-  js-tiktoken@1.0.21: 1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39
-
 importers:
 
   .:
@@ -189,9 +186,9 @@ importers:
       cmdk:
         specifier: ^1.1.1
         version: 1.1.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      js-tiktoken:
-        specifier: 1.0.21
-        version: 1.0.21(patch_hash=1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39)
+      gpt-tokenizer:
+        specifier: 4.0.1
+        version: 4.0.1
     devDependencies:
       '@base-ui/react':
         specifier: ^1.8.0
@@ -747,9 +744,9 @@ importers:
       '@wrenyard/providers':
         specifier: workspace:*
         version: link:../../providers
-      js-tiktoken:
-        specifier: 1.0.21
-        version: 1.0.21(patch_hash=1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39)
+      gpt-tokenizer:
+        specifier: 4.0.1
+        version: 4.0.1
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -843,9 +840,9 @@ importers:
       diff:
         specifier: 9.0.0
         version: 9.0.0
-      js-tiktoken:
-        specifier: 1.0.21
-        version: 1.0.21(patch_hash=1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39)
+      gpt-tokenizer:
+        specifier: 4.0.1
+        version: 4.0.1
       sharp:
         specifier: 0.35.5
         version: 0.35.5(@types/node@22.20.1)
@@ -908,9 +905,9 @@ importers:
 
   packages/metrics:
     dependencies:
-      js-tiktoken:
-        specifier: 1.0.21
-        version: 1.0.21(patch_hash=1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39)
+      gpt-tokenizer:
+        specifier: 4.0.1
+        version: 4.0.1
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -3521,6 +3518,9 @@ packages:
   js-binary-schema-parser@2.0.3:
     resolution: {integrity: sha512-xezGJmOb4lk/M1ZZLTR/jaBHQ4gG/lqQnJqdIv4721DMggsa1bDVlHXNeHYogaIEHD9vCRv0fcL4hMA+Coarkg==}
 
+  gpt-tokenizer@4.0.1:
+    resolution: {integrity: sha512-wK70+RzfAFjzo9hJt57KOx7r2sJh9q+T8GJ92C6kJi5q9O4ZVmX/hbKalBA0ZFMxkhvOqBZc8kYCbIGbrdxVYQ==}
+
   js-tiktoken@1.0.21:
     resolution: {integrity: sha512-biOj/6M5qdgx5TKjDnFT1ymSpM5tbd3ylwDtrQvFQSu0Z7bBYko2dF+W/aUkXUPuk6IVpRxk/3Q2sHOzGlS36g==}
 
@@ -5449,7 +5449,7 @@ snapshots:
     dependencies:
       '@cfworker/json-schema': 4.1.1
       '@standard-schema/spec': 1.1.0
-      js-tiktoken: 1.0.21(patch_hash=1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39)
+      js-tiktoken: 1.0.21
       langsmith: 0.8.10(@opentelemetry/api@1.9.1)(openai@6.26.0(ws@8.21.3)(zod@4.4.3))(ws@8.21.3)
       mustache: 4.2.0
       p-queue: 6.6.2
@@ -7342,7 +7342,9 @@ snapshots:
 
   js-binary-schema-parser@2.0.3: {}
 
-  js-tiktoken@1.0.21(patch_hash=1d919a9cac7d32c77484c5e0969b3db56827829a6015192c8fb24125818fec39):
+  gpt-tokenizer@4.0.1: {}
+
+  js-tiktoken@1.0.21:
     dependencies:
       base64-js: 1.5.1
 

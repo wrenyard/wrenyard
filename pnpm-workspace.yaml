@@ -47,6 +47,3 @@ exclude:
   - "**/build"
   - "**/coverage"
   - "**/.artifacts"
-
-patchedDependencies:
-  js-tiktoken@1.0.21: packages/js-tiktoken.patch

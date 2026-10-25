@@ -8,13 +8,13 @@
  * caller: the compaction threshold cap is supplied as `compactionThresholdCap`
  * rather than fixed here.
  */
-import { getEncoding } from 'js-tiktoken';
+import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
 import type { ProviderDefinition } from '@wrenyard/providers/base';
 import { PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
 import { boundedOutputReservation, resolveModelMetadata, type ModelMetadata } from './metadata.ts';
 import type { Message, ModelContentPart } from './transport/index.ts';
 
-let tokenizer: ReturnType<typeof getEncoding> | undefined;
+let tokenizer: typeof o200k_base | undefined;
 
 /** Fallback per-image input-token estimate when only a data URL is available. */
 export const IMAGE_INPUT_TOKEN_ESTIMATE = 1_200;
@@ -22,7 +22,7 @@ export const IMAGE_INPUT_TOKEN_ESTIMATE = 1_200;
 /** `o200k_base` token count estimate of one text. */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
-  tokenizer ??= getEncoding('o200k_base');
+  tokenizer ??= o200k_base;
   return tokenizer.encode(text).length;
 }
 

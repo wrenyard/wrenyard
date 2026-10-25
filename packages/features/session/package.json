@@ -22,7 +22,7 @@
     "@wrenyard/providers": "workspace:*",
     "ajv": "^8.17.1",
     "diff": "9.0.0",
-    "js-tiktoken": "1.0.21",
+    "gpt-tokenizer": "4.0.1",
     "sharp": "0.35.5",
     "yaml": "^2.7.0"
   },

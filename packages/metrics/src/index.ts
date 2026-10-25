@@ -12,7 +12,7 @@
  * observable interval (a buffered or collapsed stream) is skipped, not
  * extrapolated, and the whole-turn wall clock is never a denominator.
  */
-import { getEncoding } from 'js-tiktoken';
+import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
 
 /** Minimum observable generation span for a trustworthy speed sample. */
 export const TOKENIZER_MINIMUM_WINDOW_MS = 100;
@@ -48,7 +48,7 @@ export interface AggregatedResponseTpsSample {
 }
 
 /** Fixed tokenizer, created lazily on first use and shared process-wide. */
-let tokenizer: ReturnType<typeof getEncoding> | undefined;
+let tokenizer: typeof o200k_base | undefined;
 
 /**
  * Counts text as ordinary text with the fixed o200k_base vocabulary, so a
@@ -58,13 +58,8 @@ let tokenizer: ReturnType<typeof getEncoding> | undefined;
  */
 export function countTPSTokens(text: string): number | undefined {
     if (text === '') return 0;
-    try {
-        tokenizer ??= getEncoding('o200k_base');
-    } catch {
-        return undefined;
-    }
-    if (!tokenizer) return undefined;
-    return tokenizer.encode(text, [], []).length;
+    tokenizer ??= o200k_base;
+    return tokenizer.encode(text).length;
 }
 
 /** One measured generation: its counted tokens and the windows they streamed in. */
