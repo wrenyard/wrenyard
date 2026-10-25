@@ -192,9 +192,7 @@ function toolResultEvent(record: Record<string, unknown>): AgentEvent | undefine
     const output = readableToolText(record.content)
         ?? rawOutputPromptText(record.rawOutput)
         ?? rawOutputBytesText(record.rawOutput)
-        ?? (typeof record.rawOutput === 'string' ? record.rawOutput : undefined)
-        ?? jsonStringValue(record.rawOutput)
-        ?? jsonStringValue(record.content);
+        ?? jsonStringValue(record.rawOutput);
     const sessionId = stringOf(record, 'session_id') || stringOf(record, 'sessionId') || stringOf(record, 'native_session_id') || stringOf(record, 'conversation_id');
     return { type: 'output', record: toolResultRecord(callId, status, output, sessionId || undefined) };
 }
