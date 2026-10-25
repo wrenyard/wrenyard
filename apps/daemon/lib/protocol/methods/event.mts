@@ -10,6 +10,7 @@ export const eventListParamsSchema = {
     since: { type: 'integer', minimum: 0 },
     limit: { type: 'integer', minimum: 1, maximum: 1000 },
     tail: { type: 'boolean' },
+    waitMs: { type: 'integer', minimum: 0, maximum: 30000 },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

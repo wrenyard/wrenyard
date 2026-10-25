@@ -253,6 +253,8 @@ export function parseTaskRunSnapshot(value: unknown): TaskRunSnapshot | null {
     ...(readString(record.started_at) !== null ? { startedAt: record.started_at as string } : {}),
     ...(readString(record.finished_at) !== null ? { finishedAt: record.finished_at as string } : {}),
     ...(readString(record.project) !== null ? { project: record.project as string } : {}),
+    ...(readString(record.execution_id) !== null ? { executionId: record.execution_id as string } : {}),
+    ...(readString(record.execution_mode) !== null && (record.execution_mode === 'native' || record.execution_mode === 'gateway') ? { executionMode: record.execution_mode } : {}),
     ...(resolvedClient !== null ? { resolvedClient } : {}),
     ...(resolvedProvider !== null ? { resolvedProvider } : {}),
     ...(resolvedProfile !== null ? { resolvedProfile } : {}),

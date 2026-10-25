@@ -253,6 +253,9 @@ export const statsSummaryResultSchema = {
           started_at: { type: 'string' },
           finished_at: { type: 'string' },
           resolved: taskResolvedDispatchSchema,
+          // Execution identity/mode needed to key task.usage.liveList reads.
+          executionId: { type: 'string' },
+          executionMode: { enum: ['native', 'gateway'] },
           // Additive authoritative legacy fallback; only a nonempty string is a
           // valid profile, so empty/malformed values are rejected.
           resolved_profile: { type: 'string', minLength: 1 },

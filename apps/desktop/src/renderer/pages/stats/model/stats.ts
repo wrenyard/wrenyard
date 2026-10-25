@@ -39,6 +39,8 @@ export interface TaskRow {
 
 export interface TaskRunRow {
   taskRunId: string;
+  executionId?: string;
+  executionMode?: 'native' | 'gateway';
   kind: 'task' | 'auxiliary';
   status: TaskRunSnapshot['status'];
   label: string;
@@ -50,6 +52,7 @@ export interface TaskRunRow {
   modelBrand?: string;
   inputTokens?: number;
   outputTokens?: number;
+  cachedInputTokens?: number;
   tps?: number;
   startedAt?: string;
   finishedAt?: string;
@@ -169,6 +172,8 @@ export function taskRunRows(runs: TaskRunSnapshot[], names: TaskNameTables): Tas
     const modelName = nonEmpty(run.resolvedModelDisplayName);
     const row: TaskRunRow = {
       taskRunId: run.taskRunId,
+      executionId: run.executionId,
+      executionMode: run.executionMode,
       kind: run.kind ?? 'task',
       status,
       label: run.kind === 'auxiliary'
@@ -184,6 +189,10 @@ export function taskRunRows(runs: TaskRunSnapshot[], names: TaskNameTables): Tas
     }
     if (!active && run.usage.inputTokens !== undefined) row.inputTokens = run.usage.inputTokens;
     if (!active && run.usage.outputTokens !== undefined) row.outputTokens = run.usage.outputTokens;
+    if (!active) {
+      const cached = run.usage.cachedInputTokens ?? run.usage.cacheReadInputTokens ?? run.usage.cacheCreationInputTokens;
+      if (cached !== undefined) row.cachedInputTokens = cached;
+    }
     if (!active && run.usage.outputTps !== undefined) row.tps = run.usage.outputTps;
     if (run.startedAt !== undefined) row.startedAt = run.startedAt;
     if (terminal && run.finishedAt !== undefined) row.finishedAt = run.finishedAt;

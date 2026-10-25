@@ -95,6 +95,10 @@ export interface TaskRunLedgerRow {
   started_at?: string
   finished_at?: string
   resolved?: TaskResolvedDispatch
+  /** Exact persisted current execution id of the task run, when one exists. */
+  executionId?: string
+  /** Resolved dispatch mode of that execution ('gateway' | 'native'), when recorded. */
+  executionMode?: 'native' | 'gateway'
   /**
    * Authoritative additive legacy fallback: the exact persisted nonblank
    * executions.resolved_profile of the task's execution. `resolved` remains the
@@ -1218,6 +1222,7 @@ function readRecentTaskRunLedger(
     started_at: string | null
     resolved_profile: string | null
     summary: string | null
+    execution_id: string | null
   }>(
     // The MIN(started_at) probe runs per already-selected recent task row via
     // idx_exec_task_meta instead of grouping every execution in the table; the
@@ -1227,6 +1232,7 @@ function readRecentTaskRunLedger(
     `SELECT t.id AS id, t.template AS template, t.project AS project, t.status AS status,
             t.created_at AS created_at, t.ended_at AS ended_at, t.definition_source AS definition_source,
             t.summary AS summary,
+            t.execution_id AS execution_id,
             (SELECT MIN(e2.started_at) FROM executions e2 WHERE e2.task_id = t.id) AS started_at,
             exe.resolved_profile AS resolved_profile
      FROM (
@@ -1273,6 +1279,13 @@ function readRecentTaskRunLedger(
     if (row.started_at) ledger.started_at = row.started_at
     if (row.ended_at) ledger.finished_at = row.ended_at
     if (meta.resolved) ledger.resolved = meta.resolved
+    // Execution identity/mode the renderer needs to key live-usage reads:
+    // the exact persisted current execution id plus its resolved dispatch
+    // mode, emitted only when actually known.
+    if (row.execution_id && row.execution_id.trim() !== '') ledger.executionId = row.execution_id
+    if (meta.resolved?.mode === 'native' || meta.resolved?.mode === 'gateway') {
+      ledger.executionMode = meta.resolved.mode
+    }
     // Additive paired human display labels. The recorded identity is preferred:
     // it survives an incomplete pricing/speed snapshot, while the strict
     // resolved dispatch is only a fallback. The persisted canonical provider is

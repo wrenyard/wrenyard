@@ -330,6 +330,8 @@ export interface TaskSpanRequest {
   project?: string;
   worktree?: string;
   taskRunId: string;
+  executionId?: string;
+  executionMode?: 'native' | 'gateway';
   /** Effective task input submitted when the run was created. */
   input?: unknown;
 }

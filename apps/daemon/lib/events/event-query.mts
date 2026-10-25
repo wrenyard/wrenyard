@@ -30,6 +30,9 @@ const EVENT_DATA_FIELDS = [
   'workDir',
   'client_family',
   'clientFamily',
+  'executionId',
+  'taskRunId',
+  'usage',
 ] as const
 
 const EVENT_REF_FIELDS = [

@@ -40,6 +40,8 @@ import {
   type OperationComponentId,
   type OperationComponentAction,
   type OperationComponentSnapshot,
+  type TaskUsageLiveUpdate,
+  type DaemonLifecycleNotification,
 } from './shell-contract.js';
 import type { ShellIpcDeps } from './main/ipc/deps.js';
 import { registerAppearancePreferencesIpc } from './main/ipc/appearance-preferences.js';
@@ -48,6 +50,7 @@ import { registerQuotaProvidersIpc } from './main/ipc/quota-providers.js';
 import { registerSessionExecIpc } from './main/ipc/session-exec.js';
 import { registerStorageUsageIpc } from './main/ipc/storage-usage.js';
 import { registerTasksStatsIpc } from './main/ipc/tasks-stats.js';
+import { registerTaskIpc } from './main/ipc/task.js';
 import { registerAgentIpc } from './main/ipc/agent.js';
 import { registerBotTodoIpc, registerTodoIpc } from './main/ipc/todo.js';
 import { registerClientIpc } from './main/ipc/client.js';
@@ -284,6 +287,21 @@ export class ShellWindowController {
     }
   }
 
+  /** Push one cumulative live-usage sample for a still-running task run. */
+  notifyTaskUsageLive(update: TaskUsageLiveUpdate): void {
+    if (!this.window.webContents.isDestroyed()) {
+      this.window.webContents.send(SHELL_CHANNELS.taskUsageLive, update);
+    }
+  }
+
+  /** Notify the shell after the daemon event subscription reconnects. */
+  notifyTaskUsageReconnect(): void {
+    if (!this.window.webContents.isDestroyed()) {
+      const notification: DaemonLifecycleNotification = { reason: 'task-usage-reconnect' };
+      this.window.webContents.send(SHELL_CHANNELS.daemonChanged, notification);
+    }
+  }
+
   notifyUpdateChanged(): void {
     if (!this.window.webContents.isDestroyed()) {
       this.window.webContents.send(SHELL_CHANNELS.updateChanged);
@@ -373,6 +391,7 @@ export class ShellWindowController {
       registerTodoIpc(ipcMain, deps),
       registerBotTodoIpc(ipcMain, deps),
       registerClientIpc(ipcMain, deps),
+      registerTaskIpc(ipcMain, deps),
       registerUpdateDaemonIpc(ipcMain, deps),
     ];
   }

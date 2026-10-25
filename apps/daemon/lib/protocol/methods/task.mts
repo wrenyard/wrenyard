@@ -45,6 +45,10 @@ export type {
   TaskRunStatusResult,
   TaskRunWaitParams,
   TaskRunWaitResult,
+  TaskUsageLive,
+  TaskUsageLiveRecord,
+  TaskUsageLiveListParams,
+  TaskUsageLiveListResult,
   TaskSettingsAutomaticDispatch,
   TaskSettingsAutomaticPatch,
   TaskSettingsAutomaticSelection,
@@ -316,6 +320,8 @@ export const taskRunStatusResultSchema = {
       additionalProperties: false,
     },
     usage: taskUsageSchema,
+    executionId: { type: 'string' },
+    executionMode: { enum: ['native', 'gateway'] },
     error: nullableStringSchema,
     failure_category: { type: 'string' },
     suggestion: { type: 'string' },
@@ -424,6 +430,56 @@ export const taskRunEventsParamsSchema = {
     limit: { type: 'integer', minimum: 1, maximum: 500 },
   },
   additionalProperties: true,
+} as const satisfies JsonSchema
+
+// ─── task.usage.liveList ────────────────────────────────────────────────────
+
+const taskUsageLiveSchema = {
+  type: 'object',
+  required: ['input', 'cachedInput', 'output', 'requests'],
+  properties: {
+    input: { type: 'number', minimum: 0 },
+    cachedInput: { type: 'number', minimum: 0 },
+    output: { type: 'number', minimum: 0 },
+    requests: { type: 'number', minimum: 0 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+export const taskUsageLiveListParamsSchema = {
+  type: 'object',
+  required: ['execution_ids'],
+  properties: {
+    execution_ids: {
+      type: 'array',
+      items: { type: 'string', minLength: 1 },
+      maxItems: 500,
+    },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+const taskUsageLiveRecordSchema = {
+  type: 'object',
+  required: ['executionId', 'usage'],
+  properties: {
+    executionId: { type: 'string', minLength: 1 },
+    taskRunId: { type: 'string', minLength: 1 },
+    usage: taskUsageLiveSchema,
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+export const taskUsageLiveListResultSchema = {
+  type: 'object',
+  required: ['usage'],
+  properties: {
+    usage: {
+      type: 'object',
+      additionalProperties: taskUsageLiveRecordSchema,
+    },
+  },
+  additionalProperties: false,
 } as const satisfies JsonSchema
 
 export const taskRunEventsResultSchema = {

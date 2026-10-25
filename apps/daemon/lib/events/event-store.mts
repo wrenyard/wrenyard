@@ -1,6 +1,7 @@
 import { cachedStatement, getDb } from '../db/connection.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import { compactJsonRecord, toJsonText } from '../db/stores/json.mts'
+import { notifyAppendCommitted } from './append-notify.mts'
 import { getForemanEventBus } from './event-bus.mts'
 import type { ForemanEvent, ForemanEventSeverity } from './event-types.mts'
 
@@ -87,6 +88,9 @@ export class ForemanEventStore {
       event.severity === 'error' ? 1 : 0,
       event.occurredAt,
     )
+
+    // Wake event.list waiters only for rows that were actually committed.
+    if (result.changes === 1) notifyAppendCommitted(this.db)
 
     return {
       cursor: Number(result.lastInsertRowid),

@@ -818,6 +818,8 @@ function taskStatusRowToJson(row: DbTaskStatusRow): JsonRecord {
     has_output: output !== null && output !== undefined && output !== '',
     ...(metadata.resolved ? { resolved: metadata.resolved } : {}),
     ...(metadata.recorded ? { recorded: metadata.recorded } : {}),
+    ...(row.execution_id ? { executionId: row.execution_id } : {}),
+    ...(metadata.resolved?.mode ? { executionMode: metadata.resolved.mode } : {}),
     usage: metadata.usage,
     ...taskFactsField(row.facts),
     ...(row.execution_pid === null ? {} : { pid: row.execution_pid }),

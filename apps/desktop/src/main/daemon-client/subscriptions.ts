@@ -2,7 +2,7 @@ import type { ActivityPresence, DailyStatsSnapshot } from '../../shell-contract.
 import type { AgentEventSignal, SessionMetaData } from './agent-types';
 import { createDiagnosticLogger, type DiagnosticLogger } from './diagnostic-logger';
 import { ActivitySnapshotPoller } from './activity-snapshot-poller';
-import { ForemanEventPoller } from './foreman-event-poller';
+import { ForemanEventPoller, type TaskUsageLiveUpdate } from './foreman-event-poller';
 import { ForemanStatsPoller } from './foreman-stats-poller';
 import { EventCursorStore } from './event-cursor-store';
 import { WrenyardDaemonClient, type DaemonClient } from './client';
@@ -21,6 +21,12 @@ export interface DaemonSubscriptionHandlers {
   onStats?(stats: DailyStatsSnapshot | undefined): void;
   /** Fired with the single shared activity presence round. */
   onActivity?(presence: ActivityPresence): void;
+  /**
+   * Fired with each pushed cumulative live-usage sample of a still-running
+   * gateway task run. No replay: a subscriber that missed earlier samples
+   * hydrates through `task.usage.liveList` instead.
+   */
+  onTaskUsageLive?(update: TaskUsageLiveUpdate): void;
 }
 
 export interface DaemonSubscriptionsOptions {
@@ -98,6 +104,9 @@ export class DaemonSubscriptions {
       },
       onSignal: (workerKey, signal, meta) => {
         for (const handler of this.handlers) handler.onSignal?.({ workerKey, signal, meta });
+      },
+      onTaskUsageLive: (executionId, taskRunId, usage) => {
+        for (const handler of this.handlers) handler.onTaskUsageLive?.({ executionId, taskRunId, usage });
       },
     });
     this.eventPoller.start();

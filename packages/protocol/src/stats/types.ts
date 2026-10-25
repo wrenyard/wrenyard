@@ -168,6 +168,10 @@ export interface TaskRunLedgerRow {
   started_at?: string
   finished_at?: string
   resolved?: TaskResolvedDispatch
+  /** Exact persisted current execution id of the task run, when one exists. */
+  executionId?: string
+  /** Resolved dispatch mode of that execution ('gateway' | 'native'), when recorded. */
+  executionMode?: 'native' | 'gateway'
   /**
    * Additive legacy fallback alongside `resolved`: the exact stored nonblank
    * executions.resolved_profile of the task's execution, carried for runs that

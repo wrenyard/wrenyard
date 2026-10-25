@@ -51,6 +51,9 @@ import type {
   TaskRoutingTestTask,
   TaskRoutingTestTasksResult,
   TaskDefinitionListResult,
+  TaskUsageLive,
+  TaskUsageLiveListParams,
+  TaskUsageLiveListResult,
 } from '@wrenyard/protocol/task';
 import type { DailyBucket as StatsDailySnapshot } from '@wrenyard/protocol/stats';
 import type {
@@ -255,6 +258,10 @@ export interface TaskRunUsage {
 export interface TaskRunSnapshot {
   taskRunId: string;
   taskId: string;
+  /** Gateway execution identity backing this run when an execution exists. */
+  executionId?: string;
+  /** Resolved dispatch mode of the run ('gateway' | 'native') when recorded. */
+  executionMode?: 'native' | 'gateway';
   /** Whether this run is a dispatched task or an in-session auxiliary run. */
   kind?: 'task' | 'auxiliary';
   taskName?: string;
@@ -287,6 +294,8 @@ export interface TaskRunSnapshot {
  */
 export interface DesktopTaskBrief {
   taskRunId: string;
+  executionId?: string;
+  executionMode?: 'native' | 'gateway';
   /** `task_name`, falling back to `task_id` when the definition declares none. */
   taskName?: string;
   /** Task-run status, or `unavailable` when this id could not be resolved. */
@@ -371,6 +380,8 @@ export const SHELL_CHANNELS = {
   botTodoRequest: 'wrenyard-shell:bot-todo-request',
   agentRequest: 'wrenyard-shell:agent-request',
   clientRequest: 'wrenyard-shell:client-request',
+  taskRequest: 'wrenyard-shell:task-request',
+  taskUsageLive: 'wrenyard-shell:task-usage-live',
 } as const;
 
 export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'agents' | 'routines' | 'todo';
@@ -806,6 +817,10 @@ export interface DaemonLifecycleSnapshot {
   restartCount: number;
   pid?: number;
   message?: string;
+}
+
+export interface DaemonLifecycleNotification {
+  reason: 'state-changed' | 'task-usage-reconnect';
 }
 
 export interface SettingsSnapshot {
@@ -1480,6 +1495,30 @@ export type ClientMethod = (typeof CLIENT_METHODS)[number];
 export type ClientMethodMap = ClientMethods;
 
 /* ------------------------------------------------------------------ */
+/* Live task usage                                                     */
+/* ------------------------------------------------------------------ */
+
+export type { TaskUsageLive };
+
+/** One pushed cumulative live-usage sample for a still-running gateway run. */
+export interface TaskUsageLiveUpdate {
+  /** Gateway execution identity backing the run, distinguishing parallel runs. */
+  executionId: string;
+  taskRunId: string;
+  usage: TaskUsageLive;
+}
+
+/** The bounded daemon surface the shell `task` bridge forwards. */
+export const TASK_METHODS = ['task.usage.liveList'] as const;
+
+export type TaskMethod = (typeof TASK_METHODS)[number];
+
+/** Params and result of each forwarded task method, used to type the facade. */
+export interface TaskMethodMap {
+  'task.usage.liveList': { params: TaskUsageLiveListParams; result: TaskUsageLiveListResult };
+}
+
+/* ------------------------------------------------------------------ */
 /* WY Remote: SSH connection and single active context                 */
 /* ------------------------------------------------------------------ */
 
@@ -1643,6 +1682,8 @@ export interface WrenyardShellApi {
   startDaemon(): Promise<DaemonLifecycleSnapshot>;
   restartDaemon(): Promise<DaemonLifecycleSnapshot>;
   onDaemonChanged(listener: () => void): () => void;
+  /** Fired after the daemon event subscription reconnects; live usage is rehydrated in one batch. */
+  onTaskUsageReconnect(listener: () => void): () => void;
   /** Latest shared activity projection for the status bar (chrome spec 4.4). */
   getActivityStatus(): Promise<ActivityStatusSnapshot>;
   /** Pushed only when the projected activity content changes. */
@@ -1707,6 +1748,21 @@ export interface WrenyardShellApi {
     method: M,
     params?: ClientMethodMap[M]['params'],
   ): Promise<ClientMethodMap[M]['result']>;
+  /**
+   * Forward one allowlisted `task.usage.*` call to the daemon. The
+   * main-process registrar rejects any method outside {@link TASK_METHODS};
+   * currently only the batched live-usage read is exposed.
+   */
+  task<M extends TaskMethod>(
+    method: M,
+    params?: TaskMethodMap[M]['params'],
+  ): Promise<TaskMethodMap[M]['result']>;
+  /**
+   * Pushed cumulative live-usage samples for still-running gateway task runs.
+   * No replay: callers hydrate through `task.usage.liveList` on mount or
+   * reconnect; the returned function unsubscribes.
+   */
+  onTaskUsageLive(listener: (update: TaskUsageLiveUpdate) => void): () => void;
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
   execStart(request: ExecStartRequest): Promise<ExecSnapshotDto>;

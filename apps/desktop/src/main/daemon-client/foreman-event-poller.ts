@@ -8,10 +8,19 @@ import {
   type EventsLineData,
 } from './foreman-event-map';
 
-const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_LIMIT = 200;
 const STARTUP_DRAIN_LIMIT = 1000;
 const MAX_CATCHUP_PAGES = 50;
+/**
+ * Server-side wait for event.list: the daemon holds the request until a
+ * committed event insert wakes it or this deadline passes. There is no
+ * timer-driven DB polling while idle; each wake performs one catch-up read.
+ * Kept below the daemon client's 30s request timeout.
+ */
+const EVENT_LIST_WAIT_MS = 20_000;
+/** Bounded reconnect backoff after a transport error, in milliseconds. */
+const RECONNECT_BACKOFF_INITIAL_MS = 500;
+const RECONNECT_BACKOFF_MAX_MS = 15_000;
 
 const SUPPORTED_EVENT_TYPES = new Set<string>([
   'task.started',
@@ -30,6 +39,7 @@ const SUPPORTED_EVENT_TYPES = new Set<string>([
   'tool_call',
   'tool_result',
   'turn_usage',
+  'task.usage.live',
 ]);
 
 export interface ForemanEventRecord extends EventsLine {
@@ -51,6 +61,7 @@ export type ForemanRpcRequest = (method: string, params?: unknown) => Promise<un
 
 export interface ForemanEventPollerOptions {
   ipcPath?: string;
+  /** @deprecated Unused: delivery is event-driven; the poller no longer ticks. */
   intervalMs?: number;
   limit?: number;
   request?: ForemanRpcRequest;
@@ -65,6 +76,24 @@ export interface ForemanEventPollerOptions {
   /** Reports every cursor advance so the owner keeps the durable copy. */
   onCursor?: (cursor: string) => void;
   onSignal: (workerKey: string, signal: AgentEventSignal, meta: SessionMetaData) => void;
+  /**
+   * Cumulative gateway usage of a still-running task run, emitted by the
+   * daemon's task.usage.live events. Keyed by task run id; the daemon
+   * throttles emission, so every observed event is forwarded unchanged.
+   */
+  onTaskUsageLive?: (executionId: string, taskRunId: string, usage: TaskUsageLiveUpdate['usage']) => void;
+}
+
+/** One cumulative live-usage push for a still-running gateway task run. */
+export interface TaskUsageLiveUpdate {
+  executionId: string;
+  taskRunId: string;
+  usage: {
+    input: number;
+    cachedInput: number;
+    output: number;
+    requests: number;
+  };
 }
 
 interface ForemanEventsPayload {
@@ -84,10 +113,10 @@ export function deriveWorkerIdentityKey(event: ForemanEventRecord): string | nul
 
 export class ForemanEventPoller {
   private readonly ipcPath: string;
-  private readonly intervalMs: number;
   private readonly limit: number;
   private readonly request: ForemanRpcRequest;
   private readonly onSignal: ForemanEventPollerOptions['onSignal'];
+  private readonly onTaskUsageLive: ForemanEventPollerOptions['onTaskUsageLive'];
   private readonly onCursor: ForemanEventPollerOptions['onCursor'];
   private readonly logger: DiagnosticLogger | undefined;
   private readonly ownedClient: DaemonClient | undefined;
@@ -98,7 +127,6 @@ export class ForemanEventPoller {
   private readonly taskRunInfoByRunId = new Map<string, TaskRunInfo | null>();
   private readonly taskRunInfoRequests = new Map<string, Promise<TaskRunInfo | null>>();
   private readonly terminalWorkers = new Set<string>();
-  private intervalId: ReturnType<typeof setInterval> | null = null;
   private cursor: string | undefined;
   private inFlight = false;
   private running = false;
@@ -109,7 +137,6 @@ export class ForemanEventPoller {
 
   constructor(opts: ForemanEventPollerOptions) {
     this.ipcPath = opts.ipcPath ?? resolveDaemonIpcPath();
-    this.intervalMs = opts.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.limit = opts.limit ?? DEFAULT_LIMIT;
     if (opts.request) {
       this.request = opts.request;
@@ -119,6 +146,7 @@ export class ForemanEventPoller {
     }
     this.logger = opts.logger;
     this.onSignal = opts.onSignal;
+    this.onTaskUsageLive = opts.onTaskUsageLive;
     this.onCursor = opts.onCursor;
     this.cursor = normalizeCursor(opts.initialCursor);
     this.resumeCursor = this.cursor !== undefined;
@@ -134,7 +162,7 @@ export class ForemanEventPoller {
   }
 
   start(): void {
-    if (this.intervalId !== null) return;
+    if (this.running) return;
 
     this.running = true;
     this.generation++;
@@ -146,17 +174,34 @@ export class ForemanEventPoller {
       cursor: this.cursor,
     });
 
-    void this.pollOnce(generation);
-    this.intervalId = setInterval(() => {
-      void this.pollOnce(generation);
-    }, this.intervalMs);
+    void this.runWaitLoop(generation);
+  }
+
+  /**
+   * Single serial wait/catch-up loop over the existing event.list IPC channel.
+   * Each iteration issues one request with a bounded server-side wait; the
+   * daemon blocks it until a committed event insert wakes the request or the
+   * deadline passes, so there is no timer-driven polling and never more than
+   * one in-flight request. Transport errors apply a bounded exponential
+   * reconnect backoff; generation fences discard stale replies after stop().
+   */
+  private async runWaitLoop(generation: number): Promise<void> {
+    let backoffMs = 0;
+    while (this.running && this.generation === generation) {
+      const ok = await this.pollOnce(generation);
+      if (this.isStoppedGeneration(generation)) return;
+      if (ok) {
+        backoffMs = 0;
+        continue;
+      }
+      backoffMs = backoffMs === 0
+        ? RECONNECT_BACKOFF_INITIAL_MS
+        : Math.min(backoffMs * 2, RECONNECT_BACKOFF_MAX_MS);
+      await sleepUnlessStopped(backoffMs, () => this.isStoppedGeneration(generation));
+    }
   }
 
   stop(): void {
-    if (this.intervalId !== null) {
-      clearInterval(this.intervalId);
-    }
-    this.intervalId = null;
     if (this.running) {
       this.running = false;
       this.generation++;
@@ -164,8 +209,8 @@ export class ForemanEventPoller {
     this.logger?.info('foreman_events_poller_stopped');
   }
 
-  async pollOnce(expectedGeneration?: number): Promise<void> {
-    if (this.inFlight) return;
+  async pollOnce(expectedGeneration?: number): Promise<boolean> {
+    if (this.inFlight) return true;
     this.inFlight = true;
 
     try {
@@ -181,13 +226,13 @@ export class ForemanEventPoller {
       let catchupPages = 0;
 
       while (true) {
-        if (this.isStoppedGeneration(expectedGeneration)) return;
+        if (this.isStoppedGeneration(expectedGeneration)) return false;
         const prevCursor = this.cursor;
         const rawPageCount = rawEventsCount(payload);
         const parsed = parseEventsPayload(payload, this.logger);
         if (!parsed) {
           this.logger?.warn('foreman_events_invalid_payload');
-          return;
+          return false;
         }
 
         const countsByType: Record<string, number> = {};
@@ -195,7 +240,7 @@ export class ForemanEventPoller {
         let startupReplaySkipped = 0;
         for (const event of parsed.events) {
           countsByType[event.type] = (countsByType[event.type] ?? 0) + 1;
-          if (this.isStoppedGeneration(expectedGeneration)) return;
+          if (this.isStoppedGeneration(expectedGeneration)) return false;
           if (this.isStartupReplay(event, expectedGeneration)) {
             startupReplaySkipped++;
             startupReplayCountsByType[event.type] = (startupReplayCountsByType[event.type] ?? 0) + 1;
@@ -204,7 +249,7 @@ export class ForemanEventPoller {
           await this.ingestEvent(event);
         }
 
-        if (this.isStoppedGeneration(expectedGeneration)) return;
+        if (this.isStoppedGeneration(expectedGeneration)) return false;
         const nextCursor = parsed.cursor ?? parsed.fallbackCursor ?? this.cursor;
         if (nextCursor !== undefined) {
           this.advanceCursor(nextCursor);
@@ -221,8 +266,10 @@ export class ForemanEventPoller {
           });
         }
 
-        if (rawPageCount < params.limit || this.isStoppedGeneration(expectedGeneration)) return;
-        if (catchupPages >= MAX_CATCHUP_PAGES || this.cursor === prevCursor) return;
+        if (rawPageCount < params.limit || this.isStoppedGeneration(expectedGeneration)) return true;
+        if (catchupPages >= MAX_CATCHUP_PAGES || this.cursor === prevCursor) return true;
+        // Catch-up pages never wait: an empty page terminates the drain so the
+        // loop re-enters the daemon-side wait instead of blocking per page.
         params = { since: Number(this.cursor), limit: STARTUP_DRAIN_LIMIT };
         payload = await this.request('event.list', params);
         catchupPages++;
@@ -234,6 +281,7 @@ export class ForemanEventPoller {
         this.logger?.warn('foreman_events_poll_error', { error });
         this.lastPollErrorSignature = signature;
       }
+      return false;
     } finally {
       this.inFlight = false;
     }
@@ -243,12 +291,14 @@ export class ForemanEventPoller {
    * A poller with no cursor asks the daemon for the tail, which answers from
    * the current maximum event id instead of replaying history from id 0. The
    * first page is then short or empty, so no further backlog paging happens.
+   * Every non-catch-up request carries the bounded server-side wait so the
+   * daemon wakes it on committed inserts instead of the client ticking.
    */
-  private buildParams(): { since: number; limit: number } | { tail: true; limit: number } {
-    if (this.cursor === undefined) return { tail: true, limit: STARTUP_DRAIN_LIMIT };
+  private buildParams(): { since: number; limit: number; waitMs?: number } | { tail: true; limit: number; waitMs: number } {
+    if (this.cursor === undefined) return { tail: true, limit: STARTUP_DRAIN_LIMIT, waitMs: EVENT_LIST_WAIT_MS };
     const since = Number(this.cursor);
-    if (!Number.isFinite(since)) return { tail: true, limit: STARTUP_DRAIN_LIMIT };
-    return { since, limit: this.limit };
+    if (!Number.isFinite(since)) return { tail: true, limit: STARTUP_DRAIN_LIMIT, waitMs: EVENT_LIST_WAIT_MS };
+    return { since, limit: this.limit, waitMs: EVENT_LIST_WAIT_MS };
   }
 
   /**
@@ -286,6 +336,12 @@ export class ForemanEventPoller {
   }
 
   private async ingestEvent(event: ForemanEventRecord): Promise<void> {
+    // Live usage events carry no worker lifecycle signal; they are forwarded
+    // directly to the usage subscriber and never enter signal mapping.
+    if (event.type === 'task.usage.live') {
+      this.forwardTaskUsageLive(event);
+      return;
+    }
     // Log raw message event before any filtering
     if (event.type === 'message') {
       const rawRole = event.data?.role ?? event.role;
@@ -368,6 +424,27 @@ export class ForemanEventPoller {
     this.onSignal(workerKey, signal, meta);
   }
 
+  private forwardTaskUsageLive(event: ForemanEventRecord): void {
+    const data = isRecord(event.data) ? event.data : undefined;
+    const usage = isRecord(data?.usage) ? data.usage : undefined;
+    // refs.executionId is the stable gateway-run identity; refs.taskRunId lands
+    // on event.task_run_id through normalizeForemanEvent and data.taskRunId is
+    // the fallback for rows persisted before the ref existed.
+    const executionId =
+      stringIdentity(event.execution_id)
+      ?? (typeof data?.executionId === 'string' ? data.executionId : undefined);
+    const taskRunId =
+      stringIdentity(event.task_run_id)
+      ?? (typeof data?.taskRunId === 'string' ? data.taskRunId : undefined);
+    if (executionId === undefined || taskRunId === undefined || usage === undefined) return;
+    const input = numberCursor(usage.input);
+    const cachedInput = numberCursor(usage.cachedInput);
+    const output = numberCursor(usage.output);
+    const requests = numberCursor(usage.requests);
+    if (input === undefined || cachedInput === undefined || output === undefined || requests === undefined) return;
+    this.onTaskUsageLive?.(executionId, taskRunId, { input, cachedInput, output, requests });
+  }
+
   private async taskRunInfoForEvent(event: ForemanEventRecord): Promise<TaskRunInfo | null> {
     const runId = taskRunIdForStatusLookup(event);
     return runId ? this.lookupTaskRunInfo(runId) : null;
@@ -432,6 +509,24 @@ export class ForemanEventPoller {
 
 function rawEventsCount(payload: unknown): number {
   return isRecord(payload) && Array.isArray(payload.events) ? payload.events.length : 0;
+}
+
+/**
+ * Reconnect-backoff sleep that wakes early (in coarse slices) once the poller
+ * is stopped, so stop() does not wait out the full backoff window.
+ */
+function sleepUnlessStopped(ms: number, isStopped: () => boolean): Promise<void> {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + ms;
+    const tick = (): void => {
+      if (isStopped() || Date.now() >= deadline) {
+        resolve();
+        return;
+      }
+      setTimeout(tick, Math.min(200, deadline - Date.now()));
+    };
+    tick();
+  });
 }
 
 function metaForEvent(

@@ -22,6 +22,8 @@ import type {
   TaskRunStatusResult,
   TaskRunWaitParams,
   TaskRunWaitResult,
+  TaskUsageLiveListParams,
+  TaskUsageLiveListResult,
 } from './runs.ts'
 import type {
   TaskRoutingTestParams,
@@ -49,4 +51,5 @@ export interface TaskMethods {
   'task.run.wait': RpcMethod<TaskRunWaitParams, TaskRunWaitResult>
   'task.run.cancel': RpcMethod<TaskRunCancelParams, TaskRunCancelResult>
   'task.run.events': RpcMethod<TaskRunEventsParams, TaskRunEventsResult>
+  'task.usage.liveList': RpcMethod<TaskUsageLiveListParams, TaskUsageLiveListResult>
 }

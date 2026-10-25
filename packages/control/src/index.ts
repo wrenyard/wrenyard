@@ -6,7 +6,10 @@ import type {
   GatewaySettingsSaveInput as WrenyardGatewaySettingsSaveInput,
   GatewaySettingsSaveResult as WrenyardGatewaySettingsSaveResult,
 } from '@wrenyard/protocol/gateway';
-import type { TaskRunOutputResult as WrenyardTaskRunOutputResult } from '@wrenyard/protocol/task';
+import type {
+  TaskRunOutputResult as WrenyardTaskRunOutputResult,
+  TaskUsageLiveListResult,
+} from '@wrenyard/protocol/task';
 import { createConnection, type Socket } from "node:net";
 import { protocolVersionMismatchMessage, WRENYARD_PROTOCOL_VERSION } from "./transport/index.ts";
 
@@ -278,6 +281,19 @@ export class WrenyardIpcClient {
       { task_run_id: taskRunId, timeout_ms: timeoutMs },
       { ...requestOptions, timeoutMs: timeoutMs + 5_000 },
     );
+  }
+
+  /**
+   * Batched cumulative live usage for active gateway executions. Available
+   * over IPC only. One call covers the whole requested execution-id set and
+   * returns records keyed by execution id carrying taskRunId/executionId;
+   * native, terminal, or untracked executions are absent.
+   */
+  taskUsageLiveList(
+    executionIds: string[],
+    options?: WrenyardIpcRequestOptions,
+  ): Promise<TaskUsageLiveListResult> {
+    return this.request<TaskUsageLiveListResult>('task.usage.liveList', { execution_ids: executionIds }, options);
   }
 
   /** Destroy the socket and reject every request still awaiting a reply. */

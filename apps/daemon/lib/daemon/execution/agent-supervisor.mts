@@ -126,6 +126,20 @@ export interface AgentExecutionSupervisorOptions {
    * a throwing callback is logged and never rejects the committed execution.
    */
   onExecutionCompleted?: (executionId: string) => void
+  /**
+   * Notification that an execution was admitted at start. Carries the owning
+   * task run id and resolved dispatch mode when known, so consumers tracking
+   * active gateway membership can register it. A throwing callback is logged
+   * and never rejects admission.
+   */
+  onExecutionStarted?: (executionId: string, info: { taskRunId?: string; mode?: 'native' | 'gateway' }) => void
+  /**
+   * Notification that an execution reached a committed terminal state on any
+   * path (done, failed, cancelled, timeout, interrupted — queued, starting,
+   * running, shutdown and startup-reconcile alike). A throwing callback is
+   * logged and never rejects the committed terminal.
+   */
+  onExecutionTerminal?: (executionId: string) => void
 }
 
 /**
@@ -253,6 +267,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private readonly execService: ExecService
   private readonly operations?: OperationAdapter
   private readonly onExecutionCompleted?: (executionId: string) => void
+  private readonly onExecutionStarted?: AgentExecutionSupervisorOptions['onExecutionStarted']
+  private readonly onExecutionTerminal?: AgentExecutionSupervisorOptions['onExecutionTerminal']
   /** True when this supervisor built its own fallback ExecService and must
    *  close it on shutdown. A shared, externally supplied service is never
    *  closed here. */
@@ -262,7 +278,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private promoting = false
   private readonly canStartExecution?: AgentExecutionSupervisorOptions['canStartExecution']
 
-  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService, operations, canStartExecution, onExecutionCompleted }: AgentExecutionSupervisorOptions) {
+  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService, operations, canStartExecution, onExecutionCompleted, onExecutionStarted, onExecutionTerminal }: AgentExecutionSupervisorOptions) {
     this.db = db
     this.repoWriteLocks = repoWriteLocks
     this.logger = logger
@@ -279,6 +295,18 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     this.operations = operations
     this.canStartExecution = canStartExecution
     this.onExecutionCompleted = onExecutionCompleted
+    this.onExecutionStarted = onExecutionStarted
+    this.onExecutionTerminal = onExecutionTerminal
+  }
+
+  /** Best-effort terminal notification shared by every terminalize path; a
+   *  throwing callback is logged and never affects the committed terminal. */
+  private notifyExecutionTerminal(executionId: string): void {
+    try {
+      this.onExecutionTerminal?.(executionId)
+    } catch (error) {
+      this.log('warn', `[foreman] Failed to report terminal for execution ${executionId}: ${errorMessage(error)}`)
+    }
   }
 
   private taskRuns(): TaskRunStore {
@@ -429,6 +457,21 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
       entry = this.createRegistryEntry(executionId, opts, hasRepoLock, 1)
       this.registry.set(executionId, entry)
+
+      // Admission is durable: report the execution start with its owning task
+      // run id and resolved dispatch mode so consumers tracking active
+      // gateway executions can register membership. A throwing callback is
+      // logged and never rejects admission.
+      try {
+        this.onExecutionStarted?.(executionId, {
+          ...(opts.taskId === undefined ? {} : { taskRunId: opts.taskId }),
+          ...(opts.dispatchSnapshot?.mode === 'native' || opts.dispatchSnapshot?.mode === 'gateway'
+            ? { mode: opts.dispatchSnapshot.mode }
+            : {}),
+        })
+      } catch (startCallbackError) {
+        this.log('warn', `[foreman] Failed to report start for execution ${executionId}: ${errorMessage(startCallbackError)}`)
+      }
 
       if (canRunNow && (!requiresLock || hasRepoLock)) {
         await this.launchExecution(entry, opts, false)
@@ -1942,6 +1985,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private resolveAndForget(entry: RegistryEntry, result: ExecutionResult): void {
     if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer)
     this.registry.delete(entry.executionId)
+    this.notifyExecutionTerminal(entry.executionId)
     entry.resolveWait(result)
   }
 
@@ -1952,6 +1996,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     // fallback on the error path (releaseByExecution is idempotent).
     this.repoWriteLocks.releaseByExecution(entry.executionId)
     this.registry.delete(entry.executionId)
+    this.notifyExecutionTerminal(entry.executionId)
     entry.rejectWait(error)
   }
 

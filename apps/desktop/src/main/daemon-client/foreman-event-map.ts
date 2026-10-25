@@ -25,7 +25,8 @@ export type EventsEventType =
   | 'message'
   | 'tool_call'
   | 'tool_result'
-  | 'turn_usage';
+  | 'turn_usage'
+  | 'task.usage.live';
 
 export interface EventsLine {
   type: EventsEventType;

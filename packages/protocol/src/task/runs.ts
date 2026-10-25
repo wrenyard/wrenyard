@@ -97,6 +97,34 @@ export interface TaskRunStatusParams {
   task_run_id: string
 }
 
+/** Cumulative gateway-side usage of a still-running task run. Reported values
+ *  are approximate; the run's final usage is decided by the terminal record. */
+export interface TaskUsageLive {
+  input: number
+  cachedInput: number
+  output: number
+  requests: number
+}
+
+export interface TaskUsageLiveListParams {
+  /** Active gateway execution ids to read cumulative live usage for. */
+  execution_ids: string[]
+}
+
+/** One live usage record keyed by its gateway execution identity. */
+export interface TaskUsageLiveRecord {
+  executionId: string
+  taskRunId?: string
+  usage: TaskUsageLive
+}
+
+export interface TaskUsageLiveListResult {
+  /** execution_id -> identity-bearing cumulative usage, present only for
+   *  still-running gateway executions that already produced at least one
+   *  gateway request. Native executions are never reported. */
+  usage: Record<string, TaskUsageLiveRecord>
+}
+
 export interface TaskRunStatusResult {
   task_run_id: string
   task_id: string
@@ -108,6 +136,11 @@ export interface TaskRunStatusResult {
   resolved?: TaskResolvedDispatch
   recorded?: { provider: string; model: string }
   usage: TaskUsage
+  /** Current execution id backing this run, when an execution exists. */
+  executionId?: string
+  /** Resolved dispatch mode of the current execution ('gateway' | 'native'),
+   *  when one was recorded. */
+  executionMode?: 'native' | 'gateway'
   error?: string | null
   failure_category?: string
   suggestion?: string

@@ -4,6 +4,7 @@ import type { OperationHost } from '../../core/operations/types.mts'
 import { TaskService, TaskServiceError } from '../../core/task/service.mts'
 import { ActivitySnapshotError, buildActivitySnapshot } from '../../core/activity/index.mts'
 import { listDbEvents, maxEventId } from '../../events/event-query.mts'
+import { appendGeneration, isCaughtUpCursor, recordCaughtUpCursor, subscribeAppendWaiter } from '../../events/append-notify.mts'
 import { readTodayStats, readStatsSummary } from '../../events/stats-query.mts'
 import type { StatsSummaryResult } from '../../protocol/registry.mts'
 import { MAX_STATS_SUMMARY_DAYS } from '../../protocol/methods/stats.mts'
@@ -58,6 +59,8 @@ import type {
   WorkspaceSwitchResult,
   WorkspaceInspectResult,
   WorkspaceInitializeResult,
+  TaskUsageLiveListResult,
+  TaskUsageLiveRecord,
 } from '../../protocol/registry.mts'
 import type { RpcRouter } from '../rpc-router.mts'
 import type { RemoteHostRegistryService } from '../../remote/host-registry.mts'
@@ -197,6 +200,14 @@ export interface CoreRpcHandlerOptions {
    * private instance is created for this router only.
    */
   taskService?: TaskService
+  /**
+   * Batched cumulative live-usage reader backing `task.usage.liveList`. One
+   * call aggregates the requested active gateway execution ids and returns
+   * identity-bearing records keyed by execution id; absent in contexts
+   * without a live daemon, where the method answers an empty map. Native
+   * executions are excluded.
+   */
+  taskUsageLiveList?: (executionIds: string[]) => Record<string, TaskUsageLiveRecord>
   /**
    * Daemon-owned task-output compile step. Runs one auxiliary model call for an
    * existing run and returns the schema-valid output, or the compile error with
@@ -366,18 +377,48 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       return options.providerSignIn!(params)
     })
   }
-  router.register('event.list', (params) => {
+  router.register('event.list', async (params, _message, context) => {
     const limit = params.limit ?? 100
     // A caller that asks for the tail without a cursor starts at the current
     // maximum event id instead of replaying history from id 0.
     const since = params.tail === true && params.since === undefined ? maxEventId() : (params.since ?? 0)
-    const events = listDbEvents(since, limit)
-    const lastEvent = events.at(-1)
-    return {
-      events,
-      count: events.length,
-      cursor: typeof lastEvent?.id === 'number' ? lastEvent.id : since,
-    } satisfies EventListResult
+    const waitMs = typeof params.waitMs === 'number' && Number.isInteger(params.waitMs) && params.waitMs > 0
+      ? Math.min(params.waitMs, EVENT_LIST_MAX_WAIT_MS)
+      : 0
+    if (waitMs <= 0) return listEventPage(since, limit)
+    // The transport exposes a disconnect/abort signal for long-running waits;
+    // the waiter is removed when the request finishes or the client goes away.
+    const signal = context && typeof context === 'object' && 'signal' in context
+      ? (context as { signal?: AbortSignal }).signal
+      : undefined
+    // Subscribe before the initial catch-up read so an insert that commits
+    // between the read and the wait cannot be lost.
+    const waiter = subscribeAppendWaiter()
+    // A cursor already confirmed caught up at an unchanged append generation
+    // skips the initial catch-up query entirely: renewal waits for a known
+    // caught-up position cost no SQL.
+    if (isCaughtUpCursor(since)) {
+      const notifiedIdle = await waiter.wait(waitMs, signal)
+      if (!notifiedIdle) {
+        return { events: [], count: 0, cursor: since } satisfies EventListResult
+      }
+      return listCaughtUpPage(since, limit)
+    }
+    const page = listCaughtUpPage(since, limit)
+    if (page.events.length > 0) {
+      waiter.cancel()
+      return page
+    }
+    const notified = await waiter.wait(waitMs, signal)
+    if (!notified) {
+      // Deadline-expired idle wait: answer with the current cursor and no
+      // second DB read; the client re-enters the wait on its next request.
+      return { events: [], count: 0, cursor: since } satisfies EventListResult
+    }
+    // Woken by a committed append: query once. A wake whose rows are already
+    // covered by the cursor (or a DB replacement) yields an empty page and the
+    // client re-enters the wait without idle SQL.
+    return listCaughtUpPage(since, limit)
   })
   router.register('stats.today', () => {
     return readTodayStats() satisfies StatsTodayResult
@@ -847,10 +888,18 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     return taskService.activeRuns() satisfies TaskRunListResult
   })
   router.register('task.run.status', (params) => {
-    return serviceRunResult<TaskRunStatusResult>(
+    const result = serviceRunResult<TaskRunStatusResult>(
       taskService.status(params.task_run_id),
       () => taskRunNotFound(params.task_run_id),
     )
+    return result
+  })
+  router.register('task.usage.liveList', (params) => {
+    // One batched aggregate call for the whole requested execution-id set;
+    // contexts without a live accumulator answer an empty map rather than
+    // failing.
+    const usage = options.taskUsageLiveList?.(params.execution_ids) ?? {}
+    return { usage } satisfies TaskUsageLiveListResult
   })
   router.register('task.run.output', (params) => {
     return serviceRunResult<TaskRunOutputResult>(
@@ -1186,6 +1235,35 @@ async function projectTaskGraphEvent(event: TaskGraphEvent): Promise<void> {
     },
     occurredAt: event.occurred_at,
   })
+}
+
+/** Upper bound for the event.list server-side wait, matching the params schema. */
+const EVENT_LIST_MAX_WAIT_MS = 30_000
+
+function listEventPage(since: number, limit: number): EventListResult {
+  const events = listDbEvents(since, limit)
+  const lastEvent = events.at(-1)
+  return {
+    events,
+    count: events.length,
+    cursor: typeof lastEvent?.id === 'number' ? lastEvent.id : since,
+  }
+}
+
+/**
+ * Read one event page and, when the append generation stayed stable across
+ * the read, record the returned cursor as caught up. An exhausted (short)
+ * page at a stable generation means the cursor covers every committed row, so
+ * the next wait renewal with the same cursor can skip SQL; a generation bump
+ * invalidates the watermark on the next append wake.
+ */
+function listCaughtUpPage(since: number, limit: number): EventListResult {
+  const generation = appendGeneration()
+  const page = listEventPage(since, limit)
+  if (page.events.length < limit && appendGeneration() === generation) {
+    recordCaughtUpCursor(page.cursor)
+  }
+  return page
 }
 
 function protocolErrorFromTaskServiceError(error: TaskServiceError): ProtocolError {

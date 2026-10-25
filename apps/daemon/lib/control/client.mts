@@ -62,6 +62,8 @@ import type {
   TaskRunOutputResult,
   TaskRunStatusParams,
   TaskRunStatusResult,
+  TaskUsageLiveListParams,
+  TaskUsageLiveListResult,
   TaskGraphCreateParams,
   TaskGraphCreateResult,
   TaskGraphListParams,
@@ -323,6 +325,13 @@ export class ForemanClient {
           options,
         )
       },
+    },
+  }
+
+  readonly usage = {
+    /** Batched cumulative live usage for still-running gateway task runs. */
+    liveList: (params: TaskUsageLiveListParams): Promise<TaskUsageLiveListResult> => {
+      return this.rpc.request<TaskUsageLiveListResult>('task.usage.liveList', params)
     },
   }
 

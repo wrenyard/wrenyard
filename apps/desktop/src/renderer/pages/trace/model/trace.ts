@@ -15,6 +15,10 @@ export interface TraceNode {
   startAt?: string;
   endAt?: string;
   model?: string;
+  /** Task run id of a `task` span, so live cumulative usage can key it. */
+  taskRunId?: string;
+  executionId?: string;
+  executionMode?: 'native' | 'gateway';
   tokens?: { input: number; cached: number; output: number; reasoning: number };
   events: LedgerEvent[];
   children: TraceNode[];
@@ -132,7 +136,9 @@ export function buildTrace(input: readonly LedgerEvent[]): TraceModel {
       const parentNode = parentId ? byId.get(parentId) ?? nodes.get(`step:${parentId}`) ?? nodes.get(`turn:${turn}`) ?? (event.type === 'span.started' && event.kind === 'reasoning' ? turnNode : undefined) : turnNode;
       const parentKey = parentNode?.key ?? turnNode?.key ?? 'session';
       const label = event.type === 'action.started' ? `${event.action.type} · ${event.action.prompt}` : event.type === 'action.finished' ? `${event.action.type} · ${event.result.slice(0, 80)}` : event.type === 'action.titled' ? event.title : event.type === 'span.started' ? eventLabel(event) : eventLabel(event);
-      const node = ensure(`${kind}:${id}`, kind, label, parentKey, event.seq, { id, parentId: start ? parentId : byId.get(id)?.parentId, startAt: start ? event.at : undefined, model: event.type === 'span.started' && event.kind !== 'task' ? event.request.model : undefined, status: start ? '运行中' : '未结束' });
+      const previous = byId.get(id);
+      const taskRequest = event.type === 'span.started' && event.kind === 'task' ? event.request : undefined;
+      const node = ensure(`${kind}:${id}`, kind, label, parentKey, event.seq, { id, parentId: start ? parentId : previous?.parentId, startAt: start ? event.at : undefined, model: event.type === 'span.started' && event.kind !== 'task' ? event.request.model : undefined, taskRunId: taskRequest?.taskRunId ?? previous?.taskRunId, executionId: taskRequest?.executionId ?? previous?.executionId, executionMode: taskRequest?.executionMode ?? previous?.executionMode, status: start ? '运行中' : '未结束' });
       byId.set(id, node);
       node.events.push(event);
       if (event.type === 'span.finished' && event.kind === 'task') {

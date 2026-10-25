@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
+import { useTaskUsageLive, useTaskUsageLiveExecutions } from '@/renderer/lib/task-usage-live';
 import { statusView } from '@/renderer/lib/task-status';
 import { TASK_RUNS_EMPTY, TASK_RUNS_TITLE } from '../model/describe.js';
 import type { TaskRunRow } from '../model/stats.js';
@@ -32,6 +33,9 @@ export function TaskRunsTable({
   onKindFilterChange: (kind: TaskRunKindFilter) => void;
 }) {
   const visible = rows.filter((row) => kindFilter === 'all' || row.kind === kindFilter);
+  useTaskUsageLiveExecutions(visible
+    .filter((row) => row.status === 'running' && row.executionMode === 'gateway' && Boolean(row.executionId))
+    .map((row) => ({ executionId: row.executionId!, taskRunId: row.taskRunId })));
   return (
     <Card>
       <CardHeader>
@@ -80,7 +84,7 @@ export function TaskRunsTable({
                 </TableCell>
                 <TableCell><ModelCell row={row} /></TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {`↑${row.inputTokens === undefined ? '-' : formatTokenCount(row.inputTokens)} / ↓${row.outputTokens === undefined ? '-' : formatTokenCount(row.outputTokens)}`}
+                  <TokensCell row={row} />
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {row.tps === undefined ? '-' : `${row.tps.toFixed(2)} TPS`}
@@ -93,6 +97,23 @@ export function TaskRunsTable({
         </Table>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Terminal runs render the authoritative final token counts; a still-running
+ * gateway task run overlays the pushed cumulative sample (native runs never
+ * produce one and keep the dash).
+ */
+function TokensCell({ row }: { row: TaskRunRow }) {
+  const live = useTaskUsageLive(row.status === 'running' && row.executionMode === 'gateway' ? row.executionId : undefined);
+  const inputTokens = live?.input ?? row.inputTokens;
+  const outputTokens = live?.output ?? row.outputTokens;
+  return (
+    <span className="inline-flex flex-col items-end leading-tight">
+      <span>输入 {formatTokenCount(inputTokens ?? 0)} · 缓存 {formatTokenCount(live?.cachedInput ?? row.cachedInputTokens ?? 0)}</span>
+      <span>输出 {formatTokenCount(outputTokens ?? 0)} · 请求 {live?.requests ?? "—"}</span>
+    </span>
   );
 }
 

@@ -279,6 +279,8 @@ function taskBriefFrom(taskRunId: string, value: unknown): SessionBridgeTaskBrie
   const record = value as Record<string, unknown>;
   const brief: SessionBridgeTaskBrief = {
     taskRunId: readString(record.task_run_id) ?? taskRunId,
+    ...(readString(record.executionId) === undefined ? {} : { executionId: readString(record.executionId) }),
+    ...(record.executionMode === 'native' || record.executionMode === 'gateway' ? { executionMode: record.executionMode } : {}),
     status: readString(record.status) ?? 'unavailable',
   };
   const name = readString(record.task_name) ?? readString(record.task_id);
@@ -640,6 +642,8 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
         if (endedAt !== undefined) run.ended_at = endedAt;
         const totalTokens = taskUsage(record.usage)?.totalTokens;
         if (totalTokens !== undefined) run.total_tokens = totalTokens;
+        if (typeof record.executionId === 'string') run.execution_id = record.executionId;
+        if (record.executionMode === 'gateway' || record.executionMode === 'native') run.execution_mode = record.executionMode;
       }
     }
     const result: SafeTaskRunEventsResult = {

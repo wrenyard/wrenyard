@@ -264,6 +264,9 @@ export interface TranscriptRunInfo {
   created_at?: string;
   started_at?: string;
   ended_at?: string;
+  /** Execution identity and routing mode, when available. */
+  execution_id?: string;
+  execution_mode?: 'native' | 'gateway';
   /** Authoritative total token count of the run, when the daemon reports one. */
   total_tokens?: number;
 }

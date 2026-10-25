@@ -108,6 +108,7 @@ import { REASONING_EFFORTS, parseRunSyntax, type ReasoningEffort } from '@wrenya
 import { PROVIDER_DEFAULT_REASONING } from '@wrenyard/providers/base'
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '@wrenyard/task'
 import { ForemanEventStore } from '../events/event-store.mts'
+import { LiveUsageAccumulator, queryTaskUsageLive } from './live-usage.mts'
 import { foremanStateRoot } from '../config/state.mts'
 import { resolveWrenyardConfigRoot } from '@wrenyard/paths'
 import { mkdir, readFile, statfs, writeFile } from 'node:fs/promises'
@@ -225,6 +226,8 @@ interface ForemanDaemonResources {
   /** Daemon-owned taskgraph service, retained so a forced shutdown can cancel
    *  every active graph through its existing signal API. */
   taskgraphService: TaskGraphService
+  /** Releases the live-usage accumulator's Foreman event-bus subscription. */
+  liveUsageUnsubscribe: () => void
   restoreGatewayEnvironment: () => void
   /**
    * Rebind every workspace-scoped resource to a new root and persist the
@@ -704,6 +707,8 @@ export class ForemanDaemon implements RunningForemanDaemon {
           ipcServer: resources.ipcServer,
           supervisor: resources.runtime.supervisor,
           execService: resources.runtime.execService,
+          liveUsage: resources.runtime.liveUsage,
+          liveUsageUnsubscribe: resources.liveUsageUnsubscribe,
           releaseDb: releaseDaemonDb,
         })
       }
@@ -1018,6 +1023,21 @@ async function createForemanDaemonResources(
   const gatewayToken = config.gateway.token ?? persistGeneratedGatewayToken(authoritativeConfigPath)
   const runtimeAvailability = createRoutingAvailability({ catalog, providerRuntime, loadNativeProviderReadiness, loadCurrentCodeBuddySnapshot })
   const gatewayEventStore = new ForemanEventStore(runtime.db)
+  // In-memory cumulative usage for running gateway executions. The
+  // accumulator itself is owned by the runtime (created before the supervisor
+  // so its start/terminal hooks bind here); this binds its emit dep to the
+  // persisted append + publish path now that the event store exists, and the
+  // terminal task.run.* subscription is retained so a teardown can release it.
+  const liveUsage = runtime.liveUsage
+  liveUsage.bindEmit((event) => {
+    gatewayEventStore.append(event)
+    return getForemanEventBus().publish(event)
+  })
+  const liveUsageUnsubscribe = getForemanEventBus().subscribe({
+    handle: (event) => {
+      liveUsage.handleEvent(event)
+    },
+  })
   // A task gateway request carries the execution id in its path but never
   // repeats the task's Fast preference in the body, so the gateway reads the
   // preference this execution was dispatched with from its own dispatch row.
@@ -1120,6 +1140,9 @@ async function createForemanDaemonResources(
       // completion replaces the client-derived sample with the gateway pair.
       if (typeof event.executionId === 'string' && event.executionId !== '') {
         updateLocalSpeedSample(event.executionId, runtime.db)
+        // Accumulate cumulative usage for the running execution and, at most
+        // once per throttle window, persist + publish a task.usage.live event.
+        await liveUsage.feed(event.executionId, event.usage)
       }
       await getForemanEventBus().publish(foremanEvent)
     },
@@ -1935,6 +1958,28 @@ async function createForemanDaemonResources(
       }
       return result
     },
+    // Batched live list over active gateway execution identities only: the
+    // indexed events aggregate covers persisted requests, then each still-
+    // registered execution's in-memory delta is merged on top. Ids that are
+    // not active gateway executions are simply absent from the result.
+    taskUsageLiveList: (executionIds) => {
+      const activeRecords = liveUsage.list()
+      const requestedIds = new Set(executionIds)
+      const eligibleRecords = activeRecords.filter((record) => requestedIds.has(record.executionId))
+      if (eligibleRecords.length === 0) return {}
+
+      const eligibleIds = eligibleRecords.map((record) => record.executionId)
+      const persisted = queryTaskUsageLive(eligibleIds)
+      for (const record of eligibleRecords) {
+        const snap = liveUsage.snapshot(record.executionId)
+        if (snap === undefined) continue
+        const entry = persisted[record.executionId] ?? { usage: { ...snap } }
+        entry.usage = { ...snap }
+        if (record.taskRunId !== undefined) entry.taskRunId = record.taskRunId
+        persisted[record.executionId] = entry
+      }
+      return persisted
+    },
     providerSignIn: async (params) => {
       const providerId = params.provider
       const provider = workBuddyProvidersById.get(providerId)
@@ -2469,6 +2514,7 @@ async function createForemanDaemonResources(
     rpcRouter,
     taskService: workspaceScoped.taskService,
     taskgraphService: workspaceScoped.taskgraphService,
+    liveUsageUnsubscribe,
     restoreGatewayEnvironment,
     rebindWorkspace,
     currentWorkspaceRoot: () => workspaceScoped.workspaceRoot,
@@ -2620,6 +2666,12 @@ interface DaemonResourceTeardownHandles {
   ipcServer?: IpcServer
   supervisor?: AgentExecutionSupervisor
   execService?: ExecService
+  /**
+   * Live-usage teardown: clears every pending trailing-flush timer, drops all
+   * membership, and releases the Foreman event-bus subscription.
+   */
+  liveUsage?: { dispose(): void }
+  liveUsageUnsubscribe?: () => void
   /** Released after the HTTP close settles; set only by whoever retained the DB. */
   releaseDb?: () => void
 }
@@ -2716,6 +2768,23 @@ async function teardownDaemonResources(handles: DaemonResourceTeardownHandles): 
       await handles.execService.close()
     } catch (error) {
       recordFailure('exec service shutdown failed', error)
+    }
+  }
+  // Dispose the live-usage accumulator after the supervisor so no late
+  // terminal callback can re-register: unsubscribe its event sink, then clear
+  // every pending flush timer and all tracked membership.
+  if (handles.liveUsageUnsubscribe) {
+    try {
+      handles.liveUsageUnsubscribe()
+    } catch (error) {
+      recordFailure('live usage unsubscribe failed', error)
+    }
+  }
+  if (handles.liveUsage) {
+    try {
+      handles.liveUsage.dispose()
+    } catch (error) {
+      recordFailure('live usage disposal failed', error)
     }
   }
   try {
@@ -2956,6 +3025,14 @@ interface ForemanDaemonRuntime {
   /** Canonical task dispatch plans keyed by provider/model:client targets. */
   dispatchPlans: Readonly<Record<string, import('@wrenyard/providers/catalog').DispatchPlan>>
   taskDispatchResolver: TaskDispatchResolver
+  /**
+   * Daemon-wide in-memory live usage accumulator for active gateway
+   * executions. Constructed before the supervisor so the supervisor's
+   * start/terminal hooks register and drop membership; the emit dep is bound
+   * lazily because the gateway event store is created later in resources
+   * assembly. Disposed by the shared resource teardown.
+   */
+  liveUsage: LiveUsageAccumulator
 }
 
 /**
@@ -3135,6 +3212,15 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
       log: (message) => writeDaemonLog('warn', message),
     })
     const operationAdapter = new OperationAdapter(operationComponents)
+    // In-memory cumulative usage for active gateway executions. The
+    // supervisor registers each admitted execution (gateway mode only is
+    // admitted) and drops it on every terminal path; the emit dep is bound
+    // later in resources assembly once the event store exists.
+    const liveUsage = new LiveUsageAccumulator({
+      resolveTaskRunId: (executionId) => db
+        .prepare<[string], { id: string }>(`SELECT id FROM tasks WHERE execution_id = ? LIMIT 1`)
+        .get(executionId)?.id,
+    })
     const supervisor = new AgentExecutionSupervisor({
       db,
       repoWriteLocks,
@@ -3146,6 +3232,12 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
       // A committed `done` execution refreshes exactly its own sample in the
       // in-memory local speed window.
       onExecutionCompleted: (executionId) => updateLocalSpeedSample(executionId, db),
+      onExecutionStarted: (executionId, info) => {
+        liveUsage.register(executionId, info)
+      },
+      onExecutionTerminal: (executionId) => {
+        liveUsage.drop(executionId)
+      },
     })
     const runner = new TaskWorkflowRunner({
       db,
@@ -3166,7 +3258,7 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
     setAgentExecutionSupervisor(supervisor)
     setTaskWorkflowRunner(runner)
 
-    return { db, repoWriteLocks, supervisor, runner, execService, operationComponents, operationAdapter, catalog, providerRuntime, workBuddyProviders: [workBuddy, workBuddyAi], codeBuddyProvider, dispatchPlans, taskDispatchResolver }
+    return { db, repoWriteLocks, supervisor, runner, execService, operationComponents, operationAdapter, catalog, providerRuntime, workBuddyProviders: [workBuddy, workBuddyAi], codeBuddyProvider, dispatchPlans, taskDispatchResolver, liveUsage }
   } catch (error) {
     releaseDaemonDb()
     throw error

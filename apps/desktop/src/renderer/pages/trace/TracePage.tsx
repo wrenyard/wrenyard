@@ -9,6 +9,7 @@ import { ScrollArea } from '@/renderer/components/ui/scroll-area';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/renderer/components/ui/resizable';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/renderer/components/ui/tabs';
 import { copyText } from '@/renderer/lib/desktop';
+import { dropTaskUsageLiveByRun, useTaskUsageLiveByRun, useTaskUsageLiveRuns } from '@/renderer/lib/task-usage-live';
 import { useNavLocation } from '@/renderer/lib/navigation';
 import { listSessions, readLedger, subscribeLedger } from './api.js';
 import { buildTrace, type TraceKind, type TraceModel, type TraceNode } from './model/trace.js';
@@ -27,7 +28,15 @@ function nodeOutput(node: TraceNode): string {
     return '';
   }).filter(Boolean).join('\n\n');
 }
-function nodeFields(node: TraceNode): Array<[string, string]> {
+function liveTokens(live: ReturnType<typeof useTaskUsageLiveByRun>): TraceNode['tokens'] {
+  return live === undefined ? undefined : { input: live.input, cached: live.cachedInput, output: live.output, reasoning: 0 };
+}
+
+function liveUsageLabel(live: ReturnType<typeof useTaskUsageLiveByRun>): string | undefined {
+  return live === undefined ? undefined : `输入 ${live.input} · 缓存 ${live.cachedInput} · 输出 ${live.output} · 请求 ${live.requests}`;
+}
+
+function nodeFields(node: TraceNode, live?: ReturnType<typeof useTaskUsageLiveByRun>): Array<[string, string]> {
   const fields: Array<[string, string]> = [['类型', kindLabel[node.kind]], ['状态', node.status]];
   if (node.id) fields.push(['ID', node.id]);
   if (node.parentId) fields.push(['Parent', node.parentId]);
@@ -51,7 +60,8 @@ function nodeFields(node: TraceNode): Array<[string, string]> {
     if (event.type === 'action.started') fields.push(['提示', event.action.prompt]);
     if (event.type === 'action.finished') fields.push(['结果', event.result]);
   }
-  if (node.tokens) fields.push(['用量', `输入 ${node.tokens.input} · 缓存 ${node.tokens.cached} · 输出 ${node.tokens.output} · 推理 ${node.tokens.reasoning}`]);
+  if (node.kind === 'task' && live !== undefined) fields.push(['实时用量', liveUsageLabel(live)!]);
+  else if (node.tokens) fields.push(['用量', `输入 ${node.tokens.input} · 缓存 ${node.tokens.cached} · 输出 ${node.tokens.output} · 推理 ${node.tokens.reasoning}`]);
   return fields;
 }
 
@@ -119,6 +129,28 @@ export function TracePage() {
     return () => { active = false; unsubscribe(); };
   }, [selectedId]);
   const model: TraceModel | null = useMemo(() => events.length ? buildTrace(events) : null, [events]);
+  useEffect(() => {
+    if (!model) return;
+    const visit = (node: TraceNode): void => {
+      const taskRunId = node.taskRunId;
+      if (node.kind === 'task' && !node.running && typeof taskRunId === 'string' && taskRunId.length > 0) {
+        dropTaskUsageLiveByRun(taskRunId);
+      }
+      for (const child of node.children) visit(child);
+    };
+    visit(model.root);
+  }, [model]);
+  const activeTraceRunIds = useMemo(() => {
+    const runIds = new Set<string>();
+    const visit = (node: TraceNode): void => {
+      const taskRunId = node.taskRunId;
+      if (node.kind === 'task' && node.running && typeof taskRunId === 'string' && taskRunId.length > 0) runIds.add(taskRunId);
+      node.children.forEach(visit);
+    };
+    if (model) visit(model.root);
+    return [...runIds];
+  }, [model]);
+  useTaskUsageLiveRuns(activeTraceRunIds);
   const selectedNode = useMemo(() => {
     if (!model) return null;
     const find = (node: TraceNode): TraceNode | null => node.key === selectedKey ? node : node.children.map(find).find(Boolean) ?? null;
@@ -197,7 +229,7 @@ export function TracePage() {
         {!selectedNode ? <div className="grid h-full place-items-center text-sm text-muted-foreground">选择一个节点查看详情</div> : <div className="flex h-full min-h-0 flex-col">
           <div className="border-b p-3"><div className="flex items-center gap-2 text-[11px] text-muted-foreground"><span>{kindLabel[selectedNode.kind]}</span><span>·</span><span>seq {selectedNode.seq}{selectedNode.endSeq && selectedNode.endSeq !== selectedNode.seq ? `–${selectedNode.endSeq}` : ''}</span></div><h2 className="mt-1 break-words text-sm font-semibold">{selectedNode.label}</h2>{selectedNode.startAt && <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground"><Timestamp value={selectedNode.startAt} precision="second" />{selectedNode.endAt ? <Elapsed start={selectedNode.startAt} end={selectedNode.endAt} /> : selectedNode.running ? <Elapsed start={selectedNode.startAt} /> : null}</div>}</div>
           <Tabs defaultValue="overview" className="min-h-0 flex-1"><TabsList variant="line" className="mx-3 mt-2"><TabsTrigger value="overview">概览</TabsTrigger><TabsTrigger value="output">输出</TabsTrigger><TabsTrigger value="raw">原始</TabsTrigger></TabsList>
-            <TabsContent value="overview" className="min-h-0 overflow-auto p-3"><div className="space-y-2">{nodeFields(selectedNode).map(([label, value]) => <div key={label} className="rounded-md bg-muted/50 p-2"><div className="text-[10px] text-muted-foreground">{label}</div><div className="mt-0.5 break-all whitespace-pre-wrap text-xs">{value}</div></div>)}</div></TabsContent>
+            <TabsContent value="overview" className="min-h-0 overflow-auto p-3"><SelectedNodeFields node={selectedNode} /></TabsContent>
             <TabsContent value="output" className="min-h-0 overflow-auto p-3"><pre className="whitespace-pre-wrap break-words text-xs leading-relaxed">{nodeOutput(selectedNode) || '该节点没有单独记录输出。'}</pre></TabsContent>
             <TabsContent value="raw" className="flex min-h-0 flex-col p-3"><div className="mb-2 flex justify-end"><Button size="xs" variant="ghost" onClick={() => void copyText(eventRaw(selectedNode))}><Copy />复制节点事件</Button></div><pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/50 p-2 text-[10px]">{eventRaw(selectedNode) || '没有直接事件'}</pre></TabsContent>
           </Tabs>
@@ -208,8 +240,19 @@ export function TracePage() {
 }
 
 function Metric({ label, value }: { label: string; value: string }) { return <div className="rounded-md bg-muted/50 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">{label}</div><div className="mt-0.5 truncate font-medium tabular-nums">{value}</div></div>; }
+
+/** Detail fields of the selected node; a running task span overlays live usage. */
+function SelectedNodeFields({ node }: { node: TraceNode }) {
+  const live = useTaskUsageLiveByRun(node.kind === 'task' && node.running ? node.taskRunId : undefined);
+  return <div className="space-y-2">{nodeFields(node, live).map(([label, value]) => <div key={label} className="rounded-md bg-muted/50 p-2"><div className="text-[10px] text-muted-foreground">{label}</div><div className="mt-0.5 break-all whitespace-pre-wrap text-xs">{value}</div></div>)}</div>;
+}
 function TraceRow({ node, depth, selected, expanded, rangeStart, rangeEnd, onSelect, onToggle }: { node: TraceNode; depth: number; selected: boolean; expanded: boolean; rangeStart: number; rangeEnd: number; onSelect: () => void; onToggle: () => void }) {
   const Icon = icons[node.kind];
+  // A still-running task span overlays the pushed cumulative gateway sample;
+  // finished spans keep the authoritative span.finished tokens.
+  const live = useTaskUsageLiveByRun(node.kind === 'task' && node.running ? node.taskRunId : undefined);
+  const liveSummary = liveUsageLabel(live);
+  const tokens = live === undefined ? node.tokens : liveTokens(live);
   const start = node.startAt ? new Date(node.startAt).getTime() : null;
   const end = node.endAt ? new Date(node.endAt).getTime() : node.running ? Date.now() : start;
   const total = Math.max(1, rangeEnd - rangeStart);
@@ -223,7 +266,7 @@ function TraceRow({ node, depth, selected, expanded, rangeStart, rangeEnd, onSel
       <span className="truncate">{node.label}</span><span className="shrink-0 text-[10px] text-muted-foreground">{kindLabel[node.kind]}</span>
     </button>
     <div className="relative h-4 overflow-hidden rounded-sm bg-muted/60"><span className={`absolute top-1 h-2 rounded-sm ${node.status.includes('failed') || node.status.includes('error') ? 'bg-destructive/70' : node.running ? 'animate-pulse bg-primary' : 'bg-primary/55'}`} style={{ left: `${left}%`, width: `${width}%` }} /></div>
-    <span className="text-right tabular-nums text-muted-foreground">{node.tokens ? node.tokens.input + node.tokens.output : '—'}</span>
+    <span className="truncate text-right tabular-nums text-muted-foreground" title={liveSummary}>{liveSummary ? `入${live!.input} 缓${live!.cachedInput} 出${live!.output} 次${live!.requests}` : tokens ? `入${tokens.input} 缓${tokens.cached} 出${tokens.output} 次—` : '—'}</span>
     <span className="text-right tabular-nums text-muted-foreground">{node.startAt && node.endAt ? <Elapsed start={node.startAt} end={node.endAt} /> : node.startAt && node.running ? <Elapsed start={node.startAt} /> : node.events[0]?.at ? new Date(node.events[0].at).toLocaleTimeString() : '—'}</span>
   </div>;
 }

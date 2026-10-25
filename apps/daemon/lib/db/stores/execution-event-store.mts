@@ -1,5 +1,6 @@
 import { cachedStatement } from '../connection.mts'
 import type { ForemanDatabase } from '../types.mts'
+import { notifyAppendCommitted } from '../../events/append-notify.mts'
 import { compactJsonRecord, toJsonText } from './json.mts'
 
 export interface TaskLifecycleEventWrite {
@@ -69,6 +70,9 @@ export class ExecutionEventStore {
       write.timestamp,
     )
     if (result.changes !== 1) return
+    // Wake event.list waiters only for genuinely inserted rows; the wake is
+    // deferred until the surrounding transaction (if any) has committed.
+    notifyAppendCommitted(this.db)
     this.applyTelemetry(write)
   }
 
@@ -101,7 +105,7 @@ export class ExecutionEventStore {
     })
 
     const insertRow = (): void => {
-      cachedStatement<unknown[]>(
+      const result = cachedStatement<unknown[]>(
         this.db,
         `INSERT INTO events (
           execution_id, task_id, seq, type, timestamp, data,
@@ -116,6 +120,7 @@ export class ExecutionEventStore {
         isFailed ? 1 : 0,
         write.timestamp,
       )
+      if (result.changes === 1) notifyAppendCommitted(this.db)
       // Every new task run materializes its durable zero/true telemetry row
       // atomically with the task.started lifecycle event.
       this.ensureTelemetryRow(write.taskRunId, write.timestamp)

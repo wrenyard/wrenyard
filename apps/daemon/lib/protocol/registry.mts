@@ -294,6 +294,8 @@ import {
   taskRunStatusResultSchema,
   taskRunWaitParamsSchema,
   taskRunWaitResultSchema,
+  taskUsageLiveListParamsSchema,
+  taskUsageLiveListResultSchema,
   type TaskDefinitionDescribeParams,
   type TaskDefinitionDescribeResult,
   type TaskDefinitionListParams,
@@ -314,6 +316,8 @@ import {
   type TaskRunStatusResult,
   type TaskRunWaitParams,
   type TaskRunWaitResult,
+  type TaskUsageLiveListParams,
+  type TaskUsageLiveListResult,
 } from './methods/task.mts'
 import {
   taskRoutingTestParamsSchema,
@@ -675,6 +679,10 @@ export type {
   TaskRunStatusResult,
   TaskRunWaitParams,
   TaskRunWaitResult,
+  TaskUsageLive,
+  TaskUsageLiveRecord,
+  TaskUsageLiveListParams,
+  TaskUsageLiveListResult,
 } from './methods/task.mts'
 export type {
   TaskRoutingTestParams,
@@ -876,6 +884,7 @@ export interface ForemanMethodParams {
   'task.run.wait': TaskRunWaitParams
   'task.run.cancel': TaskRunCancelParams
   'task.run.events': TaskRunEventsParams
+  'task.usage.liveList': TaskUsageLiveListParams
   'project.list': ProjectListParams
   'project.describe': ProjectDescribeParams
   'project.status': ProjectStatusParams
@@ -991,6 +1000,7 @@ export interface ForemanMethodResults {
   'task.run.wait': TaskRunWaitResult
   'task.run.cancel': TaskRunCancelResult
   'task.run.events': TaskRunEventsResult
+  'task.usage.liveList': TaskUsageLiveListResult
   'project.list': ProjectListResult
   'project.describe': ProjectDescribeResult
   'project.status': ProjectStatusResult
@@ -1213,6 +1223,11 @@ export const methodRegistry: {
   'task.run.events': {
     params: taskRunEventsParamsSchema,
     result: taskRunEventsResultSchema,
+  },
+  'task.usage.liveList': {
+    params: taskUsageLiveListParamsSchema,
+    result: taskUsageLiveListResultSchema,
+    description: 'Batched cumulative live usage for active gateway executions. One call returns usage for every requested execution id, keyed by execution identity; IPC-only, read-only, never per-id calls.',
   },
   'project.list': {
     params: projectListParamsSchema,

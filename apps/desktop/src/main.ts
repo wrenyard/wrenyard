@@ -457,6 +457,7 @@ function reconcileDaemonConnection(state: DaemonLifecycleSnapshot['state']): voi
   if (state !== 'running' || daemonHealthy) return;
   daemonHealthy = true;
   desktopSubscriptions?.reconnect();
+  shellWindow?.notifyTaskUsageReconnect();
   taskgraphWindowOwner?.reconnect();
   void refreshQuotaProjectionAfterGatewayRestart();
 }
@@ -1461,6 +1462,12 @@ async function bootstrap(): Promise<void> {
       const changed = activityProjector.update(presence);
       if (changed) shellWindow?.notifyActivityChanged(changed);
       taskgraphNotifier.observe(presence);
+    },
+    // Cumulative live usage of still-running gateway task runs, pushed as the
+    // daemon emits its throttled task.usage.live events. The renderer keeps
+    // the shared cache and hydrates through task.usage.liveList instead.
+    onTaskUsageLive: (update) => {
+      shellWindow?.notifyTaskUsageLive(update);
     },
   });
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Page,
@@ -13,6 +13,7 @@ import { Button } from '@/renderer/components/ui/button';
 import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
 import { formatSnapshotStamp } from '@/renderer/lib/format';
+import { dropTaskUsageLive, useTaskUsageLiveExecutions } from '@/renderer/lib/task-usage-live';
 import type { StatsPeriod } from '@/shell-contract';
 import { ActivityHeatmap } from './components/ActivityHeatmap.js';
 import { MetricCards } from './components/MetricCards.js';
@@ -48,6 +49,17 @@ export function StatsPage() {
   const range = window
     ? `${formatSnapshotStamp(window.startAt)} 至 ${formatSnapshotStamp(window.endAt)}`
     : '';
+
+  const recentRuns = snapshot?.status === 'available' ? snapshot.recentTaskRuns : undefined;
+  const liveExecutions = useMemo(() => (recentRuns ?? [])
+    .filter((run) => run.status === 'running' && run.executionMode === 'gateway' && Boolean(run.executionId))
+    .map((run) => ({ executionId: run.executionId!, taskRunId: run.taskRunId })), [recentRuns]);
+  useTaskUsageLiveExecutions(liveExecutions);
+  useEffect(() => {
+    for (const run of recentRuns ?? []) {
+      if (run.status !== 'running' && run.executionId) dropTaskUsageLive(run.executionId);
+    }
+  }, [recentRuns]);
 
   return (
     <>

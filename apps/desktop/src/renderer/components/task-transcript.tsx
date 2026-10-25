@@ -30,6 +30,7 @@ import { Spinner } from '@/renderer/components/ui/spinner';
 import { Markdown } from '@/renderer/components/markdown';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { elapsedBetween, formatClockSeconds, formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
+import { dropTaskUsageLive, useTaskUsageLive, useTaskUsageLiveExecutions } from '@/renderer/lib/task-usage-live';
 import type { SafeTaskRunEventsResult, SafeTranscriptEventData, TranscriptRunInfo } from '@/pet/shared/taskgraph';
 import {
   fileReference,
@@ -601,6 +602,8 @@ function runHeader(run: TranscriptRunInfo | null | undefined): RunHeaderView | n
 // ── Stream (presentational) ──────────────────────────────────────────
 
 export interface TaskTranscriptStreamProps {
+  /** Task run the stream renders; enables the live-usage overlay while running. */
+  taskRunId?: string;
   /** Authoritative run facts for the header line, when known. */
   run?: TranscriptRunInfo | null;
   /** Already loaded safe events, in order. */
@@ -627,6 +630,7 @@ export interface TaskTranscriptStreamProps {
  * error overlays (anchored to this element, never to the viewport).
  */
 export function TaskTranscriptStream({
+  taskRunId,
   run,
   events,
   live,
@@ -653,7 +657,24 @@ export function TaskTranscriptStream({
     [dark, onOpenExternal],
   );
   const showEmpty = !loading && !error && rows.length === 0;
-  const header = useMemo(() => runHeader(run), [run]);
+  // While the run is live, cumulative gateway usage stands in for the
+  // (still-empty) authoritative total: the value already riding
+  // task.run.status (`live_usage`) is the baseline and pushed samples keep it
+  // current between status reads. A terminal status drops it again.
+  const liveEligible = live && run?.status === 'running' && run.execution_mode === 'gateway' && Boolean(run.execution_id);
+  useTaskUsageLiveExecutions(liveEligible && taskRunId !== undefined
+    ? [{ executionId: run!.execution_id!, taskRunId }]
+    : []);
+  const liveUsage = useTaskUsageLive(liveEligible ? run!.execution_id : undefined);
+  const header = useMemo(() => {
+    const view = runHeader(run);
+    if (view === null) return null;
+    if (liveUsage === undefined) return view;
+    return {
+      ...view,
+      tokens: `输入 ${formatTokenCount(liveUsage.input)} · 缓存 ${formatTokenCount(liveUsage.cachedInput)} · 输出 ${formatTokenCount(liveUsage.output)} · 请求 ${liveUsage.requests}`,
+    };
+  }, [run, liveUsage]);
 
   return (
     <div className={cn('relative flex min-h-0 flex-1 flex-col bg-background text-xs text-foreground', className)}>
@@ -766,6 +787,7 @@ export function TaskTranscript({ taskRunId, loader, dark, onOpenExternal, classN
         if (result.events.length > 0) setEvents((current) => [...current, ...result.events]);
         nextSeq = result.next_seq;
         const terminal = result.run !== undefined && TERMINAL_RUN_STATUSES.has(result.run.status);
+        if (terminal) dropTaskUsageLive(taskRunId);
         if (!disposed && (result.has_more || !terminal)) {
           // Pages still draining come back immediately; a live run polls.
           timer = setTimeout(() => void tick(), result.has_more ? 0 : POLL_INTERVAL_MS);
@@ -797,6 +819,7 @@ export function TaskTranscript({ taskRunId, loader, dark, onOpenExternal, classN
 
   return (
     <TaskTranscriptStream
+      taskRunId={taskRunId}
       run={run}
       events={events}
       live={live}

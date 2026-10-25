@@ -15,6 +15,7 @@ import {
   type WorkspaceConfigurationSnapshot,
   type UpdateSnapshot,
   type DaemonLifecycleSnapshot,
+  type DaemonLifecycleNotification,
   type ShellPage,
   type WrenyardShellApi,
   type WrenyardGatewayHealthResult,
@@ -35,6 +36,9 @@ import {
   type AgentMethodMap,
   type ClientMethod,
   type ClientMethodMap,
+  type TaskMethod,
+  type TaskMethodMap,
+  type TaskUsageLiveUpdate,
   type ExecStartRequest,
   type ExecSnapshotDto,
   type ExecEventsRequest,
@@ -208,6 +212,13 @@ const api: WrenyardShellApi = {
     ipcRenderer.on(SHELL_CHANNELS.daemonChanged, handler);
     return () => ipcRenderer.removeListener(SHELL_CHANNELS.daemonChanged, handler);
   },
+  onTaskUsageReconnect(listener: () => void): () => void {
+    const handler = (_event: Electron.IpcRendererEvent, notification: DaemonLifecycleNotification): void => {
+      if (notification?.reason === 'task-usage-reconnect') listener();
+    };
+    ipcRenderer.on(SHELL_CHANNELS.daemonChanged, handler);
+    return () => ipcRenderer.removeListener(SHELL_CHANNELS.daemonChanged, handler);
+  },
   savePetSettings(settings): Promise<SettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.savePetSettings, settings) as Promise<SettingsSnapshot>;
   },
@@ -298,6 +309,23 @@ const api: WrenyardShellApi = {
       method,
       params,
     ) as Promise<ClientMethodMap[M]['result']>;
+  },
+  task<M extends TaskMethod>(
+    method: M,
+    params?: TaskMethodMap[M]['params'],
+  ): Promise<TaskMethodMap[M]['result']> {
+    return ipcRenderer.invoke(
+      SHELL_CHANNELS.taskRequest,
+      method,
+      params,
+    ) as Promise<TaskMethodMap[M]['result']>;
+  },
+  onTaskUsageLive(listener: (update: TaskUsageLiveUpdate) => void): () => void {
+    const handler = (_event: Electron.IpcRendererEvent, update: TaskUsageLiveUpdate): void => {
+      listener(update);
+    };
+    ipcRenderer.on(SHELL_CHANNELS.taskUsageLive, handler);
+    return () => ipcRenderer.removeListener(SHELL_CHANNELS.taskUsageLive, handler);
   },
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskRoutingTest, params) as Promise<TaskRoutingTestResult>;
