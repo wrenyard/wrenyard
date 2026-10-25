@@ -9,7 +9,7 @@ export const moonshotModels = [
     speed: 40,
   }, { lab: 'moonshot', family: 'kimi' }),
   defineModel('kimi-k2.6', 'Kimi K2.6', {
-    intelligence: 'mid',
+    intelligence: 'low',
     capabilities: ['text'],
     contextWindow: 262_144,
     pricing: [0.003, 0.15, 0.6],

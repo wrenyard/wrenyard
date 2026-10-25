@@ -7,7 +7,7 @@ export const nvidiaModels = [
   // short reasoning-inclusive observation, not a sustained benchmark). The
   // provider override and its provenance remain unchanged.
   defineModel('nemotron-3-ultra', 'Nemotron 3 Ultra', {
-    intelligence: 'high',
+    intelligence: 'low',
     capabilities: ['text'],
     contextWindow: 1_000_000,
     maxOutputTokens: 65_536,
@@ -54,7 +54,7 @@ export const nvidiaModels = [
   // canonical page. Pricing and maxOutputTokens stay absent: neither is
   // established for this identity.
   defineModel('nemotron-3.5-super-vl-120b-a12b', 'Nemotron 3.5 Super VL 120B A12B', {
-    intelligence: 'mid',
+    intelligence: 'low',
     capabilities: ['text', 'image'],
     contextWindow: 1_000_000,
     speed: 388,

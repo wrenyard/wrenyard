@@ -53,7 +53,7 @@ export const alibabaModels = [
     speed: 29,
   }, { lab: 'alibaba', family: 'qwen-coder' }),
   defineModel('qwen3.8-27b', 'Qwen3.8 27B', {
-    intelligence: 'mid',
+    intelligence: 'low',
     capabilities: ['text', 'image'],
     contextWindow: 262_144,
     pricing: [0.003, 0.15, 0.6],

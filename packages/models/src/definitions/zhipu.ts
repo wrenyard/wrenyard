@@ -2,7 +2,7 @@ import { defineModel } from './define.ts';
 
 export const zhipuModels = [
   defineModel('glm-5.3', 'GLM 5.3', {
-    intelligence: 'high',
+    intelligence: 'mid',
     capabilities: ['text'],
     contextWindow: 1_048_576,
     maxOutputTokens: 32_768,
@@ -10,7 +10,7 @@ export const zhipuModels = [
     speed: 64,
   }, { lab: 'zhipu', family: 'glm-5.3' }),
   defineModel('glm-5.3-flash', 'GLM 5.3 Flash', {
-    intelligence: 'mid',
+    intelligence: 'low',
     capabilities: ['text'],
     contextWindow: 1_048_576,
     maxOutputTokens: 32_768,

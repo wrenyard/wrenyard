@@ -25,7 +25,7 @@ export const xiaomiModels = [
   // Identity mapping: https://models.opencode.ai/providers/opencode/ and the
   // models.dev MiMo family page.
   defineModel('mimo-v2.6-flash', 'MiMo V2.6 Flash', {
-    intelligence: 'high',
+    intelligence: 'low',
     capabilities: ['text'],
     contextWindow: 1_048_576,
     maxOutputTokens: 131_072,

@@ -9,7 +9,7 @@ export const reflectionModels = [
   // models.dev canonical page. Pricing stays absent because the public beta is
   // free with no per-token rate; maxOutputTokens is sourced.
   defineModel('beam-1.0-501b-a23b', 'Beam 1.0 501B A23B', {
-    intelligence: 'mid',
+    intelligence: 'low',
     capabilities: ['text'],
     contextWindow: 1_048_576,
     // https://developers.reflection.ai/models checked 2026-10-20 (max_output_tokens 131072).

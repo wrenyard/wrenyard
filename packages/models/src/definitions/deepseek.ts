@@ -37,7 +37,7 @@ export const deepseekModels = [
     free: true,
   }, { lab: 'deepseek', family: 'deepseek-v4.1' }),
   defineModel('deepseek-v4-pro', 'DeepSeek V4 Pro', {
-    intelligence: 'mid',
+    intelligence: 'low',
     capabilities: ['text'],
     contextWindow: 1_000_000,
     // https://api-docs.deepseek.com/quick_start/pricing/ checked 2026-10-20 (384K maximum output).

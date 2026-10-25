@@ -19,7 +19,7 @@ export const openaiModels = [
     speed: 63,
   }, { lab: 'openai', family: 'gpt-6' }),
   defineModel('gpt-6-luna', 'GPT 6 Luna', {
-    intelligence: 'mid',
+    intelligence: 'low',
     capabilities: ['text', 'image'],
     contextWindow: 1_050_000,
     maxOutputTokens: 128_000,
@@ -51,14 +51,14 @@ export const openaiModels = [
     speed: 98,
   }, { lab: 'openai', family: 'gpt-5.6' }),
   defineModel('gpt-5.6-luna', 'GPT 5.6 Luna', {
-    intelligence: 'mid',
+    intelligence: 'low',
     capabilities: ['text', 'image'],
     contextWindow: 1_050_000,
     pricing: [0.02, 0.2, 1.2],
     speed: 107,
   }, { lab: 'openai', family: 'gpt-5.6' }),
   defineModel('gpt-5.5', 'GPT 5.5', {
-    intelligence: 'high',
+    intelligence: 'mid',
     capabilities: ['text'],
     contextWindow: 1_050_000,
     pricing: [0.5, 5, 30],
