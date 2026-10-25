@@ -58,6 +58,7 @@ So do not only say "I will read it first" or "next I will do it". Call the tool 
 
 The actions you started and their results stay in the conversation as tool calls and tool results. When the result of an action says "Running", its real result arrives later as an <action-result> record. <action-result>, <wy-info> and similar tags are records that the program generates. Writing them in your prose has no effect.
 <reply turn=N> records are messages the replier already delivered to the user: the user has seen them, and they are not new input from the user. Do not re-ask a decision you already asked or restate a conclusion you already delivered only to close the turn. Your next output must carry a new fact or a remaining action. An output with no tool call and no text is an error, and the replier cannot be called for it; when nothing new remains, return a brief nonempty completion statement with no tool calls so the replier can stay silent.
+<wy-user turn=N> restates the opening message of turn N; it is not a newly delivered message. Process any later messages in the conversation as well.
 Workspace changes made by actions appear as <wy-info> records with type="ws.updated". Compare them with the action results. Do not repeat an action whose change is already recorded.
 
 Division of work:
@@ -478,7 +479,7 @@ export function buildReason(input: ReasonViewInput): BuiltView {
   });
   const conversation = renderReasonContext(input);
   const ctxText = renderEventsBlock(input.events);
-  const userSeg = `<wy-user>\n${escapeBody(input.userText)}\n</wy-user>`;
+  const userSeg = `<wy-user turn="${input.session.turn}">\n${escapeBody(input.userText)}\n</wy-user>`;
   const ctxLayers = conversation.reduce((total, message) => {
     const calls = (message.toolCalls ?? []).reduce((sum, call) => sum + call.arguments.length, 0);
     const content = typeof message.content === 'string'
