@@ -379,7 +379,7 @@ export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv):
         `models.web_search = ${JSON.stringify(modelId)}\n` +
         `models.image_description = ${JSON.stringify(modelId)}\n` +
         `models.prompt_suggestion = ${JSON.stringify(modelId)}\n` +
-        `[model.${JSON.stringify(modelId).slice(1, -1)}]\nname = "Wrenyard"\nmodel = ${JSON.stringify(gatewayModel)}\nbase_url = ${JSON.stringify(gateway)}\nenv_key = "WRENYARD_GATEWAY_TOKEN"\napi_backend = "chat_completions"\nsupports_backend_search = false\n${gatewayHeadersToml}`
+        `[model.${JSON.stringify(modelId).slice(1, -1)}]\nname = "Wrenyard"\nmodel = ${JSON.stringify(gatewayModel)}\nbase_url = ${JSON.stringify(gateway)}\nenv_key = "WRENYARD_GATEWAY_TOKEN"\napi_backend = "chat_completions"\nmax_retries = 0\nsupports_backend_search = false\n${gatewayHeadersToml}`
         : '') + mcpToml;
     const args = ['--permission-mode', 'bypassPermissions', '--always-approve', ...mcpPermissionArgs, '--model', modelId];
     if (request.clientReasoningEffort)
