@@ -49,9 +49,9 @@
  *       ETag:      a35d85820f102ac0a3236690edc0251f
  *       SHA-256:   a35d85820f102ac0a3236690edc0251f1c3ce655d31ac2483ba8b727068b78a8
  *       Method:    read-only GET; only the already-selected 15 providers /
- *                  67 model pairs were read
+ *                  68 model pairs were read
  *
- * Included:  15 providers / 67 text models (source `xai` row: 13 models, 1 kept)
+ * Included:  15 providers / 68 text models (source `xai` row: 13 models, 1 kept)
  *
  * Pricing classification: a `pricing` tuple is published below ONLY when the
  * source gives one scalar (FLAT) cached/input/output rate and all three
@@ -133,7 +133,7 @@ export const MODELS_DEV_CATALOG_SOURCE: ModelsDevCatalogSource = {
   fetchedAt: "2026-10-14T22:21:34Z",
   etag: "\"f3dbe7fd1f33c2ee78ea1606bf7f1958\"",
   includedProviderCount: 15,
-  includedModelCount: 67,
+  includedModelCount: 68,
 };
 
 export const MODELS_DEV_CATALOG_PROVIDERS: readonly ModelsDevCatalogProvider[] = [

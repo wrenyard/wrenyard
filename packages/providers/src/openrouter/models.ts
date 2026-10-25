@@ -1,4 +1,4 @@
-import { defineProvider, model, openAI } from '../base/model-defaults.ts';
+import { defineProvider, model, openAI, REASONING_LOW_HIGH_MAX } from '../base/model-defaults.ts';
 import type { ReasoningEffort } from '../base/index.ts';
 
 // OpenRouter forwards a public effort through the OpenAI-style `reasoning`
@@ -14,6 +14,7 @@ export const definition = defineProvider({
     model('claude-sonnet-5-5', undefined, undefined, 'anthropic/claude-sonnet-5.5', REASONING_WITHOUT_NONE),
     model('gpt-6.1-sol', undefined, undefined, 'openai/gpt-6.1-sol', REASONING_WITHOUT_NONE),
     model('gemini-4-argon', undefined, undefined, 'google/gemini-4-argon', ['low', 'medium', 'high']),
+    model('kimi-k3.1-pro', undefined, undefined, 'moonshotai/kimi-k3.1-pro', REASONING_LOW_HIGH_MAX),
     { ...model('nex-n2.5-mini', 262_144, 235_929, 'nex-agi/nex-n2.5-mini:free'), free: true, capabilities: ['text', 'image'], reasoningEfforts: REASONING_BASIC },
     { ...model('nex-n2.5-pro', 262_144, 235_929, 'nex-agi/nex-n2.5-pro:free'), free: true, capabilities: ['text', 'image'], reasoningEfforts: REASONING_BASIC },
     { ...model('north-mini-code', 256_000, 64_000, 'cohere/north-mini-code:free'), free: true, reasoningEfforts: REASONING_BASIC },
