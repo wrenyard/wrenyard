@@ -97,15 +97,15 @@ export function formatRatio(ratio: number | undefined): string {
  * Currency-aware cost string from a USD-denominated amount. Unknown renders as
  * an em dash; zero renders as `¥0` (CNY) or `$0` (USD); otherwise the value is
  * converted by `CNY_PER_USD` and prefixed with `¥` when the display currency is
- * CNY, or left unconverted and prefixed with `$` when it is USD. Four-decimal
- * rounding is preserved for both currencies.
+ * CNY, or left unconverted and prefixed with `$` when it is USD. CNY amounts
+ * use two decimals; USD amounts keep four.
  */
 export function formatCost(value: number | undefined, currency: DisplayCurrency = 'CNY'): string {
   if (value === undefined || !Number.isFinite(value)) return '—';
   if (value === 0) return currency === 'CNY' ? '¥0' : '$0';
   const symbol = currency === 'CNY' ? '¥' : '$';
   const amount = currency === 'CNY' ? value * CNY_PER_USD : value;
-  return `${symbol}${amount.toFixed(4)}`;
+  return `${symbol}${amount.toFixed(currency === 'CNY' ? 2 : 4)}`;
 }
 
 /** Grouped integer, e.g. `1,234`; used for the small counts in the title card. */
