@@ -282,6 +282,7 @@ export const PUBLIC_CLIENT_KEYS: Readonly<Record<string, string>> = Object.freez
   dsh: 'dsh',
   oc: 'opencode',
   pi: 'pi',
+  kc: 'kimi',
 });
 
 export type ProviderAuthScheme = 'bearer' | 'x-api-key';
