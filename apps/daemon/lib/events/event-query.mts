@@ -44,7 +44,12 @@ const EVENT_REF_FIELDS = [
 ] as const
 
 const EVENT_DATA_PATHS = [
-  ...EVENT_DATA_FIELDS.map((field) => `'$.${field}'`),
+  ...EVENT_DATA_FIELDS.map((field) => {
+    if (field === 'executionId' || field === 'taskRunId' || field === 'usage') {
+      return `CASE WHEN events.type = 'task.usage.live' THEN '$.data.${field}' ELSE '$.${field}' END`
+    }
+    return `'$.${field}'`
+  }),
   ...EVENT_REF_FIELDS.map((field) => `'$.refs.${field}'`),
 ].join(', ')
 

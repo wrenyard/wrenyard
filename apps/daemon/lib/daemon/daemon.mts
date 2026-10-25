@@ -1974,6 +1974,7 @@ async function createForemanDaemonResources(
         const snap = liveUsage.snapshot(record.executionId)
         if (snap === undefined) continue
         const entry = persisted[record.executionId] ?? { usage: { ...snap } }
+        entry.executionId = record.executionId
         entry.usage = { ...snap }
         if (record.taskRunId !== undefined) entry.taskRunId = record.taskRunId
         persisted[record.executionId] = entry
