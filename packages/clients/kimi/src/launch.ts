@@ -146,13 +146,14 @@ export async function launchKimi(request: AgentRequest, env: NodeJS.ProcessEnv):
         let skipWireBytes = 0;
         // The preserve hook runs while the run home still exists, on every
         // terminal path (success, failure, cancel): read the wire tail and the
-        // session id the decoder can no longer reach after deletion, then
-        // store the resume snapshot under the existing sessions record.
+        // session id the decoder can no longer reach after deletion. For a
+        // resumed run, keep the session directory itself in the existing
+        // sessions record so the run-home symlink remains valid for next time.
         ownedHome.preserveSession = async (homePath: string) => {
             const capture = await captureKimiRunHome(homePath, skipWireBytes);
             captured.facts ??= capture.facts;
             captured.sessionId ??= capture.sessionId;
-            if (capture.sessionId !== undefined)
+            if (capture.sessionId !== undefined && request.resumeSessionId === undefined)
                 await preserveClientRunHomeSessionSnapshot(env, ownedHome, homePath, capture.sessionId);
         };
         const args = ['-p', request.prompt, '--output-format', 'stream-json', '-m', expectedModel];
