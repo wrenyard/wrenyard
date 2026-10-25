@@ -1006,12 +1006,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         entry.sawErrorResult ||= final.isError
         if (final.output) {
           entry.finalOutput = final.output
-          // Retain terminal answers in receipt order; suppress only exact trailing echoes.
-          // Separate distinct answers from preceding prose with a newline.
-          const joinedProse = entry.abnormalProseParts.join('')
-          if (!joinedProse.endsWith(final.output)) {
-            if (joinedProse.length > 0) entry.abnormalProseParts.push('\n')
-            entry.abnormalProseParts.push(final.output)
+          const redacted = redactEvent('message', { role: 'assistant', text: final.output })
+          const text = isRecord(redacted) ? stringProp(redacted, 'text') : null
+          if (text) {
+            if (entry.abnormalProseParts.length > 0) entry.abnormalProseParts.push('\n')
+            entry.abnormalProseParts.push(text)
           }
         }
       }
@@ -1036,16 +1035,14 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       if (mappedEvents.length > 0) {
         this.tx(() => {
           for (const mapped of mappedEvents) {
+            const redacted = redactEvent(mapped.type, mapped.data)
             if (mapped.type === 'message' && typeof mapped.data.text === 'string') {
               appendOutputText(entry, mapped.data.text)
-              // Abnormal-output prose is collected without per-message trimming
-              // or truncation so the full natural-language output survives; blank
-              // chunks are ignored.
-              const text = mapped.data.text
-              if (text.length > 0) entry.abnormalProseParts.push(text)
+              const text = isRecord(redacted) ? stringProp(redacted, 'text') : null
+              // Abnormal output uses the same redacted message text as storage.
+              if (text) entry.abnormalProseParts.push(text)
             }
 
-            const redacted = redactEvent(mapped.type, mapped.data)
             if (mapped.type === 'tool_call') {
               const name = redacted && isRecord(redacted) ? (stringProp(redacted, 'name') || 'tool') : 'tool'
               entry.toolCallCounts.set(name, (entry.toolCallCounts.get(name) ?? 0) + 1)
@@ -1118,8 +1115,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   }
 
   /**
-   * Assemble ordered full model prose followed by one names/counts sentence;
-   * terminal echoes are suppressed at receipt, and tool inputs, results, and truncation are excluded.
+   * Assemble redacted ordered model prose followed by one names/counts
+   * sentence; tool inputs, results, and truncation are excluded.
    */
   private assembleAbnormalOutput(entry: RegistryEntry): string {
     const prose = entry.abnormalProseParts.join('')
