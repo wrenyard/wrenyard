@@ -343,6 +343,11 @@ export const MODELS_DEV_CATALOG_PROVIDERS: readonly ModelsDevCatalogProvider[] =
       // https://vercel.com/ai-gateway/models/gemini-3.1-pro-preview checked 2026-10-19; base <=200k tier.
       { id: "google/gemini-3.1-pro-preview", canonicalId: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro Preview", contextWindow: 1000000, maxOutputTokens: 64000, capabilities: ["text", "image"], pricing: [0.2, 2, 12] },
       { id: "moonshotai/kimi-k3", canonicalId: "kimi-k3", displayName: "Kimi K3", contextWindow: 1000000, maxOutputTokens: 131072, capabilities: ["text", "image"], pricing: [0.3, 3, 15] },
+      // https://models.dev/api.json vercel row checked 2026-10-24; the sibling
+      // `moonshotai/kimi-k3.1-pro-highspeed` row is intentionally not retained:
+      // Highspeed is only a Fast wire id, never a selectable model, and the
+      // generic wiring expresses no fastMapping.
+      { id: "moonshotai/kimi-k3.1-pro", canonicalId: "kimi-k3.1-pro", displayName: "Kimi K3.1 Pro", contextWindow: 1048576, maxOutputTokens: 1048576, capabilities: ["text", "image"], pricing: [0.2, 2, 10] },
       { id: "deepseek/deepseek-v4-pro", canonicalId: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro", contextWindow: 1000000, maxOutputTokens: 384000, capabilities: ["text"], pricing: [0.022, 0.66, 1.98] },
     ],
   },
