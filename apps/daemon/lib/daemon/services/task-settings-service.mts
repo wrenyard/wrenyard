@@ -385,13 +385,16 @@ export function applyMountedFeatureRoutingPreferences(
     base.intelligenceMin !== undefined && INTELLIGENCE_ORDER[base.intelligenceMin] >= INTELLIGENCE_ORDER.high
       ? base.intelligenceMin
       : 'high'
+  // Mirrors the managed stdio MCP default mounted for the desktop operation.
+  const requiredMcpTransports = [...new Set([...(base.requiredMcpTransports ?? []), 'stdio' as const])]
+  const merged = { ...base, requiredMcpTransports }
   if (
     base.intelligenceExpected !== undefined &&
     INTELLIGENCE_ORDER[base.intelligenceExpected] < INTELLIGENCE_ORDER[liftedMin]
   ) {
-    return { ...base, intelligenceMin: liftedMin, intelligenceExpected: liftedMin }
+    return { ...merged, intelligenceMin: liftedMin, intelligenceExpected: liftedMin }
   }
-  return { ...base, intelligenceMin: liftedMin }
+  return { ...merged, intelligenceMin: liftedMin }
 }
 
 /** Synthetic task name used only to key the read-only routing form; it never

@@ -195,6 +195,10 @@ export interface ClientDefinition {
    * through a client-side flag — with no model swap. It is not a claim of
    * gateway Fast transport or of third-party provider Fast support. */
   supportsNativeFast?: boolean;
+  /** The MCP server transports this client can host. An empty array means the
+   * client accepts no MCP servers at all; transport support is never inferred
+   * from other capabilities. */
+  mcpTransports: readonly ('stdio' | 'http')[];
 }
 
 /** A supplier interprets only its own explicit error codes and reset information. */

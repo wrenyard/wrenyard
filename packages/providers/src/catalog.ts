@@ -4,11 +4,11 @@ import { codeBuddy, builtinDefinitions, providerImplementations } from './builti
 export const BUILTIN_CLIENTS: readonly ClientDefinition[] = [
   // Native WebSearch is documented at https://code.claude.com/docs/en/tools-reference
   // (checked 2026-09-10); native-capable only against its exact nativeProvider.
-  { id: 'claude', nativeProvider: 'claude-coding', gatewayProtocols: ['anthropic_messages'], taskCapable: true, supportsNativeWebSearch: true },
+  { id: 'claude', nativeProvider: 'claude-coding', gatewayProtocols: ['anthropic_messages'], taskCapable: true, supportsNativeWebSearch: true, mcpTransports: ['stdio', 'http'] },
   ...codeBuddy.clients,
   // Codex --search is live per https://learn.chatgpt.com/docs/web-search?surface=cli
   // (checked 2026-09-10); custom/third-party providers are not implicitly supported.
-  { id: 'codex', nativeProvider: 'chatgpt', gatewayProtocols: ['openai_responses'], taskCapable: true, supportsNativeWebSearch: true, supportsNativeFast: true },
+  { id: 'codex', nativeProvider: 'chatgpt', gatewayProtocols: ['openai_responses'], taskCapable: true, supportsNativeWebSearch: true, supportsNativeFast: true, mcpTransports: ['stdio', 'http'] },
   // Cursor CLI gained WebSearch/WebFetch per https://cursor.com/changelog/cli-jan-16-2026
   // (checked 2026-09-10).
   {
@@ -20,24 +20,36 @@ export const BUILTIN_CLIENTS: readonly ClientDefinition[] = [
     gatewayProtocols: ['openai_chat'],
     taskCapable: true,
     supportsNativeWebSearch: true,
+    mcpTransports: [],
   },
-  { id: 'dsh', forwardsGatewayReasoningEffort: true, unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'] },
+  { id: 'dsh', forwardsGatewayReasoningEffort: true, unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'], mcpTransports: ['stdio', 'http'] },
   {
     id: 'grok',
     nativeProvider: 'spacex-ai',
     gatewayProtocols: ['openai_chat'],
     unsupportedGatewayProviders: ['codebuddy', 'opencode-go'],
     taskCapable: true,
+    // Grok launches only HTTP MCP servers; stdio MCP servers cannot be hosted.
+    mcpTransports: ['http'],
     // Client web_search with backend support per https://docs.x.ai/build/settings
     // (checked 2026-09-10); our Grok gateway projection stays SupportsBackendSearch=false.
     supportsNativeWebSearch: true,
   },
-  { id: 'opencode', forwardsGatewayReasoningEffort: true, nativeProvider: 'opencode-zen', gatewayProtocols: ['openai_chat', 'anthropic_messages'], taskCapable: true },
-  { id: 'pi', forwardsGatewayReasoningEffort: true, gatewayProtocols: ['openai_chat'], taskCapable: true },
+  { id: 'opencode', forwardsGatewayReasoningEffort: true, nativeProvider: 'opencode-zen', gatewayProtocols: ['openai_chat', 'anthropic_messages'], taskCapable: true, mcpTransports: ['stdio', 'http'] },
+  { id: 'pi', forwardsGatewayReasoningEffort: true, gatewayProtocols: ['openai_chat'], taskCapable: true, mcpTransports: ['stdio', 'http'] },
   // Kimi Code is a native-only client for its exact Kimi Coding provider: no
   // gateway protocols are declared, so it can never serve other providers.
-  { id: 'kimi', nativeProvider: 'kimi-coding', gatewayProtocols: [], taskCapable: true },
+  { id: 'kimi', nativeProvider: 'kimi-coding', gatewayProtocols: [], taskCapable: true, mcpTransports: ['stdio', 'http'] },
 ];
+
+/**
+ * MCP server transports a client can host, resolved from BUILTIN_CLIENTS.
+ * An unknown client id is treated as supporting no transports: it can never
+ * satisfy a declared transport requirement.
+ */
+export function mcpTransportsForClient(clientID: string): readonly ('stdio' | 'http')[] {
+  return BUILTIN_CLIENTS.find((candidate) => candidate.id === clientID)?.mcpTransports ?? [];
+}
 
 /**
  * Shared provider-level gateway boundary for built-in clients. Protocol

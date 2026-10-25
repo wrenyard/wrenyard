@@ -38,7 +38,7 @@ function recentIso(daysAgo = 5): string {
 
 test('native routing wins over a shared gateway protocol', () => {
   const catalog = new Catalog();
-  catalog.registerClient({ id: 'native', gatewayProtocols: ['openai_chat'] });
+  catalog.registerClient({ id: 'native', gatewayProtocols: ['openai_chat'], mcpTransports: ['stdio', 'http'] });
   registerProvider(catalog, {
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'managed',
     nativeClients: ['native'], models: [{ pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
@@ -49,7 +49,7 @@ test('native routing wins over a shared gateway protocol', () => {
 
 test('gateway models use provider/model ids and resolve to an exact dispatch plan', () => {
   const catalog = new Catalog();
-  catalog.registerClient({ id: 'client', gatewayProtocols: ['openai_chat'] });
+  catalog.registerClient({ id: 'client', gatewayProtocols: ['openai_chat'], mcpTransports: ['stdio', 'http'] });
   registerProvider(catalog, {
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'managed',
     models: [{ pricing: pricingFixture(),
@@ -71,7 +71,7 @@ test('gateway models use provider/model ids and resolve to an exact dispatch pla
 
 function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandidate[] } {
   const catalog = new Catalog();
-  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
+  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'], mcpTransports: ['stdio', 'http'] });
   const mk = (
     id: string,
     intelligence: IntelligenceTier,
@@ -158,7 +158,7 @@ test('minimum TPS is a hard filter and expected TPS drives satisfaction ordering
 
 function buildSpeedTierCatalog(): { catalog: Catalog; overrideModel: DispatchCandidate; defaultModel: DispatchCandidate } {
   const catalog = new Catalog();
-  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
+  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'], mcpTransports: ['stdio', 'http'] });
   registerProvider(catalog, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
     models: [
@@ -218,9 +218,9 @@ function buildDualRouteCatalog(): {
   grokGateway: DispatchCandidate;
 } {
   const catalog = new Catalog();
-  catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'] });
-  catalog.registerClient({ id: 'codebuddy', gatewayProtocols: ['openai_chat'] });
-  catalog.registerClient({ id: 'grok', gatewayProtocols: ['openai_chat'] });
+  catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'], mcpTransports: ['stdio', 'http'] });
+  catalog.registerClient({ id: 'codebuddy', gatewayProtocols: ['openai_chat'], mcpTransports: ['stdio', 'http'] });
+  catalog.registerClient({ id: 'grok', gatewayProtocols: ['openai_chat'], mcpTransports: ['http'] });
   registerProvider(catalog, {
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'managed',
     nativeClients: ['claude'],
@@ -308,7 +308,7 @@ test('run syntax rejects malformed strings with precise errors', () => {
 
 test('a compatible target resolves exactly through Catalog.resolveRun with no fallback', () => {
   const catalog = new Catalog();
-  catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'] });
+  catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'], mcpTransports: ['stdio', 'http'] });
   registerProvider(catalog, {
     id: 'anthropic', displayName: 'Anthropic', credentialResolver: 'claude',
     nativeClients: ['claude'],
@@ -322,10 +322,10 @@ test('a compatible target resolves exactly through Catalog.resolveRun with no fa
 
 function buildTaskCatalog(): Catalog {
   const catalog = new Catalog();
-  catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'], taskCapable: true });
-  catalog.registerClient({ id: 'codebuddy', gatewayProtocols: ['openai_chat'], taskCapable: true });
-  catalog.registerClient({ id: 'codex', gatewayProtocols: ['openai_responses'], taskCapable: true });
-  catalog.registerClient({ id: 'dsh', gatewayProtocols: ['openai_chat'] });
+  catalog.registerClient({ id: 'claude', gatewayProtocols: ['anthropic_messages'], taskCapable: true, mcpTransports: ['stdio', 'http'] });
+  catalog.registerClient({ id: 'codebuddy', gatewayProtocols: ['openai_chat'], taskCapable: true, mcpTransports: ['stdio', 'http'] });
+  catalog.registerClient({ id: 'codex', gatewayProtocols: ['openai_responses'], taskCapable: true, mcpTransports: ['stdio', 'http'] });
+  catalog.registerClient({ id: 'dsh', gatewayProtocols: ['openai_chat'], mcpTransports: ['stdio', 'http'] });
   registerProvider(catalog, {
     id: 'anthropic-api', displayName: 'Anthropic', credentialResolver: 'managed',
     modelAliases: { 'sonnet-legacy': 'claude-sonnet-5' },
@@ -354,8 +354,8 @@ test('task candidate enumeration excludes incompatible client/provider pairs', (
 
 test('requiresWebSearch filters unsupported combinations but keeps supported dispatch', () => {
   const catalog = new Catalog();
-  catalog.registerClient({ id: 'nsearch', nativeProvider: 'vendor', gatewayProtocols: ['openai_chat'], supportsNativeWebSearch: true });
-  catalog.registerClient({ id: 'gw', gatewayProtocols: ['openai_chat'] });
+  catalog.registerClient({ id: 'nsearch', nativeProvider: 'vendor', gatewayProtocols: ['openai_chat'], supportsNativeWebSearch: true, mcpTransports: ['stdio', 'http'] });
+  catalog.registerClient({ id: 'gw', gatewayProtocols: ['openai_chat'], mcpTransports: ['stdio', 'http'] });
   registerProvider(catalog, {
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'managed',
     nativeClients: ['nsearch'],
@@ -394,7 +394,7 @@ test('requiresWebSearch filters unsupported combinations but keeps supported dis
 
 function buildThinkingCatalog(levels?: readonly ReasoningEffort[]): Catalog {
   const catalog = new Catalog();
-  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
+  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'], mcpTransports: ['stdio', 'http'] });
   registerProvider(catalog, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
     models: [{ pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture(), ...(levels === undefined ? {} : { reasoningEfforts: levels }) }],
@@ -428,7 +428,7 @@ test('a requested level adapts to the smallest supported level at or above it', 
 test('a request above the mapped maximum clamps to the highest usable level', () => {
   // low/high/max are declared, but only low and high are mapped: max is unusable.
   const catalog = new Catalog();
-  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
+  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'], mcpTransports: ['stdio', 'http'] });
   registerProvider(catalog, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
     models: [{ pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['low', 'high', 'max'] }],
@@ -450,7 +450,7 @@ test('thinking never changes candidate ranking or admission', () => {
   // so the thinking request must not reorder them and the winner's downstream
   // mapping must remain its own.
   const catalog = new Catalog();
-  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'], taskCapable: true });
+  catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'], taskCapable: true, mcpTransports: ['stdio', 'http'] });
   const pricing = (out: number): ModelPricing => [1, 1, out];
   registerProvider(catalog, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',

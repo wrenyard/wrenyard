@@ -15,6 +15,7 @@ export {
   deriveTaskDispatchPlans,
   hasReplayedStream,
   isBuiltinClientGatewayProviderSupported,
+  mcpTransportsForClient,
   resolveHistoricalOfferedModelId,
   resolveHistoricalProviderModelId,
 } from './catalog.ts';

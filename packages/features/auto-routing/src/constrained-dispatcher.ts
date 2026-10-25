@@ -1,4 +1,5 @@
 import { type Catalog, type ModelDefinition, explicitFreeAutoEligibility, resolveModelSpeed, routingReferencePriceOf } from '@wrenyard/providers/catalog';
+import { mcpTransportsForClient } from '@wrenyard/providers';
 import type { DispatchCandidate, LocalSpeedSample, DispatchPlan } from '@wrenyard/providers/base';
 import type { TaskDispatchRequirements, ConstrainedDispatch, DispatchResolution } from './types.ts';
 import { excludedModelIdsFor } from './exclusions.ts';
@@ -30,6 +31,7 @@ export class ConstrainedDispatcher {
     const excludedClients = new Set(requirements.excludeClientIds ?? []);
     const excludedProviders = new Set(requirements.excludeProviderIds ?? []);
     const requiredCaps = requirements.requiredCapabilities ?? [];
+    const requiredMcpTransports = requirements.requiredMcpTransports ?? [];
     const eligible: DispatchResolution[] = [];
     let considered = 0;
     for (const candidate of candidates) {
@@ -109,6 +111,21 @@ export class ConstrainedDispatcher {
           }
         }
         if (!capOk)
+          continue;
+      }
+      // Hard constraint: required MCP server transports. The candidate's client
+      // must host every required transport; a client declaring no transports
+      // (or an unknown client) satisfies only an empty requirement.
+      if (requiredMcpTransports.length > 0) {
+        const supported = mcpTransportsForClient(candidate.client);
+        let transportsOk = true;
+        for (const transport of requiredMcpTransports) {
+          if (!supported.includes(transport)) {
+            transportsOk = false;
+            break;
+          }
+        }
+        if (!transportsOk)
           continue;
       }
       // Hard constraint: intelligence minimum. The configured intelligence tier
