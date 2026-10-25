@@ -1004,7 +1004,16 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         entry.rawResult = redactJsonString(stableStringify(rawEvent))
         entry.sawTerminalResult ||= !final.isError
         entry.sawErrorResult ||= final.isError
-        if (final.output) entry.finalOutput = final.output
+        if (final.output) {
+          entry.finalOutput = final.output
+          // Retain terminal answers in receipt order; suppress only exact trailing echoes.
+          // Separate distinct answers from preceding prose with a newline.
+          const joinedProse = entry.abnormalProseParts.join('')
+          if (!joinedProse.endsWith(final.output)) {
+            if (joinedProse.length > 0) entry.abnormalProseParts.push('\n')
+            entry.abnormalProseParts.push(final.output)
+          }
+        }
       }
       // A failed terminal record can carry the upstream identity as a
       // structured error object; keep it verbatim beside the scraped text.
@@ -1109,28 +1118,18 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   }
 
   /**
-   * Assemble the abnormal-output of a failed or timed-out run: the full ordered
-   * model prose (assistant message text plus the terminal final answer) followed
-   * by exactly one English sentence counting the called tools in first-seen
-   * order. Tool inputs and results are never included, and the prose is never
-   * truncated. The terminal final answer is appended only when it is not an exact
-   * duplicate of the immediately preceding accumulated prose, so a distinct final
-   * answer is preserved while an echo is not doubled.
+   * Assemble ordered full model prose followed by one names/counts sentence;
+   * terminal echoes are suppressed at receipt, and tool inputs, results, and truncation are excluded.
    */
   private assembleAbnormalOutput(entry: RegistryEntry): string {
-    const parts = [...entry.abnormalProseParts]
-    if (entry.finalOutput && parts[parts.length - 1] !== entry.finalOutput) {
-      parts.push(entry.finalOutput)
-    }
-    const prose = parts.join('')
-    const counts: Array<[string, number]> = []
-    for (const [name, count] of entry.toolCallCounts) counts.push([name, count])
+    const prose = entry.abnormalProseParts.join('')
+    const counts = Array.from(entry.toolCallCounts)
     const summary = counts.length === 0
       ? 'No tools were called.'
       : `Called ${counts
         .map(([name, count]) => `${name} ${count} ${count === 1 ? 'time' : 'times'}`)
         .join(' and ')}.`
-    return `${prose}${summary}`
+    return prose ? `${prose}\n${summary}` : summary
   }
 
   /**
