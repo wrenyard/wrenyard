@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { cn } from 'cn';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
@@ -376,7 +376,7 @@ function ModeSwitch(props: { mode: ConversationMode; onChange: (mode: Conversati
 }
 
 /** One group entry, in the same shape as a session transcript message. */
-function GroupMessageView(props: { message: GroupMessage }) {
+const GroupMessageView = memo(function GroupMessageView(props: { message: GroupMessage }) {
   const message = props.message;
   const fromUser = message.author === 'user';
   const botId = message.botId;
@@ -401,7 +401,7 @@ function GroupMessageView(props: { message: GroupMessage }) {
       </MessageContent>
     </Message>
   );
-}
+});
 
 /** The canonical group transcript, rendered from the daemon's sequence cursor. */
 function GroupTranscriptView(props: {
@@ -471,7 +471,7 @@ function GroupTranscriptView(props: {
         <MessageScroller className="min-h-0 flex-1">
           <MessageScrollerViewport className="scroll-fade-y">
             <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-5 px-4 py-4">
-              {messages.map((message) => (
+              {messages.slice(-200).map((message) => (
                 <GroupMessageView key={message.seq} message={message} />
               ))}
               {props.working.map((bot) => (
