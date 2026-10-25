@@ -70,8 +70,8 @@ export function clearTrustedAgentTurnContract(data: Record<string, unknown>): vo
  * untrusted usage keeps its metadata without any statistical claim.
  */
 export function removeTrustFields(event: AgentEvent): void {
-    if (event.type !== 'output' || event.record.type !== 'turn_usage') return;
-    clearTrustedAgentTurnContract(event.record);
+    if (event.type !== 'usage') return;
+    clearTrustedAgentTurnContract(event);
 }
 
 /** True when both native token counts are present, integral, and nonnegative. */

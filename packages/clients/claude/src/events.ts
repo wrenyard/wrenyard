@@ -1,7 +1,7 @@
 import { turnUsageRecord } from '@wrenyard/agent-client/native';
 import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
-    finishedEvent, jsonStringValue, messageEvent, readNativeRecords, reasoningRecord, recordOf, sessionIdOf, stringOf, textOf, toolCallRecord, toolResultRecord,
+    finishedEvent, jsonStringValue, messageEvent, readNativeRecords, reasoningRecord, recordOf, sessionEvent, sessionIdOf, stringOf, textOf, toolCallRecord, toolResultRecord,
 } from '@wrenyard/agent-client/native';
 import {
     ResponseTpsSampler, TPS_CONTRACT_AGENT_TURN_V1, DURATION_SCOPE_AGENT_TURN, TOKEN_SCOPE_AGENT_TURN, completeUsageTokens, hasNormalizedFailureField,
@@ -42,8 +42,10 @@ export async function* decodeClaudeFamily(events: AsyncIterable<StreamChunk>, fa
         sampler.observe(record);
         const type = stringOf(record, 'type');
         const id = sessionIdOf(record);
-        if (id)
+        if (id && id !== sessionId) {
             sessionId = id;
+            yield sessionEvent(id);
+        }
         if (type === 'assistant') {
             for (const event of assistantEvents(record))
                 yield event;
@@ -81,7 +83,7 @@ export async function* decodeClaudeFamily(events: AsyncIterable<StreamChunk>, fa
             }
             if (sampler.attachable)
                 sampler.takeSamples(data);
-            yield { type: 'output', record: turnUsageRecord(data) };
+            yield turnUsageRecord(data);
             yield finishedEvent(family, sessionId, output, failed);
         }
     }
@@ -106,13 +108,15 @@ function* assistantEvents(record: Record<string, unknown>): Generator<AgentEvent
         else if (blockType === 'thinking') {
             const thinking = stringOf(block, 'thinking');
             if (thinking)
-                yield { type: 'output', record: reasoningRecord(thinking) };
+                yield reasoningRecord(thinking);
         }
         else if (blockType === 'tool_use') {
-            yield {
-                type: 'output',
-                record: toolCallRecord(stringOf(block, 'name'), stringOf(block, 'id'), jsonStringValue(block.input)),
-            };
+            yield toolCallRecord(
+                stringOf(block, 'name') || 'tool',
+                stringOf(block, 'id') || stringOf(block, 'call_id'),
+                jsonStringValue(block.input),
+                sessionIdOf(record),
+            );
         }
     }
 }
@@ -129,14 +133,12 @@ function* userEvents(record: Record<string, unknown>): Generator<AgentEvent> {
         const block = raw as Record<string, unknown>;
         if (stringOf(block, 'type') !== 'tool_result')
             continue;
-        yield {
-            type: 'output',
-            record: toolResultRecord(
-                stringOf(block, 'tool_use_id'),
-                block.is_error === true ? 'error' : 'ok',
-                toolResultText(block.content),
-            ),
-        };
+        yield toolResultRecord(
+            stringOf(block, 'tool_use_id') || stringOf(block, 'call_id') || stringOf(block, 'id'),
+            block.is_error === true ? 'error' : 'ok',
+            toolResultText(block.content),
+            sessionIdOf(record),
+        );
     }
 }
 

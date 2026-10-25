@@ -47,15 +47,12 @@ export async function* decodeCodeBuddy(
                 if (!output)
                     missing.push('no output');
                 const detail = missing.length ? ` (${missing.join(', ')})` : '';
-                yield {
-                    type: 'output',
-                    record: runFinishedRecord('codebuddy', 'failed', sessionId, {
+                yield runFinishedRecord('codebuddy', 'failed', sessionId, {
                         ...(output ? { output } : {}),
                         is_error: true,
                         error: `CodeBuddy exited without a terminal result${detail}`,
                         failure_class: MISSING_TERMINAL_RESULT_FAILURE_CLASS,
-                    }),
-                };
+                    });
             }
             yield item.event;
             continue;
@@ -100,7 +97,7 @@ export async function* decodeCodeBuddy(
                 // sample from the partial stream is attached.
                 if (sampler.attachable)
                     sampler.takeSamples(data);
-                yield { type: 'output', record: turnUsageRecord(data) };
+                yield turnUsageRecord(data);
             }
             let terminalOutput = output;
             if (failed) {
@@ -153,11 +150,11 @@ function* assistantEvents(record: Record<string, unknown>): Generator<AgentEvent
         else if (blockType === 'thinking') {
             const thinking = stringOf(block, 'thinking');
             if (thinking)
-                yield { type: 'output', record: reasoningRecord(thinking) };
+                yield reasoningRecord(thinking);
         }
         else if (blockType === 'tool_use') {
             const callId = stringOf(block, 'id');
-            yield { type: 'output', record: toolCallRecord(stringOf(block, 'name'), callId, jsonStringValue(block.input)) };
+            yield toolCallRecord(stringOf(block, 'name'), callId, jsonStringValue(block.input));
         }
     }
 }
@@ -174,14 +171,11 @@ function* userEvents(record: Record<string, unknown>): Generator<AgentEvent> {
         const block = raw as Record<string, unknown>;
         if (stringOf(block, 'type') !== 'tool_result')
             continue;
-        yield {
-            type: 'output',
-            record: toolResultRecord(
+        yield toolResultRecord(
                 stringOf(block, 'tool_use_id'),
                 block.is_error === true ? 'error' : 'ok',
                 toolResultText(block.content),
-            ),
-        };
+            );
     }
 }
 

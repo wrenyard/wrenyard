@@ -77,7 +77,7 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
             if (usage.total > 0)
                 data.total_tokens = usage.total;
         }
-        return { type: 'output', record: turnUsageRecord(data) };
+        return turnUsageRecord(data);
     };
     for await (const item of readNativeRecords(events)) {
         if (item.kind === 'event') {
@@ -90,13 +90,10 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
                     const payload = retry.payload;
                     if (payload.sessionID)
                         sessionId = payload.sessionID;
-                    yield {
-                        type: 'output',
-                        record: runFinishedRecord('opencode', 'failed', sessionId, {
-                            is_error: true,
-                            error: openCodeRetryUpstreamError(payload),
-                        }),
-                    };
+                    yield runFinishedRecord('opencode', 'failed', sessionId, {
+                        is_error: true,
+                        error: openCodeRetryUpstreamError(payload),
+                    });
                 }
             }
             if (item.event.type === 'exit') {
@@ -222,11 +219,11 @@ function* toolUseEvents(record: Record<string, unknown>): Generator<AgentEvent> 
     if (!callId)
         return;
     const sessionId = stringOf(record, 'sessionID') || stringOf(record, 'session_id') || stringOf(record, 'sessionId');
-    yield { type: 'output', record: toolCallRecord(name, callId, inputSummary, sessionId || undefined) };
+    yield toolCallRecord(name, callId, inputSummary, sessionId || undefined);
     const outcome = partTerminal(part, state);
     if (!outcome)
         return;
-    yield { type: 'output', record: toolResultRecord(callId, outcome.status, outcome.output, sessionId || undefined) };
+    yield toolResultRecord(callId, outcome.status, outcome.output, sessionId || undefined);
 }
 
 /** Reads the tool name across the nested and flattened part shapes. */

@@ -430,10 +430,10 @@ export class ExecService {
   #record(entry: ExecEntry, event: AgentEvent, observed: ObservedFacts): void {
     // Wake replay readers after this synchronous append finishes.
     this.#wake(entry);
-    if (event.type === 'output') {
-      if (event.record.type === 'run_finished' && (event.record.is_error === true || event.record.status === 'failed')) {
+    if (event.type === 'finished') {
+      if (event.status === 'failed' || event.isError === true) {
         observed.runFailed = true;
-        const nativeError = event.record.error;
+        const nativeError = event.error;
         if (typeof nativeError === 'string' && nativeError !== '') {
           observed.error = nativeError;
         } else if (nativeError !== null && typeof nativeError === 'object') {
@@ -443,7 +443,11 @@ export class ExecService {
           if (message !== '') observed.error = message;
         }
       }
-      entry.replay.append(entry.id, event.record);
+      entry.replay.append(entry.id, event);
+      return;
+    }
+    if (event.type === 'session' || event.type === 'message' || event.type === 'reasoning' || event.type === 'tool_call' || event.type === 'tool_result' || event.type === 'usage') {
+      entry.replay.append(entry.id, event);
       return;
     }
     if (event.type === 'stderr') {
@@ -575,7 +579,13 @@ function agentEventOf(envelope: ExecEventEnvelope): AgentEvent {
       signal: (record.signal as NodeJS.Signals | null | undefined) ?? null,
     };
   }
-  return { type: 'output', record };
+  if (record.type === 'session' && typeof record.nativeSessionId === 'string') return record as AgentEvent;
+  if (record.type === 'message' && record.role === 'assistant' && typeof record.text === 'string') return record as AgentEvent;
+  if (record.type === 'reasoning' && typeof record.text === 'string') return record as AgentEvent;
+  if (record.type === 'tool_call' && typeof record.callId === 'string' && typeof record.name === 'string' && typeof record.inputSummary === 'string') return record as AgentEvent;
+  if (record.type === 'tool_result' && typeof record.callId === 'string' && (record.status === 'ok' || record.status === 'error') && typeof record.outputTail === 'string') return record as AgentEvent;
+  if (record.type === 'usage' || record.type === 'finished') return record as AgentEvent;
+  return { type: 'error', message: 'invalid retained agent event' };
 }
 
 /** Resolve with the promise's value, or `undefined` once `ms` elapses. */

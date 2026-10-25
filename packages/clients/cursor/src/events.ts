@@ -54,7 +54,7 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: s
                 if (flushed)
                     yield flushed;
                 if (usage)
-                    yield { type: 'output', record: turnUsageRecord(withSample(usage, sampler, model)) };
+                    yield turnUsageRecord(withSample(usage, sampler, model));
                 const failed = endReason !== '' || !terminal || terminal.signal !== undefined;
                 let runError: Record<string, unknown> | string | undefined;
                 if (failed) {
@@ -83,7 +83,7 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: s
         if (type === 'thinking') {
             const text = stringOf(record, 'text');
             if (text)
-                yield { type: 'output', record: reasoningRecord(text) };
+                yield reasoningRecord(text);
             continue;
         }
         // Real deltas accumulate; only events that end a response boundary
@@ -138,11 +138,11 @@ function toolEvent(record: Record<string, unknown>): AgentEvent | undefined {
         return undefined;
     if (subtype === 'started') {
         const [name, input] = toolIdentity(record);
-        return { type: 'output', record: toolCallRecord(name, callId, input) };
+        return toolCallRecord(name, callId, input);
     }
     if (subtype === 'completed') {
         const { status, output } = toolOutcome(record);
-        return { type: 'output', record: toolResultRecord(callId, status, output) };
+        return toolResultRecord(callId, status, output);
     }
     return undefined;
 }

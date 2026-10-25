@@ -187,7 +187,7 @@ async function* protocol(
             output += params.delta;
         }
         else if ((method === 'item/reasoning/textDelta' || method === 'item/reasoning/summaryTextDelta') && typeof params.delta === 'string' && params.delta) {
-            yield { type: 'output', record: reasoningRecord(params.delta) };
+            yield reasoningRecord(params.delta);
         }
         else if (method === 'item/started' || method === 'item/completed') {
             const item = recordOf(params, 'item');
@@ -199,9 +199,9 @@ async function* protocol(
             const failed = turn.status !== 'completed' || turn.error != null;
             const usage = statistics.finish(!failed) ?? turnUsage(params);
             if (usage)
-                yield { type: 'output', record: usage };
+                yield usage;
             if (typeof params.status === 'string' && params.status === 'failed' && typeof params.error !== 'undefined') {
-                yield { type: 'output', record: { type: 'run_finished', status: 'failed', error: params.error } };
+                yield finishedEvent('codex', threadId, '', true, params.error);
             }
             const terminal = complete(failed);
             if (terminal) yield terminal;
@@ -209,7 +209,7 @@ async function* protocol(
         else if (method === 'turn/failed') {
             const error = params.error;
             if (error !== undefined && error !== null)
-                yield { type: 'output', record: { type: 'run_finished', status: 'failed', error } };
+                yield finishedEvent('codex', threadId, '', true, error);
             const terminal = complete(true);
             if (terminal) yield terminal;
         }
@@ -220,7 +220,7 @@ async function* protocol(
             // message) is preserved instead of an empty failure.
             const message = params.message ?? params.error;
             if (message !== undefined && message !== null)
-                yield { type: 'output', record: { type: 'run_finished', status: 'failed', error: message } };
+                yield finishedEvent('codex', threadId, '', true, message);
             const terminal = complete(true);
             if (terminal) yield terminal;
         }
@@ -262,7 +262,7 @@ async function* protocol(
         if (!callId)
             return;
         const [name, input] = toolIdentity(item, itemType);
-        yield { type: 'output', record: toolCallRecord(name, callId, input) };
+        yield toolCallRecord(name, callId, input);
     }
 
     /** Emits a tool_result record for a supported native Codex tool item. */
@@ -271,7 +271,7 @@ async function* protocol(
         if (!callId)
             return;
         const { status, output } = toolOutcome(item, itemType);
-        yield { type: 'output', record: toolResultRecord(callId, status, output) };
+        yield toolResultRecord(callId, status, output);
     }
 }
 
@@ -388,7 +388,7 @@ function webSearchSummary(raw: unknown): string {
  * so it never becomes a speed denominator and the agent_turn_v1 contract is
  * claimed only for a positive duration with complete current-turn usage.
  */
-function turnUsage(params: Record<string, unknown>): Record<string, unknown> | undefined {
+function turnUsage(params: Record<string, unknown>): AgentEvent | undefined {
     const usage = recordOf(params, 'usage');
     if (!usage && params.usage === undefined && params.duration_ms === undefined)
         return undefined;

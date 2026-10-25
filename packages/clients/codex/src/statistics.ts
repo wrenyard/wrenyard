@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import type { AgentEvent } from '@wrenyard/agent-client';
 import { TokenizerGeneration, attachTpsSamples, sampleTiming, type AggregatedResponseTpsSample, type ResponseTpsSample } from '@wrenyard/agent-client/statistics';
 
 type Row = Record<string, unknown>;
@@ -62,10 +63,10 @@ export class CodexStatistics {
         }
     }
 
-    finish(success: boolean): Row | undefined {
-        const data: Row = { type: 'turn_usage', ...(this.totals ?? {}) };
+    finish(success: boolean): AgentEvent | undefined {
+        const data: Row = { ...(this.totals ?? {}) };
         if (success) attachTpsSamples(data, this.samples);
-        return this.totals || (success && this.samples.length) ? data : undefined;
+        return this.totals || (success && this.samples.length) ? { type: 'usage', ...data } : undefined;
     }
     private add(value: Usage | undefined): void {
         if (!value) return;

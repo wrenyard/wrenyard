@@ -1,5 +1,5 @@
-import { createAgentClients, type AgentRequest, type AgentSession } from '@wrenyard/clients';
-import { clientStateDirForEnv } from '@wrenyard/agent-client/native';
+import { createAgentClients, type AgentEvent, type AgentRequest, type AgentSession } from '@wrenyard/clients';
+import { clientStateDirForEnv, messageEvent } from '@wrenyard/agent-client/native';
 import { ExecService, type ExecRequest } from '@wrenyard/exec';
 import { armRunHomeSessionPreserve, clearRunHomeSessionPreserveSlot } from '../../../../../packages/execution/src/index.ts';
 import { randomBytes } from 'node:crypto'
@@ -250,7 +250,6 @@ type TerminalIntent =
   | { kind: 'cancel' }
   | { kind: 'timeout' }
   | { kind: 'shutdown' }
-type StreamEventRecord = Record<string, unknown>
 type BClassEvent = {
   type: 'message' | 'reasoning' | 'tool_call' | 'tool_result' | 'turn_usage'
   data: Record<string, unknown>
@@ -1021,35 +1020,32 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       // while the stream is stalled; late stream events must not mutate the
       // terminal state or insert post-terminal events.
       if (entry.terminalGeneration > 0) return
-      const rawEvent = agentEvent.record
-      const event = normalizeClientEvent(rawEvent)
-      if (!event) continue
-      const detectedNative = detectNativeSession(event)
-      if (detectedNative) {
-        entry.pendingNativeSessionId = detectedNative.nativeSessionId
-        entry.pendingClientFamily = detectedNative.clientFamily
-        if (detectedNative.clientFamily === 'codebuddy') {
-          armRunHomeSessionPreserve(entry.executionId, detectedNative.clientFamily, detectedNative.nativeSessionId)
+      if (agentEvent.type === 'session') {
+        entry.pendingNativeSessionId = agentEvent.nativeSessionId
+        if (entry.pendingClientFamily === 'codebuddy') {
+          armRunHomeSessionPreserve(entry.executionId, entry.pendingClientFamily, agentEvent.nativeSessionId)
         }
+        if (agentEvent.profile) this.captureResolvedProfileOnce(entry.executionId, agentEvent.profile, nowIso())
       }
-      const detectedProfile = detectResolvedProfile(event)
-      if (detectedProfile) {
-        this.captureResolvedProfileOnce(entry.executionId, detectedProfile, nowIso())
+      if (agentEvent.type === 'finished') {
+        if (agentEvent.nativeSessionId) entry.pendingNativeSessionId = agentEvent.nativeSessionId
+        if (agentEvent.clientFamily) entry.pendingClientFamily = agentEvent.clientFamily as ClientFamily
+        if (agentEvent.clientFamily === 'codebuddy' && agentEvent.nativeSessionId) {
+          armRunHomeSessionPreserve(entry.executionId, 'codebuddy', agentEvent.nativeSessionId)
+        }
+        if (agentEvent.profile) this.captureResolvedProfileOnce(entry.executionId, agentEvent.profile, nowIso())
+        if (agentEvent.failureClass) entry.pendingFailureClass = agentEvent.failureClass
       }
 
-      const detectedFailureClass = detectFailureClass(event)
-      if (detectedFailureClass) {
-        entry.pendingFailureClass = detectedFailureClass
-      }
-
-      const final = extractFinalResult(event)
+      const finishedEvent = agentEvent.type === 'finished' ? agentEvent : undefined
+      const final = finishedEvent ? extractFinalResult(finishedEvent) : undefined
       if (final) {
-        entry.rawResult = redactJsonString(stableStringify(rawEvent))
+        entry.rawResult = redactJsonString(stableStringify(agentEvent))
         entry.sawTerminalResult ||= !final.isError
         entry.sawErrorResult ||= final.isError
         if (final.output) {
           entry.finalOutput = final.output
-          const redacted = redactEvent('message', { role: 'assistant', text: final.output })
+          const redacted = redactEvent('message', messageEvent(final.output))
           const text = isRecord(redacted) ? stringProp(redacted, 'text') : null
           if (text) {
             if (entry.abnormalProseParts.length > 0) entry.abnormalProseParts.push('\n')
@@ -1060,13 +1056,15 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       // A failed terminal record can carry the upstream identity as a
       // structured error object; keep it verbatim beside the scraped text.
       if (final?.isError) {
-        const structured = extractUpstreamErrorRecord(event)
+        const structured = finishedEvent ? extractUpstreamErrorRecord(finishedEvent) : undefined
         if (structured) {
           entry.pendingUpstreamError = mergeUpstreamError(entry.pendingUpstreamError, structured)
           entry.pendingUpstreamErrorProvenance = true
         }
       }
-      const streamErrorText = extractStreamJsonErrorText(event, final)
+      const streamErrorText = agentEvent.type === 'finished' && final?.isError
+        ? (finishedEvent ? extractStreamJsonErrorText(finishedEvent) : undefined)
+        : undefined
       if (streamErrorText) {
         entry.resultErrorTail = tailString(
           redactDiagnosticText(`${entry.resultErrorTail}${entry.resultErrorTail ? '\n' : ''}${streamErrorText}`),
@@ -1074,7 +1072,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         )
       }
 
-      const mappedEvents = mapStreamEventToBClass(event)
+      const mappedEvents = mapStreamEventToBClass(agentEvent)
       if (mappedEvents.length > 0) {
         this.tx(() => {
           for (const mapped of mappedEvents) {
@@ -2218,139 +2216,38 @@ function parseDispatchPlans(raw: string | undefined): Record<string, unknown> {
   return {}
 }
 
-export function mapStreamEventToBClass(event: StreamEventRecord): BClassEvent[] {
-  const type = stringProp(event, 'type')
-  const mapped: BClassEvent[] = []
-
-  if (type === 'assistant') {
-    const message = recordProp(event, 'message')
-    const content = arrayProp(message, 'content')
-    const text = contentText(content)
-    if (text) mapped.push({ type: 'message', data: { role: 'assistant', text } })
-
-    for (const block of content) {
-      if (!isRecord(block) || stringProp(block, 'type') !== 'tool_use') continue
-      const name = stringProp(block, 'name') ?? 'tool'
-      mapped.push({
-        type: 'tool_call',
-        data: {
-          name,
-          input_summary: summarizeUnknown(block.input),
-          call_id: stringProp(block, 'id') ?? stringProp(block, 'call_id'),
-        },
-      })
-    }
-  } else if (type === 'user') {
-    const message = recordProp(event, 'message')
-    const content = arrayProp(message, 'content')
-    for (const block of content) {
-      if (!isRecord(block) || stringProp(block, 'type') !== 'tool_result') continue
-      mapped.push({
-        type: 'tool_result',
-        data: {
-          call_id: stringProp(block, 'tool_use_id') ?? stringProp(block, 'call_id') ?? stringProp(block, 'id'),
-          status: block.is_error === true ? 'error' : 'ok',
-          output_tail: tailString(contentText(arrayProp(block, 'content')) || stringifyOutput(block.content), STDERR_TAIL_MAX_LEN),
-        },
-      })
-    }
-  } else if (type === 'item.started') {
-    const item = recordProp(event, 'item')
-    if (isCodexToolItem(item)) {
-      mapped.push({
-        type: 'tool_call',
-        data: {
-          name: stringProp(item, 'name') ?? stringProp(item, 'tool_name') ?? stringProp(item, 'type') ?? 'tool',
-          input_summary: summarizeUnknown(item.arguments ?? item.input ?? item.command),
-          call_id: stringProp(item, 'id') ?? stringProp(item, 'call_id'),
-        },
-      })
-    }
-  } else if (type === 'item.completed') {
-    const item = recordProp(event, 'item')
-    if (stringProp(item, 'type') === 'agent_message') {
-      const text = stringProp(item, 'text')
-      if (text) mapped.push({ type: 'message', data: { role: 'assistant', text } })
-    } else if (isCodexToolResultItem(item)) {
-      mapped.push({
-        type: 'tool_result',
-        data: {
-          call_id: stringProp(item, 'call_id') ?? stringProp(item, 'id'),
-          status: isErrorToolItem(item) ? 'error' : 'ok',
-          output_tail: tailString(stringifyOutput(item.output ?? item.result ?? item.text ?? item.aggregated_output), STDERR_TAIL_MAX_LEN),
-        },
-      })
-    }
-  } else if (type === 'message') {
-    const text = stringProp(event, 'text')
-    if (text) {
-      mapped.push({
-        type: 'message',
-        data: {
-          role: stringProp(event, 'role') ?? 'assistant',
-          text,
-        },
-      })
-    }
-  } else if (type === 'reasoning') {
-    const text = stringProp(event, 'text')
-    if (text) mapped.push({ type: 'reasoning', data: { text } })
-  } else if (type === 'tool_call') {
-    mapped.push({
-      type: 'tool_call',
-      data: {
-        name: stringProp(event, 'name') ?? 'tool',
-        input_summary: stringProp(event, 'input_summary') ?? summarizeUnknown(event.input ?? event.arguments ?? event.command),
-        call_id: stringProp(event, 'call_id') ?? stringProp(event, 'id'),
-      },
-    })
-  } else if (type === 'tool_result') {
-    mapped.push({
-      type: 'tool_result',
-      data: {
-        call_id: stringProp(event, 'call_id') ?? stringProp(event, 'tool_use_id') ?? stringProp(event, 'id'),
-        status: stringProp(event, 'status') ?? (event.is_error === true ? 'error' : 'ok'),
-        output_tail: tailString(
-          stringProp(event, 'output_tail') ?? stringifyOutput(event.output ?? event.result ?? event.text ?? event.content),
-          STDERR_TAIL_MAX_LEN,
-        ),
-      },
-    })
+export function mapStreamEventToBClass(event: AgentEvent): BClassEvent[] {
+  if (event.type === 'message') {
+    return event.text ? [{ type: 'message', data: { role: event.role, text: event.text } }] : []
   }
-
-  if (type === 'turn_usage') {
-    mapped.push({
-      type: 'turn_usage',
-      data: {
-        input_tokens: numberProp(event, 'input_tokens'),
-        output_tokens: numberProp(event, 'output_tokens'),
-        // Preserve the cache partition and aggregate total fields so Cursor's
-        // normalized token usage survives the mapping untouched. The mapper
-        // never infers trust or fabricates values: a missing cache partition
-        // is omitted and an invalid number is never upgraded.
-        cached_input_tokens: numberProp(event, 'cached_input_tokens'),
-        cache_read_input_tokens: numberProp(event, 'cache_read_input_tokens'),
-        cache_creation_input_tokens: numberProp(event, 'cache_creation_input_tokens'),
-        total_tokens: numberProp(event, 'total_tokens'),
-        duration_ms: numberProp(event, 'duration_ms'),
-        // Preserve normalized response samples only when supplied.
-        tps_samples: mapTpsSamples(event.tps_samples),
-        // Kimi's wire-observed first-token latency and upstream identity pass
-        // through like any other optional measured field.
-        first_token_latency_ms: numberProp(event, 'first_token_latency_ms'),
-        wire_model: stringProp(event, 'wire_model') ?? undefined,
-        wire_thinking_effort: stringProp(event, 'wire_thinking_effort') ?? undefined,
-        token_scope: stringProp(event, 'token_scope') ?? undefined,
-        duration_scope: stringProp(event, 'duration_scope') ?? undefined,
-        tps_contract: stringProp(event, 'tps_contract') ?? undefined,
-      },
-    })
+  if (event.type === 'reasoning') {
+    return event.text ? [{ type: 'reasoning', data: { text: event.text } }] : []
   }
-
-  return mapped.map((item) => ({
-    type: item.type,
-    data: dropUndefined(item.data),
-  }))
+  if (event.type === 'tool_call') {
+    return [{ type: 'tool_call', data: dropUndefined({ name: event.name, input_summary: event.inputSummary, call_id: event.callId }) }]
+  }
+  if (event.type === 'tool_result') {
+    return [{ type: 'tool_result', data: dropUndefined({ call_id: event.callId, status: event.status, output_tail: tailString(event.outputTail, STDERR_TAIL_MAX_LEN) }) }]
+  }
+  if (event.type === 'usage') {
+    return [{ type: 'turn_usage', data: dropUndefined({
+      input_tokens: numberProp(event, 'input_tokens'),
+      output_tokens: numberProp(event, 'output_tokens'),
+      cached_input_tokens: numberProp(event, 'cached_input_tokens'),
+      cache_read_input_tokens: numberProp(event, 'cache_read_input_tokens'),
+      cache_creation_input_tokens: numberProp(event, 'cache_creation_input_tokens'),
+      total_tokens: numberProp(event, 'total_tokens'),
+      duration_ms: numberProp(event, 'duration_ms'),
+      tps_samples: mapTpsSamples(event.tps_samples),
+      first_token_latency_ms: numberProp(event, 'first_token_latency_ms'),
+      wire_model: stringProp(event, 'wire_model') ?? undefined,
+      wire_thinking_effort: stringProp(event, 'wire_thinking_effort') ?? undefined,
+      token_scope: stringProp(event, 'token_scope') ?? undefined,
+      duration_scope: stringProp(event, 'duration_scope') ?? undefined,
+      tps_contract: stringProp(event, 'tps_contract') ?? undefined,
+    }) }]
+  }
+  return []
 }
 
 function mapTpsSamples(value: unknown): unknown[] | undefined {
@@ -2373,39 +2270,8 @@ function mapTpsSamples(value: unknown): unknown[] | undefined {
   })
 }
 
-function normalizeClientEvent(event: StreamEventRecord): StreamEventRecord | undefined {
-  return stringProp(event, 'type') ? event : undefined
-}
-
-function detectNativeSession(event: StreamEventRecord): { nativeSessionId: string; clientFamily: ClientFamily } | undefined {
-  const nativeSessionId = stringProp(event, 'native_session_id')
-  const clientFamily = stringProp(event, 'client_family')
-  if (nativeSessionId && isClientFamily(clientFamily)) {
-    return { nativeSessionId, clientFamily }
-  }
-
-  return undefined
-}
-
 function isClientFamily(value: string | null | undefined): value is ClientFamily {
   return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'cursor' || value === 'grok' || value === 'dsh' || value === 'codebuddy' || value === 'pi' || value === 'kimi'
-}
-
-function detectResolvedProfile(event: StreamEventRecord): string | undefined {
-  const type = stringProp(event, 'type')
-  if (type !== 'run_started' && type !== 'run_finished') {
-    return undefined
-  }
-  const profile = stringProp(event, 'profile')
-  return profile ? profile.trim() : undefined
-}
-
-function detectFailureClass(event: StreamEventRecord): string | undefined {
-  if (stringProp(event, 'type') !== 'run_finished') {
-    return undefined
-  }
-  const fc = stringProp(event, 'failure_class')
-  return fc ? fc.trim() : undefined
 }
 
 /**
@@ -2469,8 +2335,8 @@ function extractUpstreamError(text: string | null): UpstreamError | undefined {
 }
 
 /** The structured upstream identity on a failed terminal record, verbatim. */
-function extractUpstreamErrorRecord(event: StreamEventRecord): UpstreamError | undefined {
-  const error = recordProp(event, 'error')
+function extractUpstreamErrorRecord(event: Extract<AgentEvent, { type: 'finished' }>): UpstreamError | undefined {
+  const error = isRecord(event.error) ? event.error : null
   if (error === null) return undefined
   const status = numberProp(error, 'status') ?? undefined
   const errorType = stringProp(error, 'type') ?? undefined
@@ -2511,66 +2377,19 @@ function unescapeJsonString(text: string): string {
   }
 }
 
-function extractFinalResult(event: StreamEventRecord): { isError: boolean; output?: string } | undefined {
-  const type = stringProp(event, 'type')
-  if (type === 'run_finished') {
-    const status = stringProp(event, 'status')
-    const exitCode = numberProp(event, 'exit_code')
-    return {
-      isError: event.is_error === true || status === 'failed' || (exitCode !== undefined && exitCode !== 0),
-      output: stringProp(event, 'output') ?? stringProp(event, 'summary') ?? undefined,
-    }
+function extractFinalResult(event: Extract<AgentEvent, { type: 'finished' }>): { isError: boolean; output?: string } {
+  return {
+    isError: event.isError === true || event.status === 'failed',
+    output: typeof event.output === 'string' ? event.output : undefined,
   }
-
-  return undefined
 }
 
-function extractStreamJsonErrorText(
-  event: StreamEventRecord,
-  final: { isError: boolean; output?: string } | undefined,
-): string | undefined {
-  const type = stringProp(event, 'type')
-  if (final?.isError) {
-    return compactStrings([
-      final.output,
-      stringProp(event, 'error'),
-      stringProp(recordProp(event, 'error'), 'message'),
-      stringProp(event, 'message'),
-      stringProp(event, 'reason'),
-      stringProp(event, 'details'),
-    ]).join('\n') || stableStringify(event)
-  }
-
-  if (type !== 'error' && type !== 'turn.failed') return undefined
-
+function extractStreamJsonErrorText(event: Extract<AgentEvent, { type: 'finished' }>): string | undefined {
   return compactStrings([
-    stringProp(event, 'error'),
-    stringProp(recordProp(event, 'error'), 'message'),
-    stringProp(event, 'message'),
-    stringProp(event, 'reason'),
-    stringProp(event, 'details'),
-    stringProp(event, 'result'),
-    stringProp(event, 'output'),
-    stringProp(event, 'summary'),
+    typeof event.error === 'string' ? event.error : undefined,
+    stringProp(isRecord(event.error) ? event.error : null, 'message'),
+    event.output,
   ]).join('\n') || stableStringify(event)
-}
-
-function isCodexToolItem(item: Record<string, unknown> | null): item is Record<string, unknown> {
-  if (!item) return false
-  const itemType = stringProp(item, 'type') ?? ''
-  return itemType.includes('tool') || itemType.includes('function_call') || itemType === 'command_execution'
-}
-
-function isCodexToolResultItem(item: Record<string, unknown> | null): item is Record<string, unknown> {
-  if (!item) return false
-  const itemType = stringProp(item, 'type') ?? ''
-  return itemType.includes('tool') || itemType.includes('function_call_output') || itemType === 'command_execution'
-}
-
-function isErrorToolItem(item: Record<string, unknown>): boolean {
-  const status = stringProp(item, 'status')
-  const exitCode = numberProp(item, 'exit_code')
-  return item.is_error === true || status === 'failed' || status === 'error' || (exitCode !== undefined && exitCode !== 0)
 }
 
 function assertStartExecutionOpts(opts: StartExecutionOpts): void {
@@ -2704,18 +2523,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function recordProp(record: Record<string, unknown> | null | undefined, key: string): Record<string, unknown> | null {
-  if (!record) return null
-  const value = record[key]
-  return isRecord(value) ? value : null
-}
-
-function arrayProp(record: Record<string, unknown> | null | undefined, key: string): unknown[] {
-  if (!record) return []
-  const value = record[key]
-  return Array.isArray(value) ? value : []
-}
-
 function stringProp(record: Record<string, unknown> | null | undefined, key: string): string | null {
   if (!record) return null
   const value = record[key]
@@ -2726,30 +2533,6 @@ function numberProp(record: Record<string, unknown> | null | undefined, key: str
   if (!record) return undefined
   const value = record[key]
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-function contentText(content: unknown[]): string {
-  const parts: string[] = []
-  for (const item of content) {
-    if (typeof item === 'string') {
-      parts.push(item)
-    } else if (isRecord(item) && typeof item.text === 'string') {
-      parts.push(item.text)
-    }
-  }
-  return parts.join('')
-}
-
-function summarizeUnknown(value: unknown): string | undefined {
-  if (value === undefined) return undefined
-  const text = typeof value === 'string' ? value : stableStringify(value)
-  return tailString(text, 500)
-}
-
-function stringifyOutput(value: unknown): string {
-  if (value === undefined || value === null) return ''
-  if (typeof value === 'string') return value
-  return stableStringify(value)
 }
 
 function stableStringify(value: unknown): string {

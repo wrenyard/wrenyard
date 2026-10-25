@@ -1,6 +1,6 @@
 import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
-    failureRecord, finishedEvent, jsonStringValue, messageEvent, readNativeRecords, recordOf, sessionIdOf, stringOf, toolCallRecord, toolResultRecord,
+    failureRecord, finishedEvent, jsonStringValue, messageEvent, readNativeRecords, recordOf, runFinishedRecord, sessionIdOf, stringOf, toolCallRecord, toolResultRecord,
     turnUsageRecord,
 } from '@wrenyard/agent-client/native';
 import { positiveInt } from '@wrenyard/agent-client/statistics';
@@ -62,8 +62,8 @@ export async function* decodeGrok(
                         }
                     }
                     if (terminal) {
-                        if (terminal.type === 'output' && sessionId !== undefined && terminal.record.native_session_id === undefined)
-                            yield { type: 'output', record: { ...terminal.record, native_session_id: sessionId } };
+                        if (terminal.type === 'finished' && sessionId !== undefined && terminal.nativeSessionId === undefined)
+                            yield { ...terminal, nativeSessionId: sessionId };
                         else
                             yield terminal;
                     }
@@ -106,7 +106,7 @@ export async function* decodeGrok(
         if (['error', 'failed', 'failure', 'cancelled', 'canceled'].includes(type)) {
             failed = true;
             ended = true;
-            terminal = { type: 'output', record: failureRecord(record, 'Grok runtime failed', sessionId) };
+            terminal = failureRecord(record, 'Grok runtime failed', sessionId);
             continue;
         }
         if (['result', 'run_finished', 'done', 'complete', 'completed', 'end'].includes(type)) {
@@ -117,16 +117,12 @@ export async function* decodeGrok(
                 if (id)
                     sessionId = id;
                 failed = status === 'failed';
-                terminal = {
-                    type: 'output',
-                    record: {
-                        type: 'run_finished',
-                        status: failed ? 'failed' : 'done',
-                        client_family: 'grok',
-                        ...(failed ? { error: jsonStringValue(record.error) || jsonStringValue(record.message) || 'Grok runtime failed' } : {}),
-                        ...(sessionId ? { native_session_id: sessionId } : {}),
-                    },
-                };
+                terminal = runFinishedRecord('grok', failed ? 'failed' : 'done', sessionId, {
+                    ...(failed ? {
+                        error: jsonStringValue(record.error) || jsonStringValue(record.message) || 'Grok runtime failed',
+                        is_error: true,
+                    } : {}),
+                });
             }
         }
     }
@@ -160,7 +156,7 @@ function canonicalUsage(candidate: Record<string, unknown> | undefined): AgentEv
     // interval. duration_ms is always present so the record is structurally
     // complete.
     data.duration_ms = positiveInt(data.duration_ms) ?? 0;
-    return { type: 'output', record: turnUsageRecord(data) };
+    return turnUsageRecord(data);
 }
 
 /** Reads a native usage object verbatim; Grok reports no turn duration. */
@@ -179,7 +175,7 @@ function toolCallEvent(record: Record<string, unknown>): AgentEvent | undefined 
         return undefined;
     const name = stringOf(record, 'toolName') || stringOf(record, 'title') || stringOf(record, 'kind');
     const sessionId = stringOf(record, 'session_id') || stringOf(record, 'sessionId') || stringOf(record, 'native_session_id') || stringOf(record, 'conversation_id');
-    return { type: 'output', record: toolCallRecord(name, callId, jsonStringValue(record.rawInput), sessionId || undefined) };
+    return toolCallRecord(name, callId, jsonStringValue(record.rawInput), sessionId || undefined);
 }
 
 function toolResultEvent(record: Record<string, unknown>): AgentEvent | undefined {
@@ -194,7 +190,7 @@ function toolResultEvent(record: Record<string, unknown>): AgentEvent | undefine
         ?? rawOutputBytesText(record.rawOutput)
         ?? jsonStringValue(record.rawOutput);
     const sessionId = stringOf(record, 'session_id') || stringOf(record, 'sessionId') || stringOf(record, 'native_session_id') || stringOf(record, 'conversation_id');
-    return { type: 'output', record: toolResultRecord(callId, status, output, sessionId || undefined) };
+    return toolResultRecord(callId, status, output, sessionId || undefined);
 }
 
 function readableToolText(value: unknown): string | undefined {

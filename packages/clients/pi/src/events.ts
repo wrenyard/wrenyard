@@ -120,7 +120,7 @@ function flushUsage(usage: {
         if (usage.total > 0)
             data.total_tokens = usage.total;
     }
-    return { type: 'output', record: turnUsageRecord(data) };
+    return turnUsageRecord(data);
 }
 
 /**
@@ -208,10 +208,7 @@ export async function* decodePi(events: AsyncIterable<StreamChunk>): AsyncGenera
             const callId = stringOf(record, 'toolCallId') || stringOf(record, 'tool_call_id');
             const name = stringOf(record, 'toolName') || stringOf(record, 'tool_name');
             if (callId && name) {
-                yield {
-                    type: 'output',
-                    record: toolCallRecord(name, callId, jsonStringValue(record.args), sessionId),
-                };
+                yield toolCallRecord(name, callId, jsonStringValue(record.args), sessionId);
             }
             continue;
         }
@@ -220,10 +217,7 @@ export async function* decodePi(events: AsyncIterable<StreamChunk>): AsyncGenera
             if (callId) {
                 const isError = record.isError === true;
                 const result = jsonStringValue(record.result);
-                yield {
-                    type: 'output',
-                    record: toolResultRecord(callId, isError ? 'error' : 'ok', result, sessionId),
-                };
+                yield toolResultRecord(callId, isError ? 'error' : 'ok', result, sessionId);
             }
             continue;
         }

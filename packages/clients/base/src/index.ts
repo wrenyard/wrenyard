@@ -68,7 +68,17 @@ export interface AgentRequest {
 export interface AgentResult {
     readonly exitCode: number | null;
 }
-export type AgentEvent = { readonly type: 'output'; readonly record: Record<string, unknown> } | { readonly type: 'stderr'; readonly text: string } | { readonly type: 'error'; readonly message: string } | { readonly type: 'exit'; readonly exitCode: number | null; readonly signal: NodeJS.Signals | null };
+export type AgentEvent =
+    | { readonly type: 'session'; readonly nativeSessionId: string; readonly profile?: string }
+    | { readonly type: 'message'; readonly role: 'assistant'; readonly text: string }
+    | { readonly type: 'reasoning'; readonly text: string }
+    | { readonly type: 'tool_call'; readonly callId: string; readonly name: string; readonly inputSummary: string; readonly nativeSessionId?: string }
+    | { readonly type: 'tool_result'; readonly callId: string; readonly status: 'ok' | 'error'; readonly outputTail: string; readonly nativeSessionId?: string }
+    | ({ readonly type: 'usage' } & Readonly<Record<string, unknown>>)
+    | ({ readonly type: 'finished'; readonly status: 'done' | 'failed'; readonly nativeSessionId?: string; readonly clientFamily?: string; readonly output?: string; readonly isError?: boolean; readonly error?: unknown; readonly failureClass?: string; readonly recoveryAt?: string; readonly retryAfterSeconds?: number; readonly profile?: string } & Readonly<Record<string, unknown>>)
+    | { readonly type: 'stderr'; readonly text: string }
+    | { readonly type: 'error'; readonly message: string }
+    | { readonly type: 'exit'; readonly exitCode: number | null; readonly signal: NodeJS.Signals | null };
 export interface AgentSession {
     readonly events: AsyncIterable<AgentEvent>;
     readonly result: Promise<AgentResult>;

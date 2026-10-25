@@ -6,8 +6,12 @@ import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
 import { resolveWrenyardClientStateDir, resolveWrenyardStateRoot } from '@wrenyard/paths';
 import type { AgentEvent, AgentRequest, StreamChunk } from './index.ts';
 
-export function messageEvent(text: string, role = 'assistant'): AgentEvent {
-    return { type: 'output', record: { type: 'message', role, text } };
+export function messageEvent(text: string, role: 'assistant' = 'assistant'): AgentEvent {
+    return { type: 'message', role, text };
+}
+
+export function sessionEvent(nativeSessionId: string, profile?: string): AgentEvent {
+    return { type: 'session', nativeSessionId, ...(profile ? { profile } : {}) };
 }
 
 export function finishedEvent(
@@ -15,19 +19,16 @@ export function finishedEvent(
     sessionId: string | undefined,
     output: string,
     failed = false,
-    error?: Record<string, unknown> | string,
+    error?: unknown,
 ): AgentEvent {
     return {
-        type: 'output',
-        record: {
-            type: 'run_finished',
-            status: failed ? 'failed' : 'done',
-            client_family: family,
-            ...(sessionId ? { native_session_id: sessionId } : {}),
-            ...(output ? { output } : {}),
-            is_error: failed,
-            ...(error !== undefined ? { error } : {}),
-        },
+        type: 'finished',
+        status: failed ? 'failed' : 'done',
+        clientFamily: family,
+        ...(sessionId ? { nativeSessionId: sessionId } : {}),
+        ...(output ? { output } : {}),
+        isError: failed,
+        ...(error !== undefined ? { error } : {}),
     };
 }
 
@@ -220,70 +221,76 @@ export function truncateTail(text: string, maxBytes = OUTPUT_TAIL_MAX_BYTES): st
 }
 
 /** A normalized tool invocation record. */
-export function toolCallRecord(name: string, callId: string, inputSummary: string, nativeSessionId?: string): Record<string, unknown> {
+export function toolCallRecord(name: string, callId: string, inputSummary: string, nativeSessionId?: string): AgentEvent {
     return {
         type: 'tool_call',
         name,
-        input_summary: truncateHead(inputSummary),
-        call_id: callId,
-        ...(nativeSessionId ? { native_session_id: nativeSessionId } : {}),
+        callId,
+        inputSummary: truncateHead(inputSummary),
+        ...(nativeSessionId ? { nativeSessionId } : {}),
     };
 }
 
 /** A normalized tool result record; the status is always ok or error. */
-export function toolResultRecord(callId: string, status: 'ok' | 'error', outputTail: string, nativeSessionId?: string): Record<string, unknown> {
+export function toolResultRecord(callId: string, status: 'ok' | 'error', outputTail: string, nativeSessionId?: string): AgentEvent {
     return {
         type: 'tool_result',
-        call_id: callId,
+        callId,
         status,
-        output_tail: truncateTail(outputTail),
-        ...(nativeSessionId ? { native_session_id: nativeSessionId } : {}),
+        outputTail: truncateTail(outputTail),
+        ...(nativeSessionId ? { nativeSessionId } : {}),
     };
 }
 
 /** A normalized assistant message record. */
-export function messageRecord(text: string, role = 'assistant'): Record<string, unknown> {
+export function messageRecord(text: string, role: 'assistant' = 'assistant'): AgentEvent {
     return { type: 'message', role, text };
 }
 
 /** A normalized reasoning record. */
-export function reasoningRecord(text: string): Record<string, unknown> {
+export function reasoningRecord(text: string): AgentEvent {
     return { type: 'reasoning', text };
 }
 
 /** A normalized token-accounting record. */
-export function turnUsageRecord(data: Record<string, unknown>): Record<string, unknown> {
-    return { type: 'turn_usage', ...data };
+export function turnUsageRecord(data: Record<string, unknown>): AgentEvent {
+    const { type: _recordType, ...fields } = data;
+    return { type: 'usage', ...fields };
 }
 
 /** A normalized terminal record for one client family. */
-export function runFinishedRecord(family: string, status: 'done' | 'failed', sessionId?: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+export function runFinishedRecord(family: string, status: 'done' | 'failed', sessionId?: string, extra: Record<string, unknown> = {}): AgentEvent {
+    const { failure_class, recovery_at, retry_after_seconds, profile, ...rest } = extra;
     return {
-        type: 'run_finished',
+        type: 'finished',
         status,
-        client_family: family,
-        ...(sessionId ? { native_session_id: sessionId } : {}),
-        ...extra,
+        clientFamily: family,
+        ...(sessionId ? { nativeSessionId: sessionId } : {}),
+        ...rest,
+        ...(typeof failure_class === 'string' ? { failureClass: failure_class } : {}),
+        ...(typeof recovery_at === 'string' ? { recoveryAt: recovery_at } : {}),
+        ...(typeof retry_after_seconds === 'number' ? { retryAfterSeconds: retry_after_seconds } : {}),
+        ...(typeof profile === 'string' ? { profile } : {}),
     };
 }
 
 /** A normalized failure event, carrying only the failure fields execution consumes. */
-export function failureRecord(record: Record<string, unknown>, fallbackMessage: string, sessionId?: string): Record<string, unknown> {
-    const data: Record<string, unknown> = { type: 'run_finished', status: 'failed' };
+export function failureRecord(record: Record<string, unknown>, fallbackMessage: string, sessionId?: string): AgentEvent {
+    const data: Record<string, unknown> = {};
     for (const key of ['failure_class', 'recovery_at', 'retry_after_seconds']) {
         if (record[key] !== undefined)
-            data[key] = record[key];
+            data[key === 'failure_class' ? 'failureClass' : key === 'recovery_at' ? 'recoveryAt' : 'retryAfterSeconds'] = record[key];
     }
     const session = sessionId ?? sessionIdOf(record);
     if (session)
-        data.native_session_id = session;
+        data.nativeSessionId = session;
     const failure = recordOf(record, 'failure');
     if (failure) {
         data.error = errorValue(failure, fallbackMessage);
-        if (data.failure_class === undefined) {
+        if (data.failureClass === undefined) {
             const failureClass = stringOf(failure, 'failure_class') || stringOf(failure, 'class');
             if (failureClass)
-                data.failure_class = failureClass;
+                data.failureClass = failureClass;
         }
     }
     else {
@@ -299,7 +306,7 @@ export function failureRecord(record: Record<string, unknown>, fallbackMessage: 
         if (data.error === undefined)
             data.error = fallbackMessage;
     }
-    return data;
+    return { type: 'finished', status: 'failed', ...data } as AgentEvent;
 }
 
 /** Normalizes an error payload to a string or a bounded field object. */

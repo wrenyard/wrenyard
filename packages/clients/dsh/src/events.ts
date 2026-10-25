@@ -1,5 +1,5 @@
 import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
-import { finishedEvent, jsonStringValue, messageEvent, readNativeRecords, recordOf, sessionIdOf, stringOf, toolCallRecord, toolResultRecord } from '@wrenyard/agent-client/native';
+import { finishedEvent, jsonStringValue, messageEvent, readNativeRecords, recordOf, sessionIdOf, stringOf, toolCallRecord, toolResultRecord, turnUsageRecord } from '@wrenyard/agent-client/native';
 import { TOKENIZER_MINIMUM_WINDOW_MS, addUsageTokens, applyTrustedAgentTurnContract, countTPSTokens, nonnegativeInt, positiveInt } from '@wrenyard/agent-client/statistics';
 
 /** JSONL protocol name emitted by the embedded DSH bridge plugin. */
@@ -41,24 +41,24 @@ export async function* decodeDsh(events: AsyncIterable<StreamChunk>): AsyncGener
         if (kind === 'tool/call') {
             const callId = dshCallId(record);
             if (callId) {
-                yield { type: 'output', record: toolCallRecord(
+                yield toolCallRecord(
                     stringOf(record, 'name') || stringOf(record, 'tool') || 'tool_call',
                     callId,
                     jsonStringValue(record.input),
                     sessionId,
-                ) };
+                );
             }
             continue;
         }
         if (kind === 'tool/result') {
             const callId = dshCallId(record);
             if (callId) {
-                yield { type: 'output', record: toolResultRecord(
+                yield toolResultRecord(
                     callId,
                     dshToolStatus(record),
                     jsonStringValue(record.output) || jsonStringValue(record.result) || jsonStringValue(record.error),
                     sessionId,
-                ) };
+                );
             }
             continue;
         }
@@ -79,7 +79,7 @@ export async function* decodeDsh(events: AsyncIterable<StreamChunk>): AsyncGener
             failed ||= status !== 'complete';
             const usage = usageOf(record, failed);
             if (usage)
-                yield { type: 'output', record: usage };
+                yield turnUsageRecord(usage);
         }
     }
 }

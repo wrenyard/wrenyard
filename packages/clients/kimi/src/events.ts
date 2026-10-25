@@ -87,9 +87,9 @@ export function decodeKimi(options: DecodeKimiOptions): (events: AsyncIterable<S
                         || item.event.exitCode !== 0
                         || item.event.signal !== null;
                     if (facts.usage.seenAny) {
-                        const record = wireUsageRecord(facts.usage, facts);
-                        if (record)
-                            yield { type: 'output', record };
+                        const usage = wireUsageRecord(facts.usage, facts);
+                        if (usage)
+                            yield usage;
                     }
                     if (sessionId === undefined)
                         sessionId = options.captured.sessionId ?? await discoverSessionId(options.runHome);
@@ -97,17 +97,17 @@ export function decodeKimi(options: DecodeKimiOptions): (events: AsyncIterable<S
                         emittedTerminal = true;
                         if (failed) {
                             const failure = kimiFailure(facts, stderrText, modelMismatch, options.expectedModel);
-                            yield { type: 'output', record: runFinishedRecord('kimi', 'failed', sessionId, failure) };
+                            yield runFinishedRecord('kimi', 'failed', sessionId, failure);
                         } else {
                             // The success record carries the wire's observed
                             // upstream identity so downstream statistics see the
                             // model and effort that actually ran.
-                            yield { type: 'output', record: runFinishedRecord('kimi', 'done', sessionId, {
+                            yield runFinishedRecord('kimi', 'done', sessionId, {
                                 is_error: false,
                                 ...(output ? { output } : {}),
                                 ...(facts.model !== undefined ? { wire_model: facts.model } : {}),
                                 ...(facts.thinkingEffort !== undefined ? { wire_thinking_effort: facts.thinkingEffort } : {}),
-                            }) };
+                            });
                         }
                     }
                 }
@@ -123,7 +123,7 @@ export function decodeKimi(options: DecodeKimiOptions): (events: AsyncIterable<S
                 const text = assistantText(record);
                 if (text) {
                     output = text;
-                    yield { type: 'output', record: { type: 'message', role: 'assistant', text } };
+                    yield { type: 'message', role: 'assistant', text };
                 }
                 for (const event of assistantToolCalls(record))
                     yield event;
@@ -199,7 +199,7 @@ function* assistantToolCalls(record: Record<string, unknown>): Generator<AgentEv
         const callId = stringOf(entry, 'id') || `kimi_${name}`;
         const args = fn?.arguments;
         const inputSummary = typeof args === 'string' ? args : args === undefined || args === null ? '' : JSON.stringify(args);
-        yield { type: 'output', record: toolCallRecord(name, callId, inputSummary, undefined) };
+        yield toolCallRecord(name, callId, inputSummary, undefined);
     }
 }
 
@@ -211,7 +211,7 @@ function toolResultEvent(record: Record<string, unknown>): AgentEvent | undefine
     const content = record.content ?? record.output ?? record.result;
     const text = typeof content === 'string' ? content : content === undefined || content === null ? '' : JSON.stringify(content);
     const isError = record.is_error === true || record.error !== undefined;
-    return { type: 'output', record: toolResultRecord(callId, isError ? 'error' : 'ok', text, undefined) };
+    return toolResultRecord(callId, isError ? 'error' : 'ok', text, undefined);
 }
 
 /** Session id carried by the trailing `session.resume_hint` record. */
@@ -356,7 +356,7 @@ function addPartition(current: number | undefined, value: unknown): number | und
  * own upstream model and effort ride along so the statistics projection can
  * consume the identity that actually served the turn.
  */
-function wireUsageRecord(usage: UsageAccumulator, facts: WireFacts): Record<string, unknown> | undefined {
+function wireUsageRecord(usage: UsageAccumulator, facts: WireFacts): AgentEvent | undefined {
     const data: Record<string, unknown> = {
         // The wire has no measured full-turn interval, so the canonical
         // emission carries the truthful non-positive placeholder.
