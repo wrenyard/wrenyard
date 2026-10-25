@@ -26,7 +26,6 @@ export const MAINSTREAM_MODEL_IDS = [
   'claude-sonnet-5-5',
   'claude-haiku-5-5',
   'grok-4.7',
-  'composer-2.5',
   'muse-spark-1.3',
   'gemini-3.8-flash',
   'gemini-4-argon',

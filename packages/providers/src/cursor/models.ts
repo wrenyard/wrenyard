@@ -9,9 +9,8 @@ const FIVE_LEVELS = REASONING_FULL.filter(effort => effort !== 'none');
 export const definition = defineProvider({
   modelProtocols: [],
   id: 'cursor', displayName: 'Cursor', credentialResolver: 'cursor', nativeClients: ['cursor'],
-  defaultModel: 'composer-2.5', quotaProvider: 'cursor', useClientBinary: true,
+  defaultModel: 'grok-4.7', quotaProvider: 'cursor', useClientBinary: true,
   models: [
-    { ...model('composer-2.5', 200_000), pricing: [0.2, 0.5, 2.5], reasoningEfforts: ['high'] },
     // Cursor Grok Fast is unsupported: the official Cursor Grok CLI Fast
     // contract (a bracket fast selector for grok-4.7) is unverified.
     { ...model('grok-4.7', 256_000, undefined, undefined, REASONING_UP_TO_XHIGH) },
@@ -31,7 +30,6 @@ export const definition = defineProvider({
   reasoningEffortMappings: {
     'gpt-5.6-sol': { cursor: suffixMappings('gpt-5.6-sol', REASONING_FULL) },
     'gpt-5.6-luna': { cursor: suffixMappings('gpt-5.6-luna', REASONING_FULL) },
-    'composer-2.5': { cursor: { high: { model: 'composer-2.5' } } },
     'kimi-k3': { cursor: suffixMappings('kimi-k3', REASONING_LOW_HIGH_MAX) },
     'claude-opus-5-5': { cursor: suffixMappings('claude-opus-5-5', FIVE_LEVELS) },
     'claude-sonnet-5-5': { cursor: suffixMappings('claude-sonnet-5-5', FIVE_LEVELS) },
@@ -42,6 +40,6 @@ export const definition = defineProvider({
     'grok-4.7': { cursor: suffixMappings('grok-4.7', REASONING_UP_TO_XHIGH) },
   },
   convertReasoningEffort: () => { throw new Error('Cursor only supports native model substitutions'); },
-  description: 'Cursor 提供 Composer、Grok 以及 GPT、Claude、Muse 与 Gemini 等多厂商模型服务。',
+  description: 'Cursor 提供 Grok 以及 GPT、Claude、Muse 与 Gemini 等多厂商模型服务。',
   setupHint: '请在 Cursor Desktop 中完成登录，返回啾啾工坊后刷新状态。',
 });
