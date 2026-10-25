@@ -977,6 +977,11 @@ async function createForemanDaemonResources(
     const cursorModelAvailability = cursorReadiness?.authentication === 'ready'
       ? projectModelAvailability(cursorReadiness.modelAvailability, 'cursor')
       : undefined
+    // Kimi Code reuses the managed Kimi Coding credential, so its native
+    // readiness is that provider's auth state; no kimi login exists.
+    const kimiReadiness = await readClientReadiness(clients.get('kimi'))
+    if (kimiReadiness?.authentication === 'ready') authByProvider['kimi-coding'] = true
+    else if (kimiReadiness?.authentication === 'missing') authByProvider['kimi-coding'] = false
     return Object.freeze({
       sampledAtMs: Date.now(),
       authByProvider: Object.freeze(authByProvider),
@@ -1620,6 +1625,7 @@ async function createForemanDaemonResources(
     grok: 'Grok',
     opencode: 'OpenCode',
     pi: 'Pi',
+    kimi: 'Kimi Code',
   }
   // npm package backing each client, when one is published. Clients without an
   // entry (e.g. cursor) have no supported install source and are managed
@@ -1632,6 +1638,7 @@ async function createForemanDaemonResources(
     codebuddy: '@tencent-ai/codebuddy-code',
     dsh: '@deepseek-ai/dsh',
     pi: '@mariozechner/pi-coding-agent',
+    kimi: '@moonshot-ai/kimi-code',
   }
   // In-flight install/upgrade jobs, keyed by client id, and the last recorded
   // failure message per client. Shared so client.list reflects live state.

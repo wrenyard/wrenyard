@@ -11,7 +11,7 @@ export interface OperationDescriptor {
   description: string
 }
 
-export type ClientFamily = 'claude' | 'codex' | 'opencode' | 'cursor' | 'grok' | 'dsh' | 'codebuddy' | 'pi'
+export type ClientFamily = 'claude' | 'codex' | 'opencode' | 'cursor' | 'grok' | 'dsh' | 'codebuddy' | 'pi' | 'kimi'
 
 /**
  * Private, non-persistent CodeBuddy admission binding captured from one active

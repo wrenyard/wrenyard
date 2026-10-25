@@ -106,6 +106,7 @@ const REQUIRED_CLIENT_FAMILIES = [
   'dsh',
   'codebuddy',
   'pi',
+  'kimi',
 ] as const
 
 function needsClientFamilyMigration(sql: string | undefined): boolean {
@@ -301,7 +302,7 @@ const EXECUTIONS_TABLE_SQL = `CREATE TABLE executions (
   status            TEXT NOT NULL CHECK(status IN
                       ('queued','starting','running','done','failed','cancelled','timeout','interrupted')),
   native_session_id TEXT,
-  client_family     TEXT CHECK(client_family IN ('claude','codex','opencode','cursor','grok','dsh','codebuddy','pi')),
+  client_family     TEXT CHECK(client_family IN ('claude','codex','opencode','cursor','grok','dsh','codebuddy','pi','kimi')),
   pid               INTEGER, pgid INTEGER,
   started_at        TEXT, ended_at TEXT,
   exit_code         INTEGER, kill_signal TEXT,

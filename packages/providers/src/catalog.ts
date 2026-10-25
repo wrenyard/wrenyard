@@ -34,6 +34,9 @@ export const BUILTIN_CLIENTS: readonly ClientDefinition[] = [
   },
   { id: 'opencode', forwardsGatewayReasoningEffort: true, nativeProvider: 'opencode-zen', gatewayProtocols: ['openai_chat', 'anthropic_messages'], taskCapable: true },
   { id: 'pi', forwardsGatewayReasoningEffort: true, gatewayProtocols: ['openai_chat'], taskCapable: true },
+  // Kimi Code is a native-only client for its exact Kimi Coding provider: no
+  // gateway protocols are declared, so it can never serve other providers.
+  { id: 'kimi', nativeProvider: 'kimi-coding', gatewayProtocols: [], taskCapable: true },
 ];
 
 /**

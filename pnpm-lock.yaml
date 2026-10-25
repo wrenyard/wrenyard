@@ -340,6 +340,9 @@ importers:
       '@wrenyard/client-grok':
         specifier: workspace:*
         version: link:grok
+      '@wrenyard/client-kimi':
+        specifier: workspace:*
+        version: link:kimi
       '@wrenyard/client-opencode':
         specifier: workspace:*
         version: link:opencode
@@ -506,6 +509,31 @@ importers:
       '@wrenyard/execution':
         specifier: workspace:*
         version: link:../../execution
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/clients/kimi:
+    dependencies:
+      '@wrenyard/agent-client':
+        specifier: workspace:*
+        version: link:../base
+      '@wrenyard/execution':
+        specifier: workspace:*
+        version: link:../../execution
+      '@wrenyard/providers':
+        specifier: workspace:*
+        version: link:../../providers
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

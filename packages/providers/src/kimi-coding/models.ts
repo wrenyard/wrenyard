@@ -3,6 +3,9 @@ import { defineProvider, model, openAI, anthropic, REASONING_LOW_HIGH_MAX, effor
 export const definition = defineProvider({
   modelProtocols: ['openai_chat', 'anthropic_messages'],
   id: 'kimi-coding', displayName: 'Kimi Coding', credentialResolver: 'managed',
+  // Kimi Code is the provider's native client; the gateway entries stay for
+  // the generic gateway clients.
+  nativeClients: ['kimi'],
   defaultModel: 'kimi-k3.1-pro', quotaProvider: 'kimi-coding',
   models: [
     { ...model('kimi-k3.1-pro', 1_048_576, 131_072, 'k3.1-pro', REASONING_LOW_HIGH_MAX), supportsFast: true },
@@ -22,6 +25,10 @@ export const definition = defineProvider({
   // Fast is the K3.1 Pro Highspeed wire id and nothing else: only that model
   // has an upstream fast variant, and the reasoning effort stays untouched.
   fastMapping: {
+    // Native (Kimi Code) Fast is a model swap only: the K3.1 Pro Highspeed
+    // wire id replaces `k3.1-pro`; every other model and the non-fast state
+    // keep the resolved model.
+    model: (resolvedModel, modelId, fast) => (fast && modelId === 'kimi-k3.1-pro' ? 'k3.1-pro-highspeed' : resolvedModel),
     request: (modelId, fast) => (fast && modelId === 'kimi-k3.1-pro' ? { model: 'k3.1-pro-highspeed' } : {}),
   },
   // Gateway clients may materialize K3 thinking once their native syntax
@@ -34,18 +41,21 @@ export const definition = defineProvider({
       claude: effortLadder(REASONING_LOW_HIGH_MAX),
       codebuddy: effortLadder(REASONING_LOW_HIGH_MAX),
       grok: effortLadder(REASONING_LOW_HIGH_MAX),
+      kimi: effortLadder(REASONING_LOW_HIGH_MAX),
     },
     'kimi-k3': {
       codex: effortLadder(REASONING_LOW_HIGH_MAX),
       claude: effortLadder(REASONING_LOW_HIGH_MAX),
       codebuddy: effortLadder(REASONING_LOW_HIGH_MAX),
       grok: effortLadder(REASONING_LOW_HIGH_MAX),
+      kimi: effortLadder(REASONING_LOW_HIGH_MAX),
     },
     'kimi-k2.8': {
       codex: effortLadder(['low','high','max']),
       claude: effortLadder(['low','high','max']),
       codebuddy: effortLadder(['low','high','max']),
       grok: effortLadder(['low','high','max']),
+      kimi: effortLadder(['low','high','max']),
     },
   },
   convertReasoningEffort: (_modelId, effort, protocol) => {

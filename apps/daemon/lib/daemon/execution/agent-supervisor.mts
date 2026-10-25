@@ -2267,6 +2267,11 @@ export function mapStreamEventToBClass(event: StreamEventRecord): BClassEvent[] 
         duration_ms: numberProp(event, 'duration_ms'),
         // Preserve normalized response samples only when supplied.
         tps_samples: mapTpsSamples(event.tps_samples),
+        // Kimi's wire-observed first-token latency and upstream identity pass
+        // through like any other optional measured field.
+        first_token_latency_ms: numberProp(event, 'first_token_latency_ms'),
+        wire_model: stringProp(event, 'wire_model') ?? undefined,
+        wire_thinking_effort: stringProp(event, 'wire_thinking_effort') ?? undefined,
         token_scope: stringProp(event, 'token_scope') ?? undefined,
         duration_scope: stringProp(event, 'duration_scope') ?? undefined,
         tps_contract: stringProp(event, 'tps_contract') ?? undefined,
@@ -2315,7 +2320,7 @@ function detectNativeSession(event: StreamEventRecord): { nativeSessionId: strin
 }
 
 function isClientFamily(value: string | null | undefined): value is ClientFamily {
-  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'cursor' || value === 'grok' || value === 'dsh' || value === 'codebuddy' || value === 'pi'
+  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'cursor' || value === 'grok' || value === 'dsh' || value === 'codebuddy' || value === 'pi' || value === 'kimi'
 }
 
 function detectResolvedProfile(event: StreamEventRecord): string | undefined {

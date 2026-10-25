@@ -14,7 +14,8 @@
     "@wrenyard/client-codebuddy": "workspace:*",
     "@wrenyard/client-opencode": "workspace:*",
     "@wrenyard/client-dsh": "workspace:*",
-    "@wrenyard/client-pi": "workspace:*"
+    "@wrenyard/client-pi": "workspace:*",
+    "@wrenyard/client-kimi": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
