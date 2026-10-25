@@ -50,10 +50,6 @@ const agentClients = createAgentClients();
 const MAX_CONCURRENT_EXECUTIONS = 10
 const SHUTDOWN_GRACE_MS = 10_000
 const STDERR_TAIL_MAX_LEN = 4_000
-/** The retained process tail of a run, returned when it ends abnormally. */
-const PROCESS_TAIL_MAX_CHARS = 32_000
-/** The retained tail of one tool result inside the process. */
-const PROCESS_RESULT_MAX_CHARS = 600
 /**
  * Upper bound on retained assistant message text for one execution, in UTF-16
  * code units. Same code-unit accounting as `tailString`, so a run's retained
@@ -186,10 +182,13 @@ interface RegistryEntry {
   wasQueued: boolean
   outputParts: string[]
   /**
-   * Bounded tail of the run's process: messages, tool calls and tool results
-   * in order. It becomes the output of a run that ends abnormally.
+   * Natural-language prose of a run that ends abnormally, in event order. It
+   * holds assistant message text and the terminal final answer; tool inputs and
+   * results are never collected here.
    */
-  processTail: string
+  abnormalProseParts: string[]
+  /** First-seen counts of tool calls keyed by redacted tool name. */
+  toolCallCounts: Map<string, number>
   /** Code units held before truncation, or in the retained head afterwards. */
   outputHeadChars: number
   /** Code units held after the truncation marker. */
@@ -732,7 +731,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       hasRepoLock,
       wasQueued: false,
       outputParts: [],
-      processTail: '',
+      abnormalProseParts: [],
+      toolCallCounts: new Map(),
       outputHeadChars: 0,
       outputTailChars: 0,
       outputTruncated: false,
@@ -1029,11 +1029,18 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           for (const mapped of mappedEvents) {
             if (mapped.type === 'message' && typeof mapped.data.text === 'string') {
               appendOutputText(entry, mapped.data.text)
+              // Abnormal-output prose is collected without per-message trimming
+              // or truncation so the full natural-language output survives; blank
+              // chunks are ignored.
+              const text = mapped.data.text
+              if (text.length > 0) entry.abnormalProseParts.push(text)
             }
 
             const redacted = redactEvent(mapped.type, mapped.data)
-            const step = processLine(mapped.type, redacted)
-            if (step !== undefined) entry.processTail = tailString(`${entry.processTail}${step}\n`, PROCESS_TAIL_MAX_CHARS)
+            if (mapped.type === 'tool_call') {
+              const name = redacted && isRecord(redacted) ? (stringProp(redacted, 'name') || 'tool') : 'tool'
+              entry.toolCallCounts.set(name, (entry.toolCallCounts.get(name) ?? 0) + 1)
+            }
             this.insertEvent({
               executionId: entry.executionId,
               taskId: entry.taskId,
@@ -1054,13 +1061,13 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     const status = this.determineTerminalStatus(entry, intent)
     const killReason = this.determineKillReason(entry, status, intent)
     const messageOutput = (entry.finalOutput ?? entry.outputParts.join('')).trim() || null
-    // Failures retain their diagnostic process tail; timeouts retain only
-    // the executor's report, with tool activity available in the event ledger.
-    const processOutput = status === 'failed' ? entry.processTail.trim() || null : null
-    const finalText = entry.finalOutput?.trim()
-    const rawAgentOutput = processOutput === null
-      ? messageOutput
-      : finalText && !processOutput.includes(finalText) ? `${processOutput}\n${finalText}` : processOutput
+    // Failed and timed-out runs return the ordered model prose followed by a
+    // tool-name count summary; tool inputs and results are never returned to the
+    // caller. Normal success/cancellation keeps the existing 256KiB accumulator.
+    const processOutput = status === 'failed' || status === 'timeout'
+      ? this.assembleAbnormalOutput(entry)
+      : null
+    const rawAgentOutput = processOutput === null ? messageOutput : processOutput
     // A failed execution keeps a bounded, redacted diagnostic tail of the
     // child's captured error signals, so the real cause (e.g. an HTTP 400
     // unsupported-model message) is retained even when a generic child error
@@ -1099,6 +1106,31 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       failureClass: this.classifyClientFailure(entry),
       upstreamError,
     })
+  }
+
+  /**
+   * Assemble the abnormal-output of a failed or timed-out run: the full ordered
+   * model prose (assistant message text plus the terminal final answer) followed
+   * by exactly one English sentence counting the called tools in first-seen
+   * order. Tool inputs and results are never included, and the prose is never
+   * truncated. The terminal final answer is appended only when it is not an exact
+   * duplicate of the immediately preceding accumulated prose, so a distinct final
+   * answer is preserved while an echo is not doubled.
+   */
+  private assembleAbnormalOutput(entry: RegistryEntry): string {
+    const parts = [...entry.abnormalProseParts]
+    if (entry.finalOutput && parts[parts.length - 1] !== entry.finalOutput) {
+      parts.push(entry.finalOutput)
+    }
+    const prose = parts.join('')
+    const counts: Array<[string, number]> = []
+    for (const [name, count] of entry.toolCallCounts) counts.push([name, count])
+    const summary = counts.length === 0
+      ? 'No tools were called.'
+      : `Called ${counts
+        .map(([name, count]) => `${name} ${count} ${count === 1 ? 'time' : 'times'}`)
+        .join(' and ')}.`
+    return `${prose}${summary}`
   }
 
   /**
@@ -1629,12 +1661,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     const won = this.reconcileTimeout(entry.executionId, endedAt)
     let result: ExecutionResult | undefined
     if (won) {
-      const messageOutput = (entry.finalOutput ?? entry.outputParts.join('')).trim() || null
-      const processOutput = entry.processTail.trim() || null
-      const finalText = entry.finalOutput?.trim()
-      const output = processOutput === null
-        ? messageOutput
-        : finalText && !processOutput.includes(finalText) ? `${processOutput}\n${finalText}` : processOutput
+      const output = this.assembleAbnormalOutput(entry)
       result = {
         executionId: entry.executionId,
         status: 'timeout',
@@ -2808,24 +2835,6 @@ function appendOutputTail(entry: RegistryEntry, text: string): void {
   }
   entry.outputParts = [entry.outputParts[0]!, OUTPUT_TRUNCATION_MARKER, ...kept]
   entry.outputTailChars = keep + text.length
-}
-
-/** One process step as a line; status, usage and blank text are not steps. */
-function processLine(type: string, data: unknown): string | undefined {
-  if (!isRecord(data)) return undefined
-  if (type === 'message') {
-    const text = stringProp(data, 'text')?.trim()
-    return text ? text : undefined
-  }
-  if (type === 'tool_call') {
-    const summary = stringProp(data, 'input_summary')
-    return `[tool] ${stringProp(data, 'name') ?? 'tool'}${summary ? ` ${summary}` : ''}`
-  }
-  if (type === 'tool_result') {
-    const tail = stringProp(data, 'output_tail')?.trim()
-    return `[result ${stringProp(data, 'status') ?? 'ok'}]${tail ? ` ${tail.slice(-PROCESS_RESULT_MAX_CHARS)}` : ''}`
-  }
-  return undefined
 }
 
 function tailString(value: string, maxLen: number): string {
