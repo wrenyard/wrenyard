@@ -348,16 +348,16 @@ const SQL_USAGE_U_CACHED_FROM_ALIASES = `CASE
 
 const SQL_USAGE_U_OUTPUT_FROM_ALIASES = `CASE WHEN valid AND t_out IN ('integer','real') AND v_out >= 0 AND v_out < 1e308 THEN v_out ELSE 0 END`
 
-const SQL_USAGE_U_INPUT_LIVE = `CASE WHEN e.type = 'turn_usage' AND valid AND t_in IN ('integer','real') AND v_in >= 0 AND v_in < 1e308 THEN v_in ELSE 0 END`
+const SQL_USAGE_U_INPUT_LIVE = `CASE WHEN ev.type = 'turn_usage' AND valid AND t_in IN ('integer','real') AND v_in >= 0 AND v_in < 1e308 THEN v_in ELSE 0 END`
 
 const SQL_USAGE_U_CACHED_LIVE = `CASE
-    WHEN e.type = 'turn_usage' AND valid AND t_cached IN ('integer','real') AND v_cached >= 0 AND v_cached < 1e308 THEN v_cached
-    WHEN e.type = 'turn_usage' AND valid THEN
+    WHEN ev.type = 'turn_usage' AND valid AND t_cached IN ('integer','real') AND v_cached >= 0 AND v_cached < 1e308 THEN v_cached
+    WHEN ev.type = 'turn_usage' AND valid THEN
       CASE WHEN t_read IN ('integer','real') AND v_read >= 0 AND v_read < 1e308 THEN v_read ELSE 0 END
     + CASE WHEN t_write IN ('integer','real') AND v_write >= 0 AND v_write < 1e308 THEN v_write ELSE 0 END
     ELSE 0 END`
 
-const SQL_USAGE_U_OUTPUT_LIVE = `CASE WHEN e.type = 'turn_usage' AND valid AND t_out IN ('integer','real') AND v_out >= 0 AND v_out < 1e308 THEN v_out ELSE 0 END`
+const SQL_USAGE_U_OUTPUT_LIVE = `CASE WHEN ev.type = 'turn_usage' AND valid AND t_out IN ('integer','real') AND v_out >= 0 AND v_out < 1e308 THEN v_out ELSE 0 END`
 
 interface StatsDayWindow {
   dayKey: string
