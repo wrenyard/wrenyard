@@ -412,6 +412,7 @@ import {
   todoCreateResultSchema,
   todoUpdateParamsSchema,
   todoUpdateResultSchema,
+  todoTagParamsSchema, todoTagResultSchema, todoUntagParamsSchema, todoCommentParamsSchema, todoCommentResultSchema, todoUncommentParamsSchema,
   type TodoListParams,
   type TodoListResult,
   type TodoGetParams,
@@ -420,6 +421,7 @@ import {
   type TodoCreateResult,
   type TodoUpdateParams,
   type TodoUpdateResult,
+  type TodoAddTagsInput, type TodoRemoveTagInput, type TodoAppendCommentInput, type TodoDeleteCommentInput, type TodoTagResult, type TodoCommentResult,
 } from './methods/workspace-todo.mts'
 import {
   workspaceVcsStatusParamsSchema,
@@ -631,6 +633,12 @@ export type {
   TodoCreateResult,
   TodoUpdateParams,
   TodoUpdateResult,
+  TodoAddTagsInput,
+  TodoRemoveTagInput,
+  TodoAppendCommentInput,
+  TodoDeleteCommentInput,
+  TodoTagResult,
+  TodoCommentResult,
 } from './methods/workspace-todo.mts'
 export {
   todoListParamsSchema,
@@ -641,6 +649,7 @@ export {
   todoCreateResultSchema,
   todoUpdateParamsSchema,
   todoUpdateResultSchema,
+  todoTagParamsSchema, todoTagResultSchema, todoUntagParamsSchema, todoCommentParamsSchema, todoCommentResultSchema, todoUncommentParamsSchema,
 } from './methods/workspace-todo.mts'
 export type {
   ExecCancelParams,
@@ -919,6 +928,10 @@ export interface ForemanMethodParams {
   'todo.get': TodoGetParams
   'todo.create': TodoCreateParams
   'todo.update': TodoUpdateParams
+  'todo.tag': TodoAddTagsInput
+  'todo.untag': TodoRemoveTagInput
+  'todo.comment': TodoAppendCommentInput
+  'todo.uncomment': TodoDeleteCommentInput
   'workspace.vcs.status': WorkspaceVcsStatusParams
   'workspace.vcs.diff': WorkspaceVcsDiffParams
   'workspace.vcs.commit': WorkspaceVcsCommitParams
@@ -1035,6 +1048,10 @@ export interface ForemanMethodResults {
   'todo.get': TodoGetResult
   'todo.create': TodoCreateResult
   'todo.update': TodoUpdateResult
+  'todo.tag': TodoTagResult
+  'todo.untag': TodoTagResult
+  'todo.comment': TodoCommentResult
+  'todo.uncomment': TodoCommentResult
   'workspace.vcs.status': WorkspaceVcsStatusResult
   'workspace.vcs.diff': WorkspaceVcsDiffResult
   'workspace.vcs.commit': WorkspaceVcsCommitResult
@@ -1386,6 +1403,10 @@ export const methodRegistry: {
     result: todoUpdateResultSchema,
     description: "Update one existing workspace todo by id. Absent fields are kept, id and created are immutable and updated is refreshed. Refuses with missing when no such todo exists.",
   },
+  'todo.tag': { params: todoTagParamsSchema, result: todoTagResultSchema, description: 'Add tags to a todo idempotently.' },
+  'todo.untag': { params: todoUntagParamsSchema, result: todoTagResultSchema, description: 'Remove one exact tag from a todo.' },
+  'todo.comment': { params: todoCommentParamsSchema, result: todoCommentResultSchema, description: 'Append a comment authored by the authenticated caller.' },
+  'todo.uncomment': { params: todoUncommentParamsSchema, result: todoCommentResultSchema, description: 'Delete a comment authored by the authenticated caller.' },
   'workspace.vcs.status': {
     params: workspaceVcsStatusParamsSchema,
     result: workspaceVcsStatusResultSchema,

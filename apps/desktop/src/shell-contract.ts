@@ -99,13 +99,21 @@ import type {
 } from '@wrenyard/protocol/routine';
 import type {
   Todo,
+  TodoComment,
   TodoCreateInput,
   TodoCreateParams,
   TodoCreateResult,
   TodoListParams,
   TodoListResult,
   TodoStatus,
+  TodoUpdateInput,
   TodoUpdateResult,
+  TodoAddTagsInput,
+  TodoRemoveTagInput,
+  TodoAppendCommentInput,
+  TodoDeleteCommentInput,
+  TodoTagResult,
+  TodoCommentResult,
 } from '@wrenyard/protocol/workspace';
 import type {
   ClientAction,
@@ -1416,24 +1424,8 @@ export type { Todo };
 /** Input for creating one workspace todo; the daemon generates the id. */
 export type { TodoCreateInput };
 
-/**
- * Input for updating one workspace todo. The protocol `TodoUpdateInput`
- * additionally carries an optional `resultSummary`; kept as a narrowed local
- * declaration because the Desktop facade does not edit it.
- */
-export interface TodoUpdateInput {
-  id: string;
-  title?: string;
-  status?: TodoStatus;
-  project?: string;
-  depends_on?: string[];
-  request?: string;
-  acceptance?: string;
-  attachments?: string[];
-}
-
-/** The bounded, read-only daemon surface the shell `todo` bridge forwards. */
-export const TODO_METHODS = ['todo.list'] as const;
+/** Methods the Desktop todo UI forwards to the daemon as the user. */
+export const TODO_METHODS = ['todo.list', 'todo.update', 'todo.tag', 'todo.untag', 'todo.comment', 'todo.uncomment'] as const;
 
 export type TodoMethod = (typeof TODO_METHODS)[number];
 
@@ -1445,14 +1437,18 @@ export const BOT_TODO_METHODS = ['todo.create', 'todo.update'] as const;
 
 export type BotTodoMethod = (typeof BOT_TODO_METHODS)[number];
 
-export type { TodoListParams, TodoListResult, TodoCreateParams, TodoCreateResult };
-/** `todo.update` takes the narrowed local input; result is the protocol row. */
+export type { TodoListParams, TodoListResult, TodoCreateParams, TodoCreateResult, TodoUpdateInput, TodoUpdateResult, TodoComment, TodoAddTagsInput, TodoRemoveTagInput, TodoAppendCommentInput, TodoDeleteCommentInput, TodoTagResult, TodoCommentResult };
+/** `todo.update` takes the full protocol input including stale-text guards. */
 export type TodoUpdateParams = TodoUpdateInput;
-export type { TodoUpdateResult };
 
 /** Params and result of each forwarded todo method, used to type the facade. */
 export interface TodoMethodMap {
   'todo.list': { params: TodoListParams; result: TodoListResult };
+  'todo.update': { params: TodoUpdateInput; result: TodoUpdateResult };
+  'todo.tag': { params: TodoAddTagsInput; result: TodoTagResult };
+  'todo.untag': { params: TodoRemoveTagInput; result: TodoTagResult };
+  'todo.comment': { params: TodoAppendCommentInput; result: TodoCommentResult };
+  'todo.uncomment': { params: TodoDeleteCommentInput; result: TodoCommentResult };
 }
 
 /** Params and result of each forwarded bot-todo method, used to type the facade. */

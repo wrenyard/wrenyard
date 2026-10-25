@@ -33,6 +33,12 @@ import type {
   TodoListResult,
   TodoUpdateParams,
   TodoUpdateResult,
+  TodoAddTagsInput,
+  TodoRemoveTagInput,
+  TodoAppendCommentInput,
+  TodoDeleteCommentInput,
+  TodoTagResult,
+  TodoCommentResult,
 } from './todo.ts'
 import type {
   RemoteHostListParams,
@@ -67,6 +73,10 @@ export interface WorkspaceMethods {
   'todo.get': RpcMethod<TodoGetParams, TodoGetResult>
   'todo.create': RpcMethod<TodoCreateParams, TodoCreateResult>
   'todo.update': RpcMethod<TodoUpdateParams, TodoUpdateResult>
+  'todo.tag': RpcMethod<TodoAddTagsInput, TodoTagResult>
+  'todo.untag': RpcMethod<TodoRemoveTagInput, TodoTagResult>
+  'todo.comment': RpcMethod<TodoAppendCommentInput, TodoCommentResult>
+  'todo.uncomment': RpcMethod<TodoDeleteCommentInput, TodoCommentResult>
   'remote.host.list': RpcMethod<RemoteHostListParams, RemoteHostListResult>
   'remote.host.save': RpcMethod<RemoteHostSaveParams, RemoteHostMutationResult>
   'remote.host.rename': RpcMethod<RemoteHostRenameParams, RemoteHostMutationResult>

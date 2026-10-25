@@ -159,7 +159,7 @@ export function todoMatchesSummary(todo: Todo, terms: readonly string[]): boolea
 export function todoMatches(todo: Todo, terms: readonly string[]): boolean {
   if (terms.length === 0) return false;
   const summary = [todo.id, todo.title, todo.project ?? ''];
-  const body = [todo.request, todo.acceptance, todo.resultSummary ?? ''];
+  const body = [todo.request, todo.acceptance, ...todo.comments.map((comment) => comment.text)];
   return terms.every((term) => {
     const haystack = [...summary, ...body].map((value) => value.toLowerCase());
     return haystack.some((value) => value.includes(term));
@@ -243,7 +243,7 @@ export function highlightSegments(text: string, terms: readonly string[]): TextS
  */
 export function bodyExcerpt(todo: Todo, terms: readonly string[]): string | null {
   if (terms.length === 0) return null;
-  const body = [todo.request, todo.acceptance, todo.resultSummary ?? '']
+  const body = [todo.request, todo.acceptance, ...todo.comments.map((comment) => comment.text)]
     .filter((value) => value !== '')
     .join(' ')
     .replace(/\s+/g, ' ')

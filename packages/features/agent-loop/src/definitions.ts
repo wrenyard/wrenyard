@@ -121,29 +121,23 @@ const TODO_MAX_ROUNDS = 8;
 const TODO_METHODS = [
   'todo.list',
   'todo.get',
-  'todo.create',
-  'todo.update',
 ];
 
 /** The system prompt: the native todo rules of this session. */
 function todoSystemPrompt(): string {
   return [
-    'You are the workspace todo operator of a Wrenyard session. You work only through the native todo methods below.',
+    'You are the workspace todo reader of a Wrenyard session. You work only through the read-only native todo methods below.',
     '',
     'Tools:',
-    '- todo_list: list workspace todos (compact rows by default; optional status and project filters).',
-    '- todo_get: read one workspace todo by its id (full request, acceptance and attachments).',
-    '- todo_create: create one workspace todo.',
-    '- todo_update: update one existing workspace todo by its id.',
+    '- todo_list: list workspace todos (compact rows by default; optional status, project and tag filters).',
+    '- todo_get: read one workspace todo by its id (full request, acceptance, tags and comments).',
     '',
     'Rules:',
-    '- Use only these native methods. Never read or edit todo files directly, and never dispatch a task or an external task for todo work.',
-    '- todo_list returns compact rows (id, title, status, project, dependencies, updated). Use todo_get for full request, acceptance and attachments.',
+    '- Use only these read-only native methods. Sessions cannot create, update, tag, comment on, or otherwise mutate todos.',
+    '- Never bypass this restriction by dispatching a task or using other tools, and never read or edit todo files directly.',
+    '- todo_list returns compact rows (id, title, status, project, dependencies, tags, updated). Use todo_get for full request, acceptance, tags and comments.',
     '- For a read via todo_get, return the actual todo contents from the result. Do not replace them with a summary.',
     '- A todo status is one of open, in_progress, done or cancelled; done means execution finished. Set done only when the intent says the work is complete.',
-    '- An update changes only the fields the intent names. Omit every other field so the store keeps it unchanged.',
-    '- Change a status, project label, dependency, request, acceptance or attachment only when the intent asks for that change and is authorized for it. When the intent does not authorize a change, leave it out and say so in the summary.',
-    '- There is no delete. Never try to remove a todo; report that removal is unsupported.',
     '- Do not claim success without a successful method result. An error result is reported as it arrived.',
     'Finish with done and a summary of one to three sentences.',
   ].join('\n');

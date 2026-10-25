@@ -143,6 +143,12 @@ import type {
   TodoCreateResult,
   TodoUpdateParams,
   TodoUpdateResult,
+  TodoAddTagsInput,
+  TodoRemoveTagInput,
+  TodoAppendCommentInput,
+  TodoDeleteCommentInput,
+  TodoTagResult,
+  TodoCommentResult,
   ProviderListParams,
   ProviderListResult,
   ClientListParams,
@@ -494,6 +500,18 @@ export class ForemanClient {
     },
     update: (params: TodoUpdateParams): Promise<TodoUpdateResult> => {
       return this.rpc.request<TodoUpdateResult>('todo.update', params)
+    },
+    comment: (params: TodoAppendCommentInput): Promise<TodoCommentResult> => {
+      return this.rpc.request<TodoCommentResult>('todo.comment', params)
+    },
+    uncomment: (params: TodoDeleteCommentInput): Promise<TodoCommentResult> => {
+      return this.rpc.request<TodoCommentResult>('todo.uncomment', params)
+    },
+    tag: (params: TodoAddTagsInput): Promise<TodoTagResult> => {
+      return this.rpc.request<TodoTagResult>('todo.tag', params)
+    },
+    untag: (params: TodoRemoveTagInput): Promise<TodoTagResult> => {
+      return this.rpc.request<TodoTagResult>('todo.untag', params)
     },
   }
 

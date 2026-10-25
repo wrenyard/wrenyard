@@ -1,6 +1,5 @@
-// Workspace-todo IPC: two channels with separate method allowlists. The
-// read-only `todo` channel accepts only `todo.list`; the `bot-todo` channel
-// accepts only `todo.create` and `todo.update`. Registrars mirror the other
+// Workspace-todo IPC: user todo operations and the separate bot-todo channel
+// have independent method allowlists. Registrars mirror the other
 // domain handlers: assert the shell sender first, validate the method against
 // that channel's allowlist, then delegate to the injected daemon request
 // transport. Desktop never reads a todo file; a daemon error rejects the invoke
@@ -11,7 +10,7 @@ import { BOT_TODO_METHODS, TODO_METHODS, SHELL_CHANNELS } from '../../shell-cont
 import type { BotTodoMethod, TodoMethod } from '../../shell-contract.js';
 import type { ShellIpcDeps } from './deps.js';
 
-/** Whether a renderer-supplied string is the one allowed read-only todo method. */
+/** Whether a renderer-supplied string is an allowed Desktop todo method. */
 function isTodoMethod(value: unknown): value is TodoMethod {
   return typeof value === 'string' && (TODO_METHODS as readonly string[]).includes(value);
 }
@@ -21,7 +20,7 @@ function isBotTodoMethod(value: unknown): value is BotTodoMethod {
   return typeof value === 'string' && (BOT_TODO_METHODS as readonly string[]).includes(value);
 }
 
-/** Registers the read-only `todo` channel; `todo.list` is its only method. */
+/** Registers the Desktop todo channel. */
 export function registerTodoIpc(ipcMain: IpcMain, deps: ShellIpcDeps): () => void {
   const { options, assertShellSender } = deps;
 
@@ -36,7 +35,7 @@ export function registerTodoIpc(ipcMain: IpcMain, deps: ShellIpcDeps): () => voi
   };
 }
 
-/** Registers the separate `bot-todo` mutation channel; create and update only. */
+/** Registers the separate bot-todo mutation channel. */
 export function registerBotTodoIpc(ipcMain: IpcMain, deps: ShellIpcDeps): () => void {
   const { options, assertShellSender } = deps;
 

@@ -24,6 +24,12 @@ export type {
   TodoCreateResult,
   TodoUpdateParams,
   TodoUpdateResult,
+  TodoAddTagsInput,
+  TodoRemoveTagInput,
+  TodoAppendCommentInput,
+  TodoDeleteCommentInput,
+  TodoTagResult,
+  TodoCommentResult,
 } from '@wrenyard/protocol/workspace'
 
 /** The complete, ordered set of valid todo statuses shared by every schema. */
@@ -39,7 +45,7 @@ const todoStatusProperty = {
 /** The complete todo record returned by get/create/update and inside list. */
 const todoSchema = {
   type: 'object',
-  required: ['id', 'title', 'status', 'depends_on', 'created', 'updated', 'request', 'acceptance', 'attachments'],
+  required: ['id', 'title', 'status', 'depends_on', 'created', 'updated', 'request', 'acceptance', 'attachments', 'tags', 'comments'],
   properties: {
     id: { type: 'string', description: 'The short stable path-safe todo id.' },
     title: { type: 'string', description: 'The human-readable todo title.' },
@@ -51,7 +57,8 @@ const todoSchema = {
     request: { type: 'string', description: 'The request section body.' },
     acceptance: { type: 'string', description: 'The acceptance criteria section body.' },
     attachments: { type: 'array', items: { type: 'string' }, description: 'Relative-path attachments.' },
-    resultSummary: { type: 'string' },
+    tags: { type: 'array', items: { type: 'string' } },
+    comments: { type: 'array', items: { type: 'object', required: ['id', 'author', 'at', 'text'], properties: { id: { type: 'string' }, author: { type: 'string' }, at: { type: 'string' }, text: { type: 'string' } }, additionalProperties: false } },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
@@ -59,7 +66,7 @@ const todoSchema = {
 /** Compact list row: metadata only; bodies come from todo.get. */
 const todoCompactSchema = {
   type: 'object',
-  required: ['id', 'title', 'status', 'depends_on', 'updated'],
+  required: ['id', 'title', 'status', 'depends_on', 'updated', 'tags'],
   properties: {
     id: { type: 'string', description: 'The short stable path-safe todo id.' },
     title: { type: 'string', description: 'The human-readable todo title.' },
@@ -67,6 +74,7 @@ const todoCompactSchema = {
     project: { type: 'string', description: 'The optional project label the todo belongs to.' },
     depends_on: { type: 'array', items: { type: 'string' }, description: 'Ids of todos this todo depends on.' },
     updated: { type: 'string', description: 'Last update time as an ISO 8601 timestamp.' },
+    tags: { type: 'array', items: { type: 'string' } },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
@@ -79,6 +87,7 @@ export const todoListParamsSchema = {
   properties: {
     status: todoStatusProperty,
     project: { type: 'string', minLength: 1, description: 'Filter to todos with this project label.' },
+    tag: { type: 'string', minLength: 1, description: 'Exact tag filter.' },
     fields: {
       type: 'string',
       enum: ['compact', 'full'],
@@ -177,6 +186,7 @@ export const todoUpdateParamsSchema = {
   properties: {
     id: { type: 'string', minLength: 1, description: 'The short stable id of the todo to update.' },
     title: { type: 'string', minLength: 1, description: 'The new todo title.' },
+    old_title: { type: 'string', description: 'Exact current title required when changing title.' },
     status: todoStatusProperty,
     project: { type: 'string', minLength: 1, description: 'The new project label.' },
     depends_on: {
@@ -185,16 +195,24 @@ export const todoUpdateParamsSchema = {
       description: 'The new dependency ids; the combined graph must stay acyclic.',
     },
     request: { type: 'string', description: 'The new request section body.' },
+    old_request: { type: 'string', description: 'Exact current request required when changing request.' },
     acceptance: { type: 'string', description: 'The new acceptance criteria section body.' },
+    old_acceptance: { type: 'string', description: 'Exact current acceptance required when changing acceptance.' },
     attachments: {
       type: 'array',
       items: { type: 'string', minLength: 1 },
       description: 'The new relative-path attachments; absolute or upward-escaping paths are refused.',
     },
-    resultSummary: { type: 'string', description: 'The new execution result summary.' },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
+
+export const todoTagParamsSchema = { type: 'object', required: ['id', 'tags'], properties: { id: { type: 'string', minLength: 1 }, tags: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } } }, additionalProperties: false } as const satisfies JsonSchema
+export const todoTagResultSchema = { type: 'object', required: ['tags', 'changed'], properties: { tags: { type: 'array', items: { type: 'string' } }, changed: { type: 'boolean' } }, additionalProperties: false } as const satisfies JsonSchema
+export const todoUntagParamsSchema = { type: 'object', required: ['id', 'tag'], properties: { id: { type: 'string', minLength: 1 }, tag: { type: 'string', minLength: 1 } }, additionalProperties: false } as const satisfies JsonSchema
+export const todoCommentParamsSchema = { type: 'object', required: ['id', 'text'], properties: { id: { type: 'string', minLength: 1 }, text: { type: 'string' } }, additionalProperties: false } as const satisfies JsonSchema
+export const todoCommentResultSchema = { type: 'object', required: ['comments', 'changed'], properties: { comments: { type: 'array', items: { type: 'object', required: ['id', 'author', 'at', 'text'], properties: { id: { type: 'string' }, author: { type: 'string' }, at: { type: 'string' }, text: { type: 'string' } }, additionalProperties: false } }, changed: { type: 'boolean' } }, additionalProperties: false } as const satisfies JsonSchema
+export const todoUncommentParamsSchema = { type: 'object', required: ['id', 'commentId'], properties: { id: { type: 'string', minLength: 1 }, commentId: { type: 'string', pattern: '^[0-9a-f]{6}$' } }, additionalProperties: false } as const satisfies JsonSchema
 
 export const todoUpdateResultSchema = {
   type: 'object',

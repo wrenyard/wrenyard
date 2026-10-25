@@ -22,8 +22,11 @@ export interface Todo {
   request: string
   acceptance: string
   attachments: string[]
-  resultSummary?: string
+  tags: string[]
+  comments: TodoComment[]
 }
+
+export interface TodoComment { id: string; author: string; at: string; text: string }
 
 /** Input for todo.create. */
 export interface TodoCreateInput {
@@ -46,7 +49,9 @@ export interface TodoUpdateInput {
   request?: string
   acceptance?: string
   attachments?: string[]
-  resultSummary?: string
+  old_title?: string
+  old_request?: string
+  old_acceptance?: string
 }
 
 // ─── todo.list ─────────────────────────────────────────────────────
@@ -59,6 +64,7 @@ export interface TodoCompact {
   project?: string
   depends_on: string[]
   updated: string
+  tags: string[]
 }
 
 export type TodoListFields = 'compact' | 'full'
@@ -66,6 +72,7 @@ export type TodoListFields = 'compact' | 'full'
 export interface TodoListParams {
   status?: TodoStatus
   project?: string
+  tag?: string
   /** `compact` omits bodies; `full` returns complete todo records. */
   fields?: TodoListFields
 }
@@ -101,3 +108,10 @@ export type TodoUpdateParams = TodoUpdateInput
 export interface TodoUpdateResult {
   todo: Todo
 }
+
+export interface TodoTagResult { tags: string[]; changed: boolean }
+export interface TodoCommentResult { comments: TodoComment[]; changed: boolean }
+export interface TodoAddTagsInput { id: string; tags: string[] }
+export interface TodoRemoveTagInput { id: string; tag: string }
+export interface TodoAppendCommentInput { id: string; text: string }
+export interface TodoDeleteCommentInput { id: string; commentId: string }

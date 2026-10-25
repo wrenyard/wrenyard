@@ -4,8 +4,8 @@
  * The loop and the todo definition (native methods, round budget and system
  * prompt) live in `@wrenyard/agent-loop`. This module is the session-side
  * adapter: it supplies the method catalog, the model transport and a record
- * adapter that records each successful todo result as an observation — a
- * `todos` array for a list, a `todo` object for a get, create or update. An
+ * adapter that records each successful read-only todo result as an observation — a
+ * `todos` array for a list or a `todo` object for a get. Sessions cannot mutate todos. An
  * error result is never recorded.
  *
  * Todo files are never read or written directly, so the daemon store stays

@@ -17,10 +17,18 @@ import type {
   TodoUpdateParams, TodoUpdateResult,
 } from '../../protocol/methods/workspace-todo.mts'
 import type {
+  TodoAddTagsInput,
+  TodoRemoveTagInput,
+  TodoAppendCommentInput,
+  TodoDeleteCommentInput,
+} from '../../protocol/methods/workspace-todo.mts'
+import type {
   Todo,
   TodoCreateInput,
   TodoUpdateInput,
 } from '../../daemon/services/workspace-todo-service.mts'
+import type { TodoTagMutationResult, TodoCommentMutationResult } from '../../daemon/services/workspace-todo-service.mts'
+import type { TodoTagResult, TodoCommentResult } from '../../protocol/methods/workspace-todo.mts'
 import type { RpcRouter } from '../rpc-router.mts'
 import { mapServiceError } from './project.mts'
 
@@ -30,6 +38,10 @@ export interface WorkspaceTodoHandlerService {
   getTodo(id: string): Promise<Todo>
   createTodo(input: TodoCreateInput): Promise<Todo>
   updateTodo(input: TodoUpdateInput): Promise<Todo>
+  addTodoTags(id: string, tags: string[]): Promise<TodoTagMutationResult>
+  removeTodoTag(id: string, tag: string): Promise<TodoTagMutationResult>
+  appendTodoComment(id: string, author: string, text: string): Promise<TodoCommentMutationResult>
+  deleteTodoComment(id: string, commentId: string, author: string): Promise<TodoCommentMutationResult>
 }
 
 export function registerWorkspaceTodoHandlers(router: RpcRouter, service?: WorkspaceTodoHandlerService): void {
@@ -44,6 +56,10 @@ export function registerWorkspaceTodoHandlers(router: RpcRouter, service?: Works
     router.register('todo.get', unavailable)
     router.register('todo.create', unavailable)
     router.register('todo.update', unavailable)
+    router.register('todo.tag', unavailable)
+    router.register('todo.untag', unavailable)
+    router.register('todo.comment', unavailable)
+    router.register('todo.uncomment', unavailable)
     return
   }
 
@@ -81,5 +97,21 @@ export function registerWorkspaceTodoHandlers(router: RpcRouter, service?: Works
     } catch (error) {
       throw mapServiceError(error, 'workspace-todo', 'todo_error')
     }
+  })
+  router.register('todo.tag', async (params: TodoAddTagsInput) => {
+    try { return await service.addTodoTags(params.id, params.tags) satisfies TodoTagResult }
+    catch (error) { throw mapServiceError(error, 'workspace-todo', 'todo_error') }
+  })
+  router.register('todo.untag', async (params: TodoRemoveTagInput) => {
+    try { return await service.removeTodoTag(params.id, params.tag) satisfies TodoTagResult }
+    catch (error) { throw mapServiceError(error, 'workspace-todo', 'todo_error') }
+  })
+  router.register('todo.comment', async (params: TodoAppendCommentInput) => {
+    try { return await service.appendTodoComment(params.id, 'user', params.text) satisfies TodoCommentResult }
+    catch (error) { throw mapServiceError(error, 'workspace-todo', 'todo_error') }
+  })
+  router.register('todo.uncomment', async (params: TodoDeleteCommentInput) => {
+    try { return await service.deleteTodoComment(params.id, params.commentId, 'user') satisfies TodoCommentResult }
+    catch (error) { throw mapServiceError(error, 'workspace-todo', 'todo_error') }
   })
 }

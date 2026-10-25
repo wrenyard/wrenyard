@@ -137,40 +137,6 @@ test('a stored legacy accepted status reads as done', async () => {
   }
 })
 
-test('annotate adds a Result summary while preserving Request and Acceptance criteria', async () => {
-  const root = makeRoot()
-  try {
-    const service = new WorkspaceTodoService(root)
-    const todo = await service.createTodo({
-      title: 'Annotated',
-      request: 'Please do the work',
-      acceptance: 'The work is verifiable',
-    })
-
-    const annotated = await service.annotateTodo(todo.id, 'Result: the work is complete.')
-    assert.equal(annotated.resultSummary, 'Result: the work is complete.')
-    // Everything that identifies or describes the request is untouched.
-    assert.equal(annotated.id, todo.id)
-    assert.equal(annotated.title, todo.title)
-    assert.equal(annotated.created, todo.created)
-    assert.equal(annotated.updated, todo.updated)
-    assert.equal(annotated.request, 'Please do the work')
-    assert.equal(annotated.acceptance, 'The work is verifiable')
-
-    const reloaded = await service.getTodo(todo.id)
-    assert.equal(reloaded.resultSummary, 'Result: the work is complete.')
-    assert.equal(reloaded.request, 'Please do the work')
-    assert.equal(reloaded.acceptance, 'The work is verifiable')
-
-    const onDisk = readFileSync(join(root, 'todos', `${todo.id}.md`), 'utf-8')
-    assert.match(onDisk, /## Result summary\n\nResult: the work is complete\./)
-    assert.match(onDisk, /## Request\n\nPlease do the work/)
-    assert.match(onDisk, /## Acceptance criteria\n\nThe work is verifiable/)
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
 // ── create/update validation, each with its own error code ──────────────────
 
 test('create rejects absolute and path-escaping attachments with coded errors', async () => {

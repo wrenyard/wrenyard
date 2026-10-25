@@ -20,7 +20,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import Database from 'better-sqlite3'
 import type { Database as DatabaseInstance } from 'better-sqlite3'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
-import type { TodoCompact, TodoListParams } from '@wrenyard/protocol/workspace'
+import type { TodoComment, TodoCompact, TodoListParams } from '@wrenyard/protocol/workspace'
 
 /** Todos live in this directory under the workspace root. */
 const TODO_DIRECTORY = 'todos'
@@ -75,7 +75,7 @@ const ID_RE = /^[a-z0-9][a-z0-9-]*$/u
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u
 
 /** The only front matter fields a todo file may declare. */
-const FRONT_MATTER_KEYS = new Set(['id', 'title', 'status', 'project', 'depends_on', 'created', 'updated'])
+const FRONT_MATTER_KEYS = new Set(['id', 'title', 'status', 'project', 'depends_on', 'created', 'updated', 'tags'])
 
 /** The valid todo statuses; a stored legacy `accepted` reads as `done`. */
 export type TodoStatus = 'open' | 'in_progress' | 'done' | 'cancelled'
@@ -95,7 +95,8 @@ export interface Todo {
   request: string
   acceptance: string
   attachments: string[]
-  resultSummary?: string
+  tags: string[]
+  comments: TodoComment[]
 }
 
 /** The parsed front-matter fields mirrored into the disposable SQLite index. */
@@ -159,8 +160,13 @@ export interface TodoUpdateInput {
   request?: string
   acceptance?: string
   attachments?: string[]
-  resultSummary?: string
+  old_title?: string
+  old_request?: string
+  old_acceptance?: string
 }
+
+export interface TodoTagMutationResult { tags: string[]; changed: boolean }
+export interface TodoCommentMutationResult { comments: TodoComment[]; changed: boolean }
 
 /** Structured failure for todo operations, carrying a specific code. */
 export class WorkspaceTodoError extends Error {
@@ -219,6 +225,9 @@ export class WorkspaceTodoService {
     if (params.project !== undefined) {
       filtered = filtered.filter((todo) => todo.project === params.project)
     }
+    if (params.tag !== undefined) {
+      filtered = filtered.filter((todo) => todo.tags.includes(params.tag!))
+    }
     if (fields === 'full') return filtered.map(cloneTodo)
     return filtered.map(toCompactTodo)
   }
@@ -252,6 +261,8 @@ export class WorkspaceTodoService {
         request: input.request ?? '',
         acceptance: input.acceptance ?? '',
         attachments: requireAttachments(input.attachments, id),
+        tags: [],
+        comments: [],
       }
       await this.assertDependenciesKnownLocked(todo)
       const filePath = this.todoPath(id)
@@ -267,6 +278,9 @@ export class WorkspaceTodoService {
     return this.withLock(async () => {
       const filePath = this.todoPath(input.id)
       const current = await this.readTodoFile(filePath, input.id)
+      assertDescriptionCurrent(input.title, input.old_title, current.title, 'title', current.id)
+      assertDescriptionCurrent(input.request, input.old_request, current.request, 'request', current.id)
+      assertDescriptionCurrent(input.acceptance, input.old_acceptance, current.acceptance, 'acceptance', current.id)
       const next: Todo = {
         ...current,
         title: input.title === undefined ? current.title : requireTitle(input.title, current.id),
@@ -278,7 +292,6 @@ export class WorkspaceTodoService {
         updated: new Date().toISOString(),
       }
       if (input.project !== undefined) next.project = requireProject(input.project, current.id)
-      if (input.resultSummary !== undefined) next.resultSummary = input.resultSummary
       await this.assertDependenciesKnownLocked(next)
       this.writeTodo(filePath, next)
       await this.refreshIndexLocked()
@@ -286,16 +299,64 @@ export class WorkspaceTodoService {
     })
   }
 
-  /** Persist an execution summary without changing todo metadata or timestamps. */
-  async annotateTodo(id: string, resultSummary: string): Promise<Todo> {
+  async addTodoTags(id: string, tags: string[]): Promise<TodoTagMutationResult> {
     return this.withLock(async () => {
       const filePath = this.todoPath(id)
       const todo = await this.readTodoFile(filePath, id)
-      const annotated = { ...todo, resultSummary }
-      this.writeTodo(filePath, annotated)
+      const additions = requireTags(tags, id)
+      const nextTags = [...todo.tags]
+      for (const tag of additions) if (!nextTags.includes(tag)) nextTags.push(tag)
+      const changed = nextTags.length !== todo.tags.length
+      if (changed) this.writeTodo(filePath, { ...todo, tags: nextTags, updated: new Date().toISOString() })
       await this.refreshIndexLocked()
-      return annotated
+      return { tags: nextTags, changed }
     })
+  }
+
+  async removeTodoTag(id: string, tag: string): Promise<TodoTagMutationResult> {
+    return this.withLock(async () => {
+      const filePath = this.todoPath(id)
+      const todo = await this.readTodoFile(filePath, id)
+      const target = requireTag(tag, id)
+      const tags = todo.tags.filter((entry) => entry !== target)
+      const changed = tags.length !== todo.tags.length
+      if (changed) this.writeTodo(filePath, { ...todo, tags, updated: new Date().toISOString() })
+      await this.refreshIndexLocked()
+      return { tags, changed }
+    })
+  }
+
+  async appendTodoComment(id: string, author: string, text: string): Promise<TodoCommentMutationResult> {
+    return this.withLock(async () => {
+      const filePath = this.todoPath(id)
+      const todo = await this.readTodoFile(filePath, id)
+      const comment: TodoComment = { id: this.nextCommentId(todo.comments), author: requireCommentAuthor(author, id), at: new Date().toISOString(), text }
+      const comments = [...todo.comments, comment]
+      this.writeTodo(filePath, { ...todo, comments, updated: new Date().toISOString() })
+      await this.refreshIndexLocked()
+      return { comments, changed: true }
+    })
+  }
+
+  async deleteTodoComment(id: string, commentId: string, author: string): Promise<TodoCommentMutationResult> {
+    return this.withLock(async () => {
+      const filePath = this.todoPath(id)
+      const todo = await this.readTodoFile(filePath, id)
+      const trustedAuthor = requireCommentAuthor(author, id)
+      const existing = todo.comments.find((comment) => comment.id === commentId)
+      if (!existing) throw new WorkspaceTodoError('missing_comment', `Todo ${id}: comment not found: ${commentId}`)
+      if (existing.author !== trustedAuthor) throw new WorkspaceTodoError('comment_forbidden', `Todo ${id}: cannot delete another author's comment`)
+      const comments = todo.comments.filter((comment) => comment.id !== commentId)
+      this.writeTodo(filePath, { ...todo, comments, updated: new Date().toISOString() })
+      await this.refreshIndexLocked()
+      return { comments, changed: true }
+    })
+  }
+
+  private nextCommentId(comments: TodoComment[]): string {
+    let id = randomBytes(3).toString('hex')
+    while (comments.some((comment) => comment.id === id)) id = randomBytes(3).toString('hex')
+    return id
   }
 
   /**
@@ -685,7 +746,7 @@ function sameIndexRecord(a: TodoIndexRecord, b: TodoIndexRecord): boolean {
 
 /** Copy a todo so callers never share a mutable object with the parse cache. */
 function cloneTodo(todo: Todo): Todo {
-  return { ...todo, depends_on: [...todo.depends_on], attachments: [...todo.attachments] }
+  return { ...todo, depends_on: [...todo.depends_on], attachments: [...todo.attachments], tags: [...todo.tags], comments: todo.comments.map((comment) => ({ ...comment })) }
 }
 
 function toCompactTodo(todo: Todo): TodoCompact {
@@ -696,6 +757,7 @@ function toCompactTodo(todo: Todo): TodoCompact {
     status: cloned.status,
     depends_on: cloned.depends_on,
     updated: cloned.updated,
+    tags: cloned.tags,
   }
   if (cloned.project !== undefined) compact.project = cloned.project
   return compact
@@ -854,21 +916,95 @@ function parseBodySections(body: string): Map<string, string> {
   const sections = new Map<string, string>()
   let heading: string | null = null
   let lines: string[] = []
+  let inComments = false
   const flush = (): void => {
     if (heading !== null) sections.set(heading, lines.join('\n').trim())
   }
   for (const line of body.split('\n')) {
+    if (inComments) {
+      lines.push(line)
+      continue
+    }
     const match = /^##\s+(.+?)\s*$/u.exec(line)
     if (match) {
       flush()
       heading = match[1]
       lines = []
+      inComments = heading === 'Comments'
     } else if (heading !== null) {
       lines.push(line)
     }
   }
   flush()
   return sections
+}
+
+function parseComments(body: string, updated: string, todoId: string): TodoComment[] {
+  const sections = parseBodySections(body)
+  if (sections.has('Comments')) {
+    const comments: TodoComment[] = []
+    const lines = body.replace(/\r\n/gu, '\n').split('\n')
+    let current: TodoComment | null = null
+    const flush = (): void => { if (current) comments.push(current) }
+    let inComments = false
+    for (const line of lines) {
+      if (!inComments) {
+        if (line === '## Comments') inComments = true
+        continue
+      }
+      const encodedLine = line.replace(/^\\+(?=### [0-9a-f]{6} · .+ · .+$)/u, '')
+      const heading = /^### ([0-9a-f]{6}) · ([^·\r\n]+?) · (.+)$/u.exec(encodedLine)
+      if (heading && isValidCommentTime(heading[3])) {
+        flush()
+        current = { id: heading[1], author: heading[2], at: heading[3], text: '' }
+      } else if (current && !(current.text === '' && line === '')) {
+        const textLine = /^\\+(?=### [0-9a-f]{6} · .+ · .+$)/u.test(line) ? line.slice(1) : line
+        current.text = current.text === '' ? textLine : `${current.text}\n${textLine}`
+      }
+    }
+    flush()
+    if (new Set(comments.map((comment) => comment.id)).size !== comments.length) {
+      throw new WorkspaceTodoError('malformed', `Todo ${todoId}: duplicate comment id`)
+    }
+    return comments
+  }
+  const legacy = sections.get('Result summary')
+  return legacy === undefined ? [] : [{ id: createHash('sha256').update(`${todoId}\0${updated}\0${legacy}`, 'utf8').digest('hex').slice(0, 6), author: 'legacy', at: updated, text: legacy }]
+}
+
+function escapeCommentText(text: string): string {
+  return text.replace(/^(\\*### [0-9a-f]{6} · .* · .+)$/gmu, '\\$1')
+}
+
+function isValidCommentTime(value: string): boolean {
+  return ISO_TIMESTAMP_RE.test(value) && !Number.isNaN(Date.parse(value))
+}
+
+function requireTag(value: unknown, id: string): string {
+  if (typeof value !== 'string' || !/^[^\s\p{Cc}]+$/u.test(value)) {
+    throw new WorkspaceTodoError('bad_tag', `Todo ${id}: tags must be nonempty and contain no whitespace or control characters`)
+  }
+  return value
+}
+
+function requireTags(value: unknown, id: string): string[] {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value)) throw new WorkspaceTodoError('bad_tag', `Todo ${id}: tags must be a list`)
+  return [...new Set(value.map((tag) => requireTag(tag, id)))]
+}
+
+function requireCommentAuthor(value: unknown, id: string): string {
+  if (typeof value !== 'string' || value.trim() === '' || /[\r\n\p{Cc}]/u.test(value)) {
+    throw new WorkspaceTodoError('bad_comment', `Todo ${id}: comment author must be a nonempty single-line string`)
+  }
+  return value
+}
+
+function assertDescriptionCurrent(next: string | undefined, old: string | undefined, current: string, field: string, id: string): void {
+  if (next === undefined) return
+  if (old !== current) {
+    throw new WorkspaceTodoError('stale_description', `Todo ${id}: stale ${field}; current text follows:\n${current}`)
+  }
 }
 
 /** Read attachment list entries, validating each relative path. */
@@ -913,6 +1049,10 @@ function parseTodoFile(filePath: string, content: string): Todo {
   const status = readStatus(record.status, id)
   const project = record.project === undefined ? undefined : requireProject(record.project, id)
   const failsafeDependsOn = failsafeDecoded.depends_on
+  const failsafeTags = failsafeDecoded.tags
+  const tagSource = record.tags !== undefined && Array.isArray(failsafeTags) && Array.isArray(record.tags) && failsafeTags.length === record.tags.length
+    ? failsafeTags
+    : record.tags
   const dependsOnSource =
     record.depends_on !== null &&
     Array.isArray(record.depends_on) &&
@@ -935,7 +1075,8 @@ function parseTodoFile(filePath: string, content: string): Todo {
     request: sections.get('Request') ?? '',
     acceptance: sections.get('Acceptance criteria') ?? '',
     attachments: parseAttachments(sections.get('Attachments') ?? '', id),
-    ...(sections.has('Result summary') ? { resultSummary: sections.get('Result summary') ?? '' } : {}),
+    tags: requireTags(tagSource, id),
+    comments: parseComments(body, updated, id),
   }
 }
 
@@ -948,6 +1089,7 @@ function serializeTodo(todo: Todo): string {
   }
   if (todo.project !== undefined) front.project = todo.project
   if (todo.depends_on.length > 0) front.depends_on = todo.depends_on
+  if (todo.tags.length > 0) front.tags = todo.tags
   front.created = todo.created
   front.updated = todo.updated
   const parts = [
@@ -966,8 +1108,11 @@ function serializeTodo(todo: Todo): string {
   if (todo.attachments.length > 0) {
     parts.push('', '## Attachments', '', ...todo.attachments.map((path) => `- ${path}`))
   }
-  if (todo.resultSummary !== undefined) {
-    parts.push('', '## Result summary', '', todo.resultSummary.trimEnd())
+  if (todo.comments.length > 0) {
+    parts.push('', '## Comments')
+    for (const comment of todo.comments) {
+      parts.push('', `### ${comment.id} · ${comment.author} · ${comment.at}`, '', escapeCommentText(comment.text).trimEnd())
+    }
   }
   return `${parts.join('\n')}\n`
 }

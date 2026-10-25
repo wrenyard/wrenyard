@@ -119,20 +119,19 @@ const TODO_TOOL: ToolSpec = {
   name: 'todo',
   description: [
     'Manage the built-in workspace todos, the same store the `wrenyard todo` command uses.',
-    'A todo carries a title, a request and its acceptance criteria; its status moves from open through',
-    'in_progress to done, or to cancelled.',
+    'A todo carries descriptions, metadata, tags and an append-only comment timeline; descriptions require exact old text when changed.',
   ].join(' '),
   parameters: {
     type: 'object',
     properties: {
       op: {
         type: 'string',
-        enum: ['list', 'show', 'add', 'set_status', 'annotate'],
-        description: 'list every todo, show one in full, add a new one, change one status, or record an execution summary on one.',
+        enum: ['list', 'show', 'add', 'set_status', 'update', 'comment', 'delete_comment', 'tag', 'untag'],
+        description: 'List, show, create, change status, update descriptions with old text, append/delete own comments, or add/remove tags.',
       },
       id: {
         type: 'string',
-        description: 'Todo id; required for show, set_status and annotate.',
+        description: 'Todo id for the operation.',
       },
       title: {
         type: 'string',
@@ -157,8 +156,13 @@ const TODO_TOOL: ToolSpec = {
       },
       text: {
         type: 'string',
-        description: 'The result summary to record; required for annotate.',
+        description: 'Comment text for comment, or the new full description text for update.',
       },
+      commentId: { type: 'string', description: 'Six character comment id for delete_comment.' },
+      tags: { type: 'array', items: { type: 'string' }, description: 'Tags to add.' },
+      old_title: { type: 'string', description: 'Exact current title when title changes.' },
+      old_request: { type: 'string', description: 'Exact current request when request changes.' },
+      old_acceptance: { type: 'string', description: 'Exact current acceptance when acceptance changes.' },
     },
     required: ['op'],
   },
@@ -318,7 +322,7 @@ export function createAgentToolRunner(deps: {
         case 'session':
           return await runSessionTool(args, deps, ctx)
         case 'todo':
-          return await runTodoTool(args, deps)
+          return await runTodoTool(args, deps, ctx)
         case 'message':
           return runMessageTool(args, ctx)
         case 'memory':
@@ -544,16 +548,19 @@ function currentSessionModel(sessions: Session, sessionId: string): TurnModel | 
 async function runTodoTool(
   args: Record<string, unknown>,
   deps: { todos: WorkspaceTodoService },
+  ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
   switch (args.op) {
     case 'list': {
-      const todos = await deps.todos.listTodos()
+      const tag = optionalString(args, 'tag')
+      const todos = await deps.todos.listTodos(tag === undefined ? undefined : { tag })
       return done(todos.map(todo => ({
         id: todo.id,
         title: todo.title,
         status: todo.status,
         project: todo.project ?? null,
         updated: todo.updated,
+        tags: todo.tags,
       })))
     }
     case 'show': {
@@ -566,7 +573,8 @@ async function runTodoTool(
         project: todo.project ?? null,
         request: todo.request,
         acceptance: todo.acceptance,
-        resultSummary: todo.resultSummary ?? null,
+        tags: todo.tags,
+        comments: todo.comments,
         updated: todo.updated,
       })
     }
@@ -589,11 +597,47 @@ async function runTodoTool(
       const todo = await deps.todos.updateTodo({ id, status: status as TodoStatus })
       return done({ id: todo.id, status: todo.status })
     }
-    case 'annotate': {
-      const id = requireString(args, 'id', 'annotate requires id')
-      const text = requireString(args, 'text', 'annotate requires text')
-      await deps.todos.annotateTodo(id, text)
-      return done({ id })
+    case 'update': {
+      const id = requireString(args, 'id', 'update requires id')
+      const title = optionalString(args, 'title')
+      const request = optionalString(args, 'request')
+      const acceptance = optionalString(args, 'acceptance')
+      const oldTitle = optionalString(args, 'old_title')
+      const oldRequest = optionalString(args, 'old_request')
+      const oldAcceptance = optionalString(args, 'old_acceptance')
+      const status = optionalString(args, 'status')
+      const input = {
+        id,
+        ...(title === undefined ? {} : { title, old_title: oldTitle }),
+        ...(request === undefined ? {} : { request, old_request: oldRequest }),
+        ...(acceptance === undefined ? {} : { acceptance, old_acceptance: oldAcceptance }),
+        ...(status === undefined ? {} : { status: status as TodoStatus }),
+      }
+      const todo = await deps.todos.updateTodo(input)
+      return done({ id, status: todo.status })
+    }
+    case 'comment': {
+      const id = requireString(args, 'id', 'comment requires id')
+      const text = requireString(args, 'text', 'comment requires text')
+      return done(await deps.todos.appendTodoComment(id, ctx.botId, text))
+    }
+    case 'delete_comment': {
+      const id = requireString(args, 'id', 'delete_comment requires id')
+      const commentId = requireString(args, 'commentId', 'delete_comment requires commentId')
+      return done(await deps.todos.deleteTodoComment(id, commentId, ctx.botId))
+    }
+    case 'tag': {
+      const id = requireString(args, 'id', 'tag requires id')
+      const tags = Array.isArray(args.tags) ? args.tags.map((tag) => {
+        if (typeof tag !== 'string') throw new Error('tags must contain only strings')
+        return tag
+      }) : [requireString(args, 'tag', 'tag requires tag or tags')]
+      return done(await deps.todos.addTodoTags(id, tags))
+    }
+    case 'untag': {
+      const id = requireString(args, 'id', 'untag requires id')
+      const tag = requireString(args, 'tag', 'untag requires tag')
+      return done(await deps.todos.removeTodoTag(id, tag))
     }
     default:
       return failed(`unsupported todo op: ${String(args.op)}`)

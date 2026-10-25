@@ -10,6 +10,7 @@ import type {
   TaskRunOutputResult as WrenyardTaskRunOutputResult,
   TaskUsageLiveListResult,
 } from '@wrenyard/protocol/task';
+import type { TodoAddTagsInput, TodoRemoveTagInput, TodoAppendCommentInput, TodoDeleteCommentInput, TodoTagResult, TodoCommentResult, TodoListParams, TodoListResult, TodoGetParams, TodoGetResult, TodoCreateParams, TodoCreateResult, TodoUpdateParams, TodoUpdateResult } from '@wrenyard/protocol/workspace';
 import { createConnection, type Socket } from "node:net";
 import { protocolVersionMismatchMessage, WRENYARD_PROTOCOL_VERSION } from "./transport/index.ts";
 
@@ -295,6 +296,15 @@ export class WrenyardIpcClient {
   ): Promise<TaskUsageLiveListResult> {
     return this.request<TaskUsageLiveListResult>('task.usage.liveList', { execution_ids: executionIds }, options);
   }
+
+  todoList(params: TodoListParams = {}, options?: WrenyardIpcRequestOptions): Promise<TodoListResult> { return this.request('todo.list', params, options) }
+  todoGet(params: TodoGetParams, options?: WrenyardIpcRequestOptions): Promise<TodoGetResult> { return this.request('todo.get', params, options) }
+  todoCreate(params: TodoCreateParams, options?: WrenyardIpcRequestOptions): Promise<TodoCreateResult> { return this.request('todo.create', params, options) }
+  todoUpdate(params: TodoUpdateParams, options?: WrenyardIpcRequestOptions): Promise<TodoUpdateResult> { return this.request('todo.update', params, options) }
+  todoTag(params: TodoAddTagsInput, options?: WrenyardIpcRequestOptions): Promise<TodoTagResult> { return this.request('todo.tag', params, options) }
+  todoUntag(params: TodoRemoveTagInput, options?: WrenyardIpcRequestOptions): Promise<TodoTagResult> { return this.request('todo.untag', params, options) }
+  todoComment(params: TodoAppendCommentInput, options?: WrenyardIpcRequestOptions): Promise<TodoCommentResult> { return this.request('todo.comment', params, options) }
+  todoUncomment(params: TodoDeleteCommentInput, options?: WrenyardIpcRequestOptions): Promise<TodoCommentResult> { return this.request('todo.uncomment', params, options) }
 
   /** Destroy the socket and reject every request still awaiting a reply. */
   close(): void {
