@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Single publish entry point. It validates the tag, confirms the four canonical
-// installers plus the target-specific remote daemon payload archives and their
-// metadata, publishes them as a normal release, commits the update feed to the
-// `updates` branch, then removes this run's transient workflow artifacts. Every
+// installers plus the three target-specific remote daemon payload archives,
+// publishes those seven assets as a normal release, commits the update feed to
+// the `updates` branch, then removes this run's transient workflow artifacts.
+// The per-target payload .json/.sha256 sidecars are still required locally as
+// update-feed inputs but are never uploaded to the GitHub Release. Every
 // external command goes through the injectable `run` seam so the fixture tests
 // never touch a real remote.
 
@@ -36,10 +38,12 @@ export function confirmCanonicalAssets({ artifactsDir, version = packageVersion(
   return assertAssetNames([...found.keys()].sort(), version).map((name) => ({ name, path: found.get(name) }));
 }
 
-// Confirm the target-specific remote daemon payload archives, their checksum
-// sidecars and their matching-version metadata are all present before anything
-// is published. A missing payload fails closed rather than publishing a release
-// that advertises remote daemons it cannot provision.
+// Confirm the target-specific remote daemon payload artifacts are all present
+// before anything is published: the three archives plus the .sha256 checksum
+// and .json metadata sidecars the update feed consumes. A missing payload fails
+// closed rather than publishing a release that advertises remote daemons it
+// cannot provision. Only the archives are uploaded to the GitHub Release; the
+// sidecars stay local as feed inputs.
 export function confirmRemotePayloadAssets({ artifactsDir, version = packageVersion() }) {
   const expected = remotePayloadAssetNames(version);
   const found = new Map();
@@ -61,7 +65,7 @@ export function confirmRemotePayloadAssets({ artifactsDir, version = packageVers
   });
 }
 
-// Create a draft release, upload the four installers, then publish it as a
+// Create a draft release, upload the given assets, then publish it as a
 // normal (non-prerelease) release. An existing release is refused outright and
 // assets are never clobbered.
 export function publishGitHubRelease({ assets, repository, tag, sha, version = packageVersion(), run = runCommand }) {
@@ -196,7 +200,13 @@ export function publishRelease({
   mkdirSync(stagingDir, { recursive: true });
   for (const { name, path: source } of [...confirmed, ...remotePayloads]) copyFileSync(source, resolve(stagingDir, name));
 
-  const uploadNames = [...canonicalAssetNames(version), ...remotePayloads.map((asset) => asset.name)];
+  // Upload exactly the four installers and the three remote payload archives.
+  // The payload .json/.sha256 sidecars stay in the staging dir solely so the
+  // update feed can hash and reference the archives.
+  const uploadNames = [
+    ...canonicalAssetNames(version),
+    ...remotePayloads.map((asset) => asset.name).filter((name) => name.endsWith('.tar.gz')),
+  ];
   publishGitHubRelease({
     assets: uploadNames.map((name) => resolve(stagingDir, name)),
     repository,

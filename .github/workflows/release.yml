@@ -2,8 +2,10 @@ name: Release
 
 # CI lints the repository once, builds the three native public targets
 # (darwin-arm64, win32-x64, linux-x64) and, for an explicit tag, publishes their
-# four installers, the per-target remote daemon bootstrap payloads and the
-# update feed. Manual dispatch lints and builds without publishing.
+# four installers, the three remote daemon bootstrap archives and the update
+# feed. The per-target payload .json/.sha256 sidecars are generated as update
+# feed inputs but are not uploaded to the GitHub Release. Manual dispatch lints
+# and builds without publishing.
 
 on:
   push:
