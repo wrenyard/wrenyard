@@ -135,19 +135,19 @@ const TODO_TOOL: ToolSpec = {
       },
       title: {
         type: 'string',
-        description: 'Title of the new todo; required for add.',
+        description: 'Todo title; required for add and can be updated with its exact old text.',
       },
       request: {
         type: 'string',
-        description: 'What the todo asks for, the Request section; add only.',
+        description: 'Request section; set on add or update with its exact old text.',
       },
       acceptance: {
         type: 'string',
-        description: 'How completion is judged, the Acceptance criteria section; add only.',
+        description: 'Acceptance criteria; set on add or update with its exact old text.',
       },
       project: {
         type: 'string',
-        description: 'Optional registered project the todo belongs to; add only.',
+        description: 'Optional registered project the todo belongs to; set on add or update.',
       },
       status: {
         type: 'string',
@@ -156,15 +156,19 @@ const TODO_TOOL: ToolSpec = {
       },
       text: {
         type: 'string',
-        description: 'Comment text for comment, or the new full description text for update.',
+        description: 'Comment text for comment; description updates use title, request, or acceptance.',
       },
       commentId: { type: 'string', description: 'Six character comment id for delete_comment.' },
       tags: { type: 'array', items: { type: 'string' }, description: 'Tags to add.' },
+      tag: { type: 'string', description: 'Exact tag to filter list results or remove with untag.' },
+      depends_on: { type: 'array', items: { type: 'string' }, description: 'Todo dependency ids to set on add or update.' },
+      attachments: { type: 'array', items: { type: 'string' }, description: 'Attachment references to set on add or update.' },
       old_title: { type: 'string', description: 'Exact current title when title changes.' },
       old_request: { type: 'string', description: 'Exact current request when request changes.' },
       old_acceptance: { type: 'string', description: 'Exact current acceptance when acceptance changes.' },
     },
     required: ['op'],
+    additionalProperties: false,
   },
 }
 
@@ -381,6 +385,22 @@ function optionalString(args: Record<string, unknown>, key: string): string | un
   return value
 }
 
+function optionalTodoText(args: Record<string, unknown>, key: string): string | undefined {
+  const value = args[key]
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') throw new Error(`${key} must be a string`)
+  return value
+}
+
+function optionalTodoStringArray(args: Record<string, unknown>, key: string): string[] | undefined {
+  const value = args[key]
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
+    throw new Error(`${key} must be an array of strings`)
+  }
+  return value
+}
+
 /**
  * Optional todo id association for a watched session: a single id string or an
  * array of id strings. Empty and non-string entries are dropped; when nothing
@@ -552,6 +572,7 @@ async function runTodoTool(
 ): Promise<ToolOutcome> {
   switch (args.op) {
     case 'list': {
+      if (Object.hasOwn(args, 'author')) return failed('author is not a supported todo argument')
       const tag = optionalString(args, 'tag')
       const todos = await deps.todos.listTodos(tag === undefined ? undefined : { tag })
       return done(todos.map(todo => ({
@@ -564,6 +585,7 @@ async function runTodoTool(
       })))
     }
     case 'show': {
+      if (Object.hasOwn(args, 'author')) return failed('author is not a supported todo argument')
       const id = requireString(args, 'id', 'show requires id')
       const todo = await deps.todos.getTodo(id)
       return done({
@@ -579,6 +601,7 @@ async function runTodoTool(
       })
     }
     case 'add': {
+      if (Object.hasOwn(args, 'author')) return failed('author is not a supported todo argument')
       const title = requireString(args, 'title', 'add requires title')
       const request = optionalString(args, 'request')
       const acceptance = optionalString(args, 'acceptance')
@@ -592,41 +615,51 @@ async function runTodoTool(
       return done({ id: todo.id, status: todo.status })
     }
     case 'set_status': {
+      if (Object.hasOwn(args, 'author')) return failed('author is not a supported todo argument')
       const id = requireString(args, 'id', 'set_status requires id')
       const status = requireString(args, 'status', 'set_status requires status')
       const todo = await deps.todos.updateTodo({ id, status: status as TodoStatus })
       return done({ id: todo.id, status: todo.status })
     }
     case 'update': {
+      if (Object.hasOwn(args, 'author')) return failed('author is not a supported todo argument')
       const id = requireString(args, 'id', 'update requires id')
-      const title = optionalString(args, 'title')
-      const request = optionalString(args, 'request')
-      const acceptance = optionalString(args, 'acceptance')
-      const oldTitle = optionalString(args, 'old_title')
-      const oldRequest = optionalString(args, 'old_request')
-      const oldAcceptance = optionalString(args, 'old_acceptance')
+      const title = optionalTodoText(args, 'title')
+      const request = optionalTodoText(args, 'request')
+      const acceptance = optionalTodoText(args, 'acceptance')
+      const oldTitle = optionalTodoText(args, 'old_title')
+      const oldRequest = optionalTodoText(args, 'old_request')
+      const oldAcceptance = optionalTodoText(args, 'old_acceptance')
       const status = optionalString(args, 'status')
+      const dependsOn = optionalTodoStringArray(args, 'depends_on')
+      const attachments = optionalTodoStringArray(args, 'attachments')
       const input = {
         id,
         ...(title === undefined ? {} : { title, old_title: oldTitle }),
         ...(request === undefined ? {} : { request, old_request: oldRequest }),
         ...(acceptance === undefined ? {} : { acceptance, old_acceptance: oldAcceptance }),
         ...(status === undefined ? {} : { status: status as TodoStatus }),
+        ...(Object.hasOwn(args, 'project') ? { project: optionalTodoText(args, 'project') } : {}),
+        ...(dependsOn === undefined ? {} : { depends_on: dependsOn }),
+        ...(attachments === undefined ? {} : { attachments }),
       }
       const todo = await deps.todos.updateTodo(input)
       return done({ id, status: todo.status })
     }
     case 'comment': {
+      if (Object.hasOwn(args, 'author')) return failed('author is not a supported todo argument')
       const id = requireString(args, 'id', 'comment requires id')
       const text = requireString(args, 'text', 'comment requires text')
       return done(await deps.todos.appendTodoComment(id, ctx.botId, text))
     }
     case 'delete_comment': {
+      if (Object.hasOwn(args, 'author')) return failed('author is not a supported todo argument')
       const id = requireString(args, 'id', 'delete_comment requires id')
       const commentId = requireString(args, 'commentId', 'delete_comment requires commentId')
       return done(await deps.todos.deleteTodoComment(id, commentId, ctx.botId))
     }
     case 'tag': {
+      if (Object.hasOwn(args, 'author')) return failed('author is not a supported todo argument')
       const id = requireString(args, 'id', 'tag requires id')
       const tags = Array.isArray(args.tags) ? args.tags.map((tag) => {
         if (typeof tag !== 'string') throw new Error('tags must contain only strings')
@@ -635,6 +668,7 @@ async function runTodoTool(
       return done(await deps.todos.addTodoTags(id, tags))
     }
     case 'untag': {
+      if (Object.hasOwn(args, 'author')) return failed('author is not a supported todo argument')
       const id = requireString(args, 'id', 'untag requires id')
       const tag = requireString(args, 'tag', 'untag requires tag')
       return done(await deps.todos.removeTodoTag(id, tag))

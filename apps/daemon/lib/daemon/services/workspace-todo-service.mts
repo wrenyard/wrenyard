@@ -945,6 +945,7 @@ function parseComments(body: string, updated: string, todoId: string): TodoComme
     const comments: TodoComment[] = []
     const lines = body.replace(/\r\n/gu, '\n').split('\n')
     let current: TodoComment | null = null
+    let rawBodyLines: string[] = []
     const flush = (): void => { if (current) comments.push(current) }
     let inComments = false
     for (const line of lines) {
@@ -952,15 +953,23 @@ function parseComments(body: string, updated: string, todoId: string): TodoComme
         if (line === '## Comments') inComments = true
         continue
       }
-      const encodedLine = line.replace(/^\\+(?=### [0-9a-f]{6} · .+ · .+$)/u, '')
-      const heading = /^### ([0-9a-f]{6}) · ([^·\r\n]+?) · (.+)$/u.exec(encodedLine)
+      const heading = /^### ([0-9a-f]{6}) · ([^·\r\n]+?) · (.+)$/u.exec(line)
       if (heading && isValidCommentTime(heading[3])) {
         flush()
+        const withoutPreviousSeparator = rawBodyLines.at(-1) === '' ? rawBodyLines.slice(0, -1) : rawBodyLines
+        const bodyLines = withoutPreviousSeparator[0] === '' ? withoutPreviousSeparator.slice(1) : withoutPreviousSeparator
+        const textLines = bodyLines.map((bodyLine) => /^\\+### [0-9a-f]{6} · .+ · .+$/u.test(bodyLine) ? bodyLine.slice(1) : bodyLine)
+        if (current) current.text = textLines.join('\n')
+        rawBodyLines = []
         current = { id: heading[1], author: heading[2], at: heading[3], text: '' }
-      } else if (current && !(current.text === '' && line === '')) {
-        const textLine = /^\\+(?=### [0-9a-f]{6} · .+ · .+$)/u.test(line) ? line.slice(1) : line
-        current.text = current.text === '' ? textLine : `${current.text}\n${textLine}`
+      } else if (current) {
+        rawBodyLines.push(line)
       }
+    }
+    if (current) {
+      const withoutEndSeparator = rawBodyLines.at(-1) === '' ? rawBodyLines.slice(0, -1) : rawBodyLines
+      const bodyLines = withoutEndSeparator[0] === '' ? withoutEndSeparator.slice(1) : withoutEndSeparator
+      current.text = bodyLines.map((bodyLine) => /^\\+### [0-9a-f]{6} · .+ · .+$/u.test(bodyLine) ? bodyLine.slice(1) : bodyLine).join('\n')
     }
     flush()
     if (new Set(comments.map((comment) => comment.id)).size !== comments.length) {
@@ -1111,7 +1120,7 @@ function serializeTodo(todo: Todo): string {
   if (todo.comments.length > 0) {
     parts.push('', '## Comments')
     for (const comment of todo.comments) {
-      parts.push('', `### ${comment.id} · ${comment.author} · ${comment.at}`, '', escapeCommentText(comment.text).trimEnd())
+      parts.push('', `### ${comment.id} · ${comment.author} · ${comment.at}`, '', escapeCommentText(comment.text))
     }
   }
   return `${parts.join('\n')}\n`

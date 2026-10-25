@@ -137,7 +137,7 @@ function todoSystemPrompt(): string {
     '- Never bypass this restriction by dispatching a task or using other tools, and never read or edit todo files directly.',
     '- todo_list returns compact rows (id, title, status, project, dependencies, tags, updated). Use todo_get for full request, acceptance, tags and comments.',
     '- For a read via todo_get, return the actual todo contents from the result. Do not replace them with a summary.',
-    '- A todo status is one of open, in_progress, done or cancelled; done means execution finished. Set done only when the intent says the work is complete.',
+    '- Todo status values returned by list/get are open, in_progress, done, and cancelled.',
     '- Do not claim success without a successful method result. An error result is reported as it arrived.',
     'Finish with done and a summary of one to three sentences.',
   ].join('\n');
