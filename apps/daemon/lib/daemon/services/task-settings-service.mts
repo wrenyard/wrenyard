@@ -762,6 +762,11 @@ export function taskInstructionTemplate(
   return segments
 }
 
+// Temporary routing preference added 2026-10-25 at the user's request:
+// computer-use/browser-use runs try this model first. Intentionally small;
+// remove once routing avoids rate-limited providers by itself.
+const TEMPORARY_ONLY_MODEL = 'gpt-6.1-sol'
+
 export class TaskSettingsService {
   private readonly configPath: string
   private readonly resolver: TaskDispatchResolver
@@ -984,7 +989,11 @@ export class TaskSettingsService {
     // every exact choice before ranking, so there is NO second post-selection
     // runtimeAvailability call and no fallback after selection.
     const routingRequirements = applyMountedFeatureRoutingPreferences(effective.dispatch, params.mountedFeatures)
-    const selection = await this.resolveAutomaticSelection({
+    // Temporary preference (see TEMPORARY_ONLY_MODEL): computer-use/browser-use
+    // runs try that model first and fall back to the unchanged original call.
+    const prefersSol = params.mountedFeatures?.includes('computer-use') === true
+      || params.mountedFeatures?.includes('browser-use') === true
+    const selectionParams: AutomaticSelectionParams = {
       taskName: params.taskName,
       requirements: this.withRoleRoutingExclusions(
         { ...routingRequirements, inputTokens: params.inputTokens },
@@ -994,7 +1003,13 @@ export class TaskSettingsService {
       timeoutMs: effective.runTimeLimitMinutes * MS_PER_MINUTE,
       routingWeights: effective.routingWeights,
       healthErrorRateThreshold: effective.healthErrorRateThreshold,
-    })
+    }
+    let selection = prefersSol
+      ? await this.resolveAutomaticSelection({ ...selectionParams, onlyModel: TEMPORARY_ONLY_MODEL })
+      : undefined
+    if (selection === undefined || !selection.ok) {
+      selection = await this.resolveAutomaticSelection(selectionParams)
+    }
     if (!selection.ok) throw selection.error
     return {
       exactAgentRuntime: selection.exactAgentRuntime,
@@ -1915,7 +1930,15 @@ export class TaskSettingsService {
       }
       return { ok: false, error: eligible.error }
     }
-    if (trace !== undefined) trace.eligibleIds = eligible.choices.map((choice) => choice.exactAgentRuntime)
+    // Optional model restriction applied before every subsequent gate; an
+    // emptied pool resolves exactly like an empty eligible pool.
+    const eligibleChoices = params.onlyModel === undefined
+      ? eligible.choices
+      : eligible.choices.filter((choice) => choice.model === params.onlyModel)
+    if (eligibleChoices.length === 0) {
+      return { ok: false, error: automaticSelectionFailure(params, []) }
+    }
+    if (trace !== undefined) trace.eligibleIds = eligibleChoices.map((choice) => choice.exactAgentRuntime)
 
     const quotaPromise = previewMemo?.quota
       ?? (previewMemo !== undefined
@@ -1925,7 +1948,7 @@ export class TaskSettingsService {
           : Promise.resolve(null))
     if (previewMemo !== undefined) previewMemo.quota = quotaPromise
 
-    const needsNative = needsNativeProviderReadiness(eligible.choices)
+    const needsNative = needsNativeProviderReadiness(eligibleChoices)
     let nativeReadinessPromise: Promise<NativeProviderReadinessSnapshot | null> = Promise.resolve(null)
     if (needsNative && this.nativeProviderReadiness !== undefined) {
       nativeReadinessPromise = previewMemo?.nativeProviderReadiness
@@ -1980,7 +2003,7 @@ export class TaskSettingsService {
       | { choice: TaskDispatchChoice; availability: Promise<TaskSettingsProviderAvailability | undefined> }
       | { choice: TaskDispatchChoice; eliminated: 'client' | 'blocked' | 'route' | 'circuit' }
     const probePlan: ProbePlanEntry[] = []
-    for (const choice of eligible.choices) {
+    for (const choice of eligibleChoices) {
       // Authoritative client gate: disabled or not-installed clients are
       // eliminated before provider readiness, so an unavailable client never
       // hides a ready sibling client sharing the same provider+model.
@@ -2306,6 +2329,10 @@ interface AutomaticSelectionParams {
   routingWeights?: TaskRoutingWeights | undefined
   /** Global health-avoidance error-rate threshold (percent, 1–100). */
   healthErrorRateThreshold: number
+  /** Optional model-id restriction applied to the eligible pool before the
+   *  availability/quota/circuit gates; an empty filtered pool resolves the
+   *  same way as an empty eligible pool. */
+  onlyModel?: string | undefined
 }
 
 /** Request-scoped optional trace collector instrumenting the exact automatic
