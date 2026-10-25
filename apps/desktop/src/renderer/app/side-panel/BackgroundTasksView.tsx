@@ -5,11 +5,11 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Activity,
   ChevronDown,
   ChevronRight,
   Square,
   SquareArrowOutUpRight,
-  X,
 } from 'lucide-react';
 import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
@@ -20,10 +20,11 @@ import { executeCommand } from '@/renderer/lib/commands';
 import { shell, useActivityStatus } from '@/renderer/lib/desktop';
 import { getSessionBridge } from '@/renderer/lib/session';
 import { useAppearance } from '@/renderer/lib/theme';
-import { closeActivityPanel, useActivityPanelState } from '@/renderer/lib/activity-panel';
+import { useSidePanelState } from '@/renderer/lib/side-panel';
 import { useTaskCancellation } from '@/renderer/hooks/use-task-cancellation';
 import type { ActivityStatusTask, ActivityStatusTaskGraph } from '@/shell-contract';
-import { useActivityTaskDetails, useSessionActivity } from './use-activity';
+import { useActivityTaskDetails, useSessionActivity } from '../use-activity';
+import { SidePanelView } from './SidePanelView';
 
 /** A finished run stays listed this long after it leaves the live snapshot. */
 const FINISHED_RETENTION_MS = 10 * 60 * 1000;
@@ -101,10 +102,28 @@ const transcriptLoader: TaskRunEventsLoader = {
   retry: () => Promise.resolve(),
 };
 
-export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: string }) {
+export function BackgroundTasksIcon() {
+  const snapshot = useActivityStatus();
+  const activityBadgeCount =
+    snapshot.tasks.filter((task) => task.status === 'running' || task.status === 'queued').length
+    + snapshot.taskgraphs.filter((graph) => graph.state !== 'done' && graph.state !== 'cancelled').length;
+
+  return (
+    <span className="relative inline-flex">
+      <Activity />
+      {activityBadgeCount > 0 ? (
+        <span className="absolute -top-1 -right-1 flex min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[10px] font-medium leading-none text-primary-foreground">
+          {activityBadgeCount > 9 ? '9+' : activityBadgeCount}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+export function BackgroundTasksView() {
   const snapshot = useActivityStatus();
   const sessions = useSessionActivity();
-  const panelState = useActivityPanelState();
+  const panelState = useSidePanelState();
   const { cancelledTasks, cancelTask } = useTaskCancellation();
   const { dark } = useAppearance();
   const onOpenExternal = useCallback((href: string) => {
@@ -363,7 +382,7 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
   useEffect(() => {
     const requestId = panelState.openRequestId;
     if (requestId === 0 || requestId === handledFocusRequestRef.current) return;
-    const focusSession = panelState.scopeSession;
+    const focusSession = panelState.focusSession;
     if (focusSession === '') {
       handledFocusRequestRef.current = requestId;
       return;
@@ -384,7 +403,7 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
     pendingFocusTaskIdRef.current = latest.taskRunId;
   }, [
     panelState.openRequestId,
-    panelState.scopeSession,
+    panelState.focusSession,
     runningTasks,
     sessionLinks,
     sessions.isPending,
@@ -401,7 +420,7 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
     pendingFocusTaskIdRef.current = null;
   }, [
     panelState.openRequestId,
-    panelState.scopeSession,
+    panelState.focusSession,
     expandedKey,
     runningGroupOpen,
     runningTasks,
@@ -459,8 +478,8 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
     const graph = snapshot.taskgraphs.find((item) => item.taskgraphId === task.taskgraphId)
       ?? finishedGraphsList.find((item) => item.taskgraphId === task.taskgraphId);
     const link = sessionLinks.get(task.taskRunId);
-    const isFocusTarget = expanded && panelState.scopeSession !== ''
-      && link?.sessionId === panelState.scopeSession;
+    const isFocusTarget = expanded && panelState.focusSession !== ''
+      && link?.sessionId === panelState.focusSession;
 
     return (
       <div
@@ -584,29 +603,8 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <div className="flex h-12 items-center justify-between gap-2 px-4">
-        <span className="text-sm font-medium">后台任务</span>
-        <div className="flex items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger
-              render={(
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="关闭"
-                  onClick={closeActivityPanel}
-                />
-              )}
-            >
-              <X />
-            </TooltipTrigger>
-            <TooltipContent>关闭</TooltipContent>
-          </Tooltip>
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
+    <SidePanelView title="后台任务">
+      <div className="px-2 py-2">
         {stale ? <p className="px-2 py-1 text-xs text-warning">后台任务数据暂未更新</p> : null}
         {empty ? (
           <p className="px-2 py-6 text-center text-sm text-muted-foreground">
@@ -646,6 +644,6 @@ export function ActivityPanel({ scopeSession: _scopeSession }: { scopeSession: s
           </>
         )}
       </div>
-    </div>
+    </SidePanelView>
   );
 }

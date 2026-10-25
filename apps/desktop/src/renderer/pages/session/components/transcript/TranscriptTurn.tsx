@@ -10,7 +10,7 @@ import { cn } from 'cn';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
 import { MessageFooter } from '@/renderer/components/chat/MessageFooter';
 import { Elapsed } from '@/renderer/components/elapsed';
-import { openActivityPanel } from '@/renderer/lib/activity-panel';
+import { openSidePanel } from '@/renderer/lib/side-panel';
 import { formatTokenCount } from '@/renderer/lib/format';
 import {
   DISPATCH_TERMINAL_LABEL,
@@ -116,7 +116,7 @@ function RunningTasks({ tasks, sessionId }: { tasks: readonly ActionModel[]; ses
     <button
       type="button"
       className="ml-auto inline-flex shrink-0 items-center gap-1 rounded text-muted-foreground hover:text-foreground"
-      onClick={() => openActivityPanel(sessionId)}
+      onClick={() => openSidePanel('tasks', { sessionId })}
     >
       <Activity className="size-3.5" aria-hidden />
       {tasks.length} 个任务

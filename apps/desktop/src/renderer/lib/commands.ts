@@ -14,7 +14,7 @@ import type { ShellPage } from '@/shell-contract';
 import { isShellPage } from '@/shell-contract';
 import { onCommandAction, onViewChanged, shell } from '@/renderer/lib/desktop';
 import { back, forward, toggleSecondarySidebar } from '@/renderer/lib/navigation';
-import { toggleActivityPanel } from '@/renderer/lib/activity-panel';
+import { toggleSidePanel } from '@/renderer/lib/side-panel';
 import { openSessionInspector } from '@/renderer/lib/session-inspector';
 
 export interface CommandDefinition {
@@ -101,7 +101,7 @@ export const GLOBAL_COMMANDS: readonly CommandDefinition[] = [
     title: '后台任务',
     run: (args) => {
       const { sessionId } = panelCommandArgs(args);
-      toggleActivityPanel(sessionId);
+      toggleSidePanel('tasks', sessionId === undefined ? undefined : { sessionId });
     },
   },
 ];

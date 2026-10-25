@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Activity, ChevronLeft, ChevronRight, Maximize2, Menu, PanelLeftClose, PanelLeftOpen, PictureInPicture2, Pin, PinOff, Plus, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Menu, PanelLeftClose, PanelLeftOpen, PictureInPicture2, Pin, PinOff, Plus, X } from 'lucide-react';
 import type { ShellPage } from '@/shell-contract';
 import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import { shell, useActivityStatus, useShellPage } from '@/renderer/lib/desktop';
-import { toggleActivityPanel, useActivityPanelState } from '@/renderer/lib/activity-panel';
+import { shell, useShellPage } from '@/renderer/lib/desktop';
+import { toggleSidePanel, useSidePanelState } from '@/renderer/lib/side-panel';
+import { SIDE_PANEL_VIEW_ORDER, SIDE_PANEL_VIEWS } from '@/renderer/app/side-panel/views';
 import { closeCard, getCurrentSession, openMiniCard, restoreMain, setMiniPinned, useMiniMode, useMiniPinned } from '@/renderer/lib/mini';
 import { back, forward, toggleSecondarySidebar, useNavigation, useSecondarySidebarToggle } from '@/renderer/lib/navigation';
 import { registerTitleBarSlot } from '@/renderer/lib/titlebar';
@@ -72,11 +73,7 @@ export function TitleBar() {
   const forwardShortcut = isMac ? '⌘]' : 'Alt+→';
   const mini = useMiniMode();
   const pinned = useMiniPinned();
-  const activitySnapshot = useActivityStatus();
-  const activityOpen = useActivityPanelState().open;
-  const activityBadgeCount =
-    activitySnapshot.tasks.filter((task) => task.status === 'running' || task.status === 'queued').length
-    + activitySnapshot.taskgraphs.filter((graph) => graph.state !== 'done' && graph.state !== 'cancelled').length;
+  const sidePanelState = useSidePanelState();
 
   // Track whether any page portals content into its auxiliary slot; the
   // separator between app-level and page-level controls only renders then.
@@ -244,21 +241,21 @@ export function TitleBar() {
           />
         ))}
         {hasAuxiliary && <span aria-hidden className="h-4 w-px shrink-0 bg-border" />}
-        <TitleBarButton
-          label="后台任务"
-          tooltip="后台任务"
-          pressed={activityOpen}
-          onClick={() => toggleActivityPanel()}
-        >
-          <span className="relative inline-flex">
-            <Activity />
-            {activityBadgeCount > 0 ? (
-              <span className="absolute -top-1 -right-1 flex min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[10px] font-medium leading-none text-primary-foreground">
-                {activityBadgeCount > 9 ? '9+' : activityBadgeCount}
-              </span>
-            ) : null}
-          </span>
-        </TitleBarButton>
+        {SIDE_PANEL_VIEW_ORDER.map((id) => {
+          const entry = SIDE_PANEL_VIEWS[id];
+          const Icon = entry.Icon;
+          return (
+            <TitleBarButton
+              key={id}
+              label={entry.title}
+              tooltip={entry.title}
+              pressed={sidePanelState.view === id}
+              onClick={() => toggleSidePanel(id)}
+            >
+              <Icon />
+            </TitleBarButton>
+          );
+        })}
         {page === 'session' && (
           <TitleBarButton label="迷你模式" tooltip="迷你模式" onClick={() => openMiniCard(getCurrentSession())}>
             <PictureInPicture2 />

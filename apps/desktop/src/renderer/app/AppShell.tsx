@@ -8,9 +8,8 @@ import { startViewTransition } from '@/renderer/lib/motion';
 import { useIsMobile } from '@/renderer/hooks/use-mobile';
 import { Sidebar, SidebarInset, SidebarProvider } from '@/renderer/components/ui/sidebar';
 import { AppSidebar } from '@/renderer/app/AppSidebar';
-import { ActivityPanel } from '@/renderer/app/ActivityPanel';
-import { closeActivityPanel, useActivityPanelState } from '@/renderer/lib/activity-panel';
-import { useActivityPanelResize } from '@/renderer/app/useActivityPanelResize';
+import { SidePanel } from '@/renderer/app/side-panel/SidePanel';
+import { useSidePanelState } from '@/renderer/lib/side-panel';
 import { useShellSidebarResize } from '@/renderer/app/useShellSidebarResize';
 import { TitleBar } from '@/renderer/app/TitleBar';
 import { TitleBarPageProvider } from '@/renderer/lib/titlebar';
@@ -115,20 +114,9 @@ export function AppShell() {
   // and the fixed container move together.
   const isMobile = useIsMobile();
   const sidebarResize = useShellSidebarResize(!mini && shellSidebarOpen && !isMobile);
-  // The one app-level activity panel: opened by the status-bar item, the
-  // transcript task chip or `activity.toggle`. On a narrow window it overlays
-  // the page instead of pushing it narrower than the main-area reserve.
-  const activityPanel = useActivityPanelState();
-  const activityResize = useActivityPanelResize(!mini && activityPanel.open && !isMobile);
-  const [viewportWidth, setViewportWidth] = useState<number>(() => window.innerWidth);
-  useEffect(() => {
-    const onResize = (): void => setViewportWidth(window.innerWidth);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+  const sidePanelState = useSidePanelState();
   // The left sidebar collapses fully off-canvas, so a closed sidebar occupies 0.
   const leftSidebarWidth = shellSidebarOpen ? sidebarResize.width : 0;
-  const activityInFlow = !mini && !isMobile && viewportWidth - activityResize.width - leftSidebarWidth >= 560;
 
   useEffect(() => {
     if (page === shown) return;
@@ -167,7 +155,7 @@ export function AppShell() {
       <TitleBar />
       <div
         className="relative flex min-h-0 flex-1"
-        style={{ '--activity-panel-width': `${activityResize.width}px` } as CSSProperties}
+        style={{ '--side-panel-reserved-width': `${isMobile ? 0 : leftSidebarWidth}px` } as CSSProperties}
       >
         <SidebarProvider
           className="h-full min-h-0 min-w-0"
@@ -225,34 +213,7 @@ export function AppShell() {
           </SidebarInset>
           <UpdateDialog open={updateOpen} onOpenChange={setUpdateOpen} />
         </SidebarProvider>
-        {!mini && activityPanel.open && (
-          activityInFlow ? (
-            <>
-              <div {...activityResize.handleProps} />
-              <aside
-                className="flex w-(--activity-panel-width) min-h-0 shrink-0 flex-col border-l bg-background"
-                data-activity-panel
-              >
-                <ActivityPanel scopeSession={activityPanel.scopeSession} />
-              </aside>
-            </>
-          ) : (
-            <>
-              <div
-                className="absolute inset-0 z-30 bg-(--overlay)"
-                onMouseDown={() => closeActivityPanel()}
-              />
-              <div {...activityResize.handleProps} />
-              <aside
-                className="absolute inset-y-0 right-0 z-40 flex min-h-0 flex-col border-l bg-background shadow-lg"
-                style={{ width: `min(${activityResize.width}px, 100%)` }}
-                data-activity-panel
-              >
-                <ActivityPanel scopeSession={activityPanel.scopeSession} />
-              </aside>
-            </>
-          )
-        )}
+        {!mini && sidePanelState.view !== null && <SidePanel reservedWidth={isMobile ? 0 : leftSidebarWidth} />}
       </div>
     </div>
   );
