@@ -189,9 +189,59 @@ function toolResultEvent(record: Record<string, unknown>): AgentEvent | undefine
     const status = toolResultStatus(stringOf(record, 'status'));
     if (!status)
         return undefined;
-    const output = jsonStringValue(record.rawOutput) || jsonStringValue(record.content);
+    const output = readableToolText(record.content)
+        ?? rawOutputPromptText(record.rawOutput)
+        ?? rawOutputBytesText(record.rawOutput)
+        ?? (typeof record.rawOutput === 'string' ? record.rawOutput : undefined)
+        ?? jsonStringValue(record.rawOutput)
+        ?? jsonStringValue(record.content);
     const sessionId = stringOf(record, 'session_id') || stringOf(record, 'sessionId') || stringOf(record, 'native_session_id') || stringOf(record, 'conversation_id');
     return { type: 'output', record: toolResultRecord(callId, status, output, sessionId || undefined) };
+}
+
+function readableToolText(value: unknown): string | undefined {
+    if (typeof value === 'string')
+        return value;
+    if (!Array.isArray(value))
+        return undefined;
+    const parts: string[] = [];
+    for (const block of value) {
+        if (!block || typeof block !== 'object' || Array.isArray(block))
+            continue;
+        const content = (block as Record<string, unknown>).text;
+        if (typeof content === 'string')
+            parts.push(content);
+    }
+    return parts.length ? parts.join('') : undefined;
+}
+
+function rawOutputObject(value: unknown): Record<string, unknown> | unknown[] | undefined {
+    if (typeof value === 'string') {
+        try {
+            const parsed: unknown = JSON.parse(value);
+            if (parsed && typeof parsed === 'object')
+                return parsed as Record<string, unknown> | unknown[];
+        }
+        catch {
+            return undefined;
+        }
+    }
+    return value && typeof value === 'object' ? value as Record<string, unknown> | unknown[] : undefined;
+}
+
+function rawOutputPromptText(value: unknown): string | undefined {
+    const parsed = rawOutputObject(value);
+    return parsed && !Array.isArray(parsed) && typeof parsed.output_for_prompt === 'string'
+        ? parsed.output_for_prompt
+        : undefined;
+}
+
+function rawOutputBytesText(value: unknown): string | undefined {
+    const parsed = rawOutputObject(value);
+    const bytes = Array.isArray(parsed) ? parsed : parsed?.output;
+    if (!Array.isArray(bytes) || !bytes.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255))
+        return undefined;
+    return new TextDecoder('utf-8').decode(new Uint8Array(bytes as number[]));
 }
 
 function toolResultStatus(status: string): 'ok' | 'error' | undefined {
