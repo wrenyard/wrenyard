@@ -82,7 +82,7 @@
  * pricing are carried. Non-generation-only helpers (embedding, reranking,
  * audio/image-only) are not part of the retained mainstream selection.
  */
-import type { ModelCapability } from '@wrenyard/models';
+import type { ModelCapability, ReasoningEffort } from '@wrenyard/models';
 
 /** One source-exact model row: only the fields the upstream snapshot supplies. */
 export interface ModelsDevCatalogModel {
@@ -97,6 +97,8 @@ export interface ModelsDevCatalogModel {
   readonly capabilities?: readonly ModelCapability[];
   /** FLAT `[cached, input, output]`; present only when all three are sourced and the source is not tiered. */
   readonly pricing?: readonly [number, number, number];
+  /** Route-owned selectable reasoning-effort ladder; present only when the upstream model's levels are verified. */
+  readonly reasoningEfforts?: readonly ReasoningEffort[];
 }
 
 /** The generic endpoint shapes the factory understands: one path each. */
@@ -347,7 +349,7 @@ export const MODELS_DEV_CATALOG_PROVIDERS: readonly ModelsDevCatalogProvider[] =
       // `moonshotai/kimi-k3.1-pro-highspeed` row is intentionally not retained:
       // Highspeed is only a Fast wire id, never a selectable model, and the
       // generic wiring expresses no fastMapping.
-      { id: "moonshotai/kimi-k3.1-pro", canonicalId: "kimi-k3.1-pro", displayName: "Kimi K3.1 Pro", contextWindow: 1048576, maxOutputTokens: 1048576, capabilities: ["text", "image"], pricing: [0.2, 2, 10] },
+      { id: "moonshotai/kimi-k3.1-pro", canonicalId: "kimi-k3.1-pro", displayName: "Kimi K3.1 Pro", contextWindow: 1048576, maxOutputTokens: 1048576, capabilities: ["text", "image"], pricing: [0.2, 2, 10], reasoningEfforts: ["low", "high", "max"] },
       { id: "deepseek/deepseek-v4-pro", canonicalId: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro", contextWindow: 1000000, maxOutputTokens: 384000, capabilities: ["text"], pricing: [0.022, 0.66, 1.98] },
     ],
   },

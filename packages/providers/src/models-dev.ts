@@ -50,6 +50,7 @@ function modelFor(source: ModelsDevCatalogModel) {
       : {}),
     ...(source.capabilities !== undefined ? { capabilities: source.capabilities } : {}),
     ...(source.pricing !== undefined ? { pricing: source.pricing } : {}),
+    ...(source.reasoningEfforts !== undefined ? { reasoningEfforts: source.reasoningEfforts } : {}),
   };
 }
 
@@ -74,12 +75,14 @@ function publicProviderIdentity(
  * per-provider special case beyond the single `xai` identity mapping above.
  *
  * `usesProviderDefaultReasoning` is the provider-level opt-in to the single
- * provider-default sentinel ladder: the snapshot declares no reasoning ladder
- * for any row, so every route is materialized with the singleton `['default']`
- * ladder instead of an empty one. That is a truthful provider-level setting —
- * the route has no selectable weak-to-strong ladder, and the default level asks
- * the upstream to use its own behaviour. `convertReasoningEffort` materializes
- * no upstream reasoning field for it: neither `none` nor a fabricated effort.
+ * provider-default sentinel ladder: a row that declares no `reasoningEfforts`
+ * ladder is materialized with the singleton `['default']` ladder instead of an
+ * empty one. That is a truthful provider-level setting — the route has no
+ * selectable weak-to-strong ladder, and the default level asks the upstream to
+ * use its own behaviour. `convertReasoningEffort` materializes no upstream
+ * reasoning field for it: neither `none` nor a fabricated effort. A row that
+ * declares a ladder keeps it verbatim and the selected level is serialized
+ * with the standard per-protocol reasoning field.
  */
 export const modelsDevProviders: readonly ProviderDefinition[] = MODELS_DEV_CATALOG_PROVIDERS.map(
   (entry) => {
@@ -96,8 +99,15 @@ export const modelsDevProviders: readonly ProviderDefinition[] = MODELS_DEV_CATA
       protocols: [capability],
       usesProviderDefaultReasoning: true,
       // The provider default sends no upstream reasoning fields at all: it is
-      // neither `none` nor a fabricated effort.
-      convertReasoningEffort: () => ({}),
+      // neither `none` nor a fabricated effort. A route that declares its own
+      // ladder serializes the selected level with the standard per-protocol
+      // reasoning field.
+      convertReasoningEffort: (_modelId, effort, protocol) => {
+        if (effort === 'default') return {};
+        if (protocol === 'openai_responses') return { reasoning: { effort } };
+        if (protocol === 'anthropic_messages') return { output_config: { effort } };
+        return { reasoning_effort: effort };
+      },
     });
   },
 );
