@@ -1829,22 +1829,29 @@ async function createForemanDaemonResources(
       return entries
     },
     act: async (id: string, action: ClientAction): Promise<ClientListEntry> => {
+      const refuse: (code: string, message: string, activeExecutions?: number) => never = (code, message, activeExecutions) => {
+        const catalogIds = new Set(createAgentClients().keys())
+        const data = { service: 'client', code, ...(catalogIds.has(id) ? { clientId: id } : {}), action,
+          ...(activeExecutions === undefined ? {} : { activeExecutions }) }
+        writeDaemonLog('info', 'client action refused', data)
+        throw new ProtocolError({ code: INVALID_PARAMS.code, message }, data)
+      }
       const client = createAgentClients().get(id)
-      if (client === undefined) throw new Error(`Unknown client '${id}'`)
+      if (client === undefined) refuse('unknown_client', 'Unknown client; refresh the client list and retry.')
       if (clientJobs.has(id)) {
-        throw new Error(`A ${clientJobs.get(id)!.action} is already in progress for client '${id}'`)
+        refuse('client_busy', `A ${clientJobs.get(id)!.action} is already in progress for this client.`)
       }
       const npmPackage = clientNpmPackages[id]
       if (npmPackage === undefined) {
-        throw new Error('This client has no supported install source; manage it manually.')
+        refuse('unsupported_source', 'This client does not support npm installation or upgrade.')
       }
       const npmStatus = await findExecutable(['npm'])
       if (npmStatus.installation.state !== 'installed') {
-        throw new Error('npm is not available on the PATH; install Node.js and npm before managing clients.')
+        refuse('npm_unavailable', 'npm is not available on PATH.')
       }
       const load = readExecutionLoad(runtime.db)
       if (load.activeExecutions > 0) {
-        throw new Error('Stop active executions before installing or upgrading a client.')
+        refuse('active_executions', 'Stop active executions before installing or upgrading a client.', load.activeExecutions)
       }
       const status = await client.inspect()
       const installation = status.installation
@@ -1852,14 +1859,21 @@ async function createForemanDaemonResources(
       const executablePath = installation.state === 'installed' ? installation.executable : undefined
       const npmPrefix = await getNpmPrefix()
       if (action === 'install' && installed) {
-        throw new Error(`Client '${id}' is already installed.`)
+        refuse('already_installed', 'Client is already installed.')
       }
       if (action === 'upgrade' && !installed) {
-        throw new Error(`Client '${id}' is not installed; install it before upgrading.`)
+        refuse('not_installed', 'Client is not installed; install it before upgrading.')
       }
       if (action === 'upgrade' && executablePath !== undefined
         && (npmPrefix === null || !isUnderNpmPrefix(executablePath, npmPrefix))) {
-        throw new Error(`Client '${id}' was not installed through npm; manage it manually.`)
+        refuse('unsupported_source', 'Client was not installed through npm; manage it manually.')
+      }
+      const finalLoad = readExecutionLoad(runtime.db)
+      if (finalLoad.activeExecutions > 0) {
+        refuse('active_executions', 'Stop active executions before installing or upgrading a client.', finalLoad.activeExecutions)
+      }
+      if (clientJobs.has(id)) {
+        refuse('client_busy', `A ${clientJobs.get(id)!.action} is already in progress for this client.`)
       }
       clientJobs.set(id, { action })
       clientLastErrors.delete(id)
