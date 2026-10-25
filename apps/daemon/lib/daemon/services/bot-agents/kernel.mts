@@ -20,6 +20,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { estimateTokens } from '@wrenyard/model-call'
+import { errorTooltip } from '@wrenyard/session/session-status'
 import {
   createSession,
   createWorkspaceMemory,
@@ -970,7 +971,11 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     state.watches.splice(index, 1)
     releaseWatch(botId, sessionId)
     const reply = turnAnswerOf(options.sessions, sessionId, turn)
-    const text = `[wake:session ${sessionId} ${event.status}] ${reply ?? ''}`
+    const summary = options.sessions.listSessions().find(item => item.sessionId === sessionId)
+    const failure = event.status === 'failed' && summary?.lastTurn?.status === 'failed'
+      ? ` ${errorTooltip(summary.lastTurn)}`
+      : ''
+    const text = `[wake:session ${sessionId} ${event.status}]${failure} ${reply ?? ''}`
     const bot = ensureBotState(botId)
     const meta = { sessionId, turn }
     const keys = sessionWakeKeys(meta)
@@ -1649,14 +1654,19 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   /** Wake one bot for a finished watched turn: read the answer, then enqueue once. */
   function wakeWatch(watch: Watch, status: TurnStatus): void {
     let reply: string | undefined
+    let summary: SessionSummary | undefined
     try {
       reply = turnAnswerOf(options.sessions, watch.sessionId, watch.afterTurn + 1)
+      summary = options.sessions.listSessions().find(item => item.sessionId === watch.sessionId)
     } catch (error) {
       log('warn', `bot agent kernel could not read watched session ${watch.sessionId}: ${errorText(error)}`)
     }
     const turn = watch.afterTurn + 1
     const sessionId = watch.sessionId
-    const text = `[wake:session ${sessionId} ${status}] ${reply ?? ''}`
+    const failure = status === 'failed' && summary?.lastTurn?.status === 'failed'
+      ? ` ${errorTooltip(summary.lastTurn)}`
+      : ''
+    const text = `[wake:session ${sessionId} ${status}]${failure} ${reply ?? ''}`
     const bot = ensureBotState(watch.botId)
     const meta = { sessionId, turn }
     const keys = sessionWakeKeys(meta)

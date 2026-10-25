@@ -20,6 +20,7 @@ import {
   type TurnModel,
   type WorkspaceMemoryPort,
 } from '@wrenyard/session'
+import { errorTooltip } from '@wrenyard/session/session-status'
 import type { TodoStatus, WorkspaceTodoService } from '../workspace-todo-service.mts'
 import {
   assertRealInside,
@@ -397,6 +398,10 @@ interface SessionListRow {
   title: string
   running: boolean
   lastTurn: string | null
+  errorKind?: string
+  errorMessage?: string
+  retryAt?: string
+  failureDescription?: string
   updatedAt: string
 }
 
@@ -451,6 +456,12 @@ function listSessions(sessions: Session): SessionListRow[] {
       title: summary.title,
       running: summary.running === true,
       lastTurn: summary.lastTurn === undefined ? null : summary.lastTurn.status,
+      ...(summary.lastTurn?.status === 'failed' ? {
+        errorKind: summary.lastTurn.errorKind,
+        errorMessage: summary.lastTurn.errorMessage,
+        retryAt: summary.lastTurn.retryAt,
+        failureDescription: errorTooltip(summary.lastTurn),
+      } : {}),
       updatedAt: summary.updatedAt,
     }))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
