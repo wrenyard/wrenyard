@@ -2,14 +2,18 @@ import type { ProviderDefinition } from '../base/index.ts';
 import type { ProviderQuota, QuotaSnapshot } from '../base/index.ts';
 import type { ProviderQuotaBinding, ProviderQuotaPool } from '../base/quota.ts';
 import { object, observation, number } from '../base/quota-parsing.ts';
-import { quotaPool, quotaWindow } from '../base/quota-helpers.ts';
+import { balancePool } from '../base/quota-helpers.ts';
 import { productCreditsAreFree } from '../codebuddy/product.ts';
 import type { WorkBuddyAccountIdentity, WorkBuddyAccountKind } from './credentials.ts';
 
+const WORKBUDDY_CREDITS_UNIT = 'Points';
+const WORKBUDDY_QUOTA_PARSER = 'packages/providers/src/workbuddy/quota.ts';
+
 function creditsPool(providerId: string, usageUnknown = false): ProviderQuotaPool {
-  return quotaPool(`${providerId}/credits`, [
-    quotaWindow('credits', 'unproven', 'provider_parser', 'packages/providers/src/workbuddy/quota.ts'),
-  ], 1, '积分', usageUnknown);
+  return Object.freeze({
+    ...balancePool(`${providerId}/credits`, WORKBUDDY_QUOTA_PARSER, '2026-10-27', usageUnknown),
+    displayName: '积分',
+  });
 }
 
 /** iOA exposes no reliable usage ratio: the same credits pool is pay-as-you-go with unknown usage. */
@@ -111,7 +115,6 @@ function normalizeWorkBuddyQuota(
   if (groups.length > 0 || Array.isArray(root.CreditGroups)) {
     let sumTotal = 0;
     let sumRemain = 0;
-    const windows: NonNullable<QuotaSnapshot['windows']>[number][] = [];
     for (const item of groups) {
       const row = object(item);
       const total = number(row.CycleTotalCapacity);
@@ -119,40 +122,19 @@ function normalizeWorkBuddyQuota(
       if (total === undefined || total <= 0 || remain === undefined) continue;
       sumTotal += total;
       sumRemain += remain;
-      const name = typeof row.Name === 'string' && row.Name.trim()
-        ? row.Name.trim()
-        : typeof row.PackageCode === 'string'
-          ? row.PackageCode
-          : 'group';
-      const pct = Math.max(0, Math.min(100, ((total - remain) / total) * 100));
-      windows.push({ name, pct, window_minutes: 0 });
     }
     const plan = typeof root.SubscriptionPackageName === 'string' && root.SubscriptionPackageName.trim()
       ? root.SubscriptionPackageName.trim()
       : undefined;
-    if (sumTotal > 0) {
-      const usedCredits = sumTotal - sumRemain;
-      const creditsPct = Math.max(0, Math.min(100, (usedCredits / sumTotal) * 100));
-      return {
-        provider: providerId,
-        status: 'ok',
-        stale: false,
-        source: sample.source,
-        fetched_at: sample.fetched_at,
-        windows: [{ name: 'credits', pct: creditsPct, window_minutes: 0 }, ...windows],
-        used: usedCredits,
-        total: sumTotal,
-        ...(plan ? { plan } : {}),
-        ...accountFields(account),
-      };
-    }
     return {
       provider: providerId,
       status: 'ok',
       stale: false,
       source: sample.source,
       fetched_at: sample.fetched_at,
-      windows,
+      windows: [],
+      balances: [{ id: `${providerId}/credits`, unit: WORKBUDDY_CREDITS_UNIT, amount: String(sumRemain) }],
+      ...(sumTotal > 0 ? { used: sumTotal - sumRemain, total: sumTotal } : {}),
       ...(plan ? { plan } : {}),
       ...accountFields(account),
     };
@@ -163,16 +145,18 @@ function normalizeWorkBuddyQuota(
   if (credit === undefined && limit === undefined) return undefined;
   const total = limit;
   const used = credit ?? 0;
-  const windows = total !== undefined && total > 0
-    ? [{ name: 'credits', pct: Math.max(0, Math.min(100, (used / total) * 100)), window_minutes: 0 }]
-    : [];
+  // credit is the consumed share of the limitNum grant, so the remain feeding
+  // the balance row is limitNum - credit; a missing limit is reported-but-
+  // unknown (null), never a fabricated zero.
+  const amount = total !== undefined ? String(Math.max(0, total - used)) : null;
   return {
     provider: providerId,
     status: 'ok',
     stale: false,
     source: sample.source,
     fetched_at: sample.fetched_at,
-    windows,
+    windows: [],
+    balances: [{ id: `${providerId}/credits`, unit: WORKBUDDY_CREDITS_UNIT, amount }],
     ...(total !== undefined ? { used, total } : {}),
     ...accountFields(account),
   };

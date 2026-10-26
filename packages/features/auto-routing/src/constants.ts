@@ -61,6 +61,7 @@ export const BALANCE_UNITS = Object.freeze({
   CNY: { precision: 2, isCurrency: true },
   USD: { precision: 2, isCurrency: true },
   Credits: { precision: 0, isCurrency: false },
+  Points: { precision: 0, isCurrency: false },
 } as const);
 /** How long a last measured state survives a failed or stale read. */
 export const QUOTA_EVIDENCE_GRACE_MS = 30 * 60_000;
