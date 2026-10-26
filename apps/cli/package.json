@@ -5,6 +5,7 @@
   "type": "module",
   "license": "MIT",
   "dependencies": {
+    "@wrenyard/auto-routing": "workspace:*",
     "@wrenyard/control": "workspace:*",
     "@wrenyard/daemon": "workspace:*",
     "@wrenyard/models": "workspace:*",

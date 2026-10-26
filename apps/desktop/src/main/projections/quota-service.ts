@@ -1,5 +1,6 @@
 import type { QuotaProviderState, QuotaProviderStatus, QuotaWindowRow } from '../../shell-contract.js';
 import { findProviderQuotaPool, providerQuotaPoolLabel } from '@wrenyard/providers';
+import { formatBalanceAmount } from '@wrenyard/auto-routing';
 import { floorQuotaPercentage } from '../../pet/main/controller.js';
 
 interface RawQuotaWindow {
@@ -166,53 +167,6 @@ function isValidSignedDecimalString(v: unknown): v is string {
   return typeof v === 'string' && /^[+-]?\d+(\.\d+)?$/.test(v);
 }
 
-/**
- * Whole-unit display of a signed decimal string: a true mathematical floor,
- * not truncation, so "60691.4641665000" -> "60691", "0.999" -> "0",
- * "-3.2" -> "-4" and "-0.2" -> "-1". String/BigInt arithmetic only — no
- * Number() conversion — so arbitrarily long decimals never lose precision.
- * Negative zero and any value in (-1, 0) collapse to "0"/"-1" without a
- * dangling "-0".
- */
-export function floorDecimalInteger(amount: string): string {
-  const trimmed = amount.trim();
-  const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(trimmed);
-  if (match === null) return trimmed.length > 0 ? trimmed : '0';
-  const negative = match[1] === '-';
-  const intPart = match[2].replace(/^0+(?=\d)/, '');
-  const fracPart = match[3] ?? '';
-  // A non-zero fractional part on a negative value floors one unit lower.
-  if (negative && /[1-9]/.test(fracPart)) return `-${(BigInt(intPart) + 1n).toString()}`;
-  if (intPart === '0') return '0';
-  return negative ? `-${intPart}` : intPart;
-}
-
-/**
- * Two-decimal presentation of a non-negative decimal-string amount:
- * zero-pads to two fraction digits ("12" -> "12.00", "12.3" -> "12.30") and
- * uses ordinary rounding beyond the second place ("12.346" -> "12.35").
- * Non-numeric input falls back to the raw string rather than NaN.
- */
-export function twoDecimalAmount(amount: string): string {
-  const value = Number(amount);
-  if (!Number.isFinite(value)) return amount;
-  return value.toFixed(2);
-}
-
-/**
- * Format a monetary amount for a currency: CNY/UZS use the CNY prefix form
- * (¥/₩ style symbol), other ISO currencies use a symbol + amount form where
- * a common symbol exists, falling back to `AMOUNT CURRENCY`. USD/CNY amounts
- * are shown with exactly two decimals so raw upstream decimals never leak
- * into the human-facing balance string.
- */
-function formatBalanceAmount(currency: string, amount: string): string {
-  const symbol = currencySymbol(currency);
-  const formatted = currency === 'USD' || currency === 'CNY' ? twoDecimalAmount(amount) : amount;
-  if (symbol) return `${symbol}${formatted}`;
-  return `${formatted} ${currency}`;
-}
-
 function currencySymbol(currency: string): string | null {
   switch (currency) {
     case 'CNY': return '¥';
@@ -234,9 +188,11 @@ function balanceDisplay(row: { currency?: string; unit?: string; amount: string 
   if (row.unlimited === true) return '不限量';
   if (row.amount === null) return '未知';
   if (row.unit !== undefined) {
-    return `${floorDecimalInteger(row.amount)} ${row.unit}`;
+    return `${formatBalanceAmount(row.amount, row.unit)} ${row.unit}`;
   }
-  return formatBalanceAmount(row.currency!, row.amount);
+  const symbol = currencySymbol(row.currency!);
+  const formatted = formatBalanceAmount(row.amount, row.currency!);
+  return symbol ? `${symbol}${formatted}` : `${formatted} ${row.currency}`;
 }
 
 /**

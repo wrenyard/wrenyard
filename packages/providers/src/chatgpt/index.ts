@@ -4,6 +4,7 @@ export {
   CHATGPT_CREDITS_POOL,
   CHATGPT_SUBSCRIPTION_POOL_IDS,
   quota,
+  chatGptFundingSourceFromSnapshot,
   selectChatGptFundingSource,
   type ChatGptCreditsAvailability,
   type ChatGptFundingSource,

@@ -63,5 +63,43 @@ export const BALANCE_UNITS = Object.freeze({
   Credits: { precision: 0, isCurrency: false },
   '积分': { precision: 0, isCurrency: false },
 } as const);
+
+/** Whole-unit display of a signed decimal string: a true mathematical floor,
+ * not truncation, so "60691.4641665000" -> "60691", "0.999" -> "0",
+ * "-3.2" -> "-4" and "-0.2" -> "-1". String/BigInt arithmetic only — no
+ * Number() conversion — so arbitrarily long decimals never lose precision. */
+function floorDecimalInteger(amount: string): string {
+  const trimmed = amount.trim();
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(trimmed);
+  if (match === null) return trimmed.length > 0 ? trimmed : '0';
+  const negative = match[1] === '-';
+  const intPart = match[2].replace(/^0+(?=\d)/, '');
+  const fracPart = match[3] ?? '';
+  // A non-zero fractional part on a negative value floors one unit lower.
+  if (negative && /[1-9]/.test(fracPart)) return `-${(BigInt(intPart) + 1n).toString()}`;
+  if (intPart === '0') return '0';
+  return negative ? `-${intPart}` : intPart;
+}
+
+/** Two-decimal presentation of a decimal-string amount: zero-pads ("12" ->
+ * "12.00", "12.3" -> "12.30") and rounds ordinarily ("12.346" -> "12.35").
+ * Non-numeric input falls back to the raw string rather than NaN. */
+function twoDecimalAmount(amount: string): string {
+  const value = Number(amount);
+  if (!Number.isFinite(value)) return amount;
+  return value.toFixed(2);
+}
+
+/**
+ * Format a decimal-string amount for one balance unit according to the unit
+ * table: precision-0 units floor to a whole number, precision-2 units show
+ * exactly two decimals. A unit the table does not know returns the amount
+ * unchanged (the provider's precision is kept verbatim).
+ */
+export function formatBalanceAmount(amount: string, unit: string): string {
+  const meta = (BALANCE_UNITS as Record<string, { precision: number; isCurrency: boolean }>)[unit];
+  if (meta === undefined) return amount;
+  return meta.precision === 0 ? floorDecimalInteger(amount) : twoDecimalAmount(amount);
+}
 /** How long a last measured state survives a failed or stale read. */
 export const QUOTA_EVIDENCE_GRACE_MS = 30 * 60_000;

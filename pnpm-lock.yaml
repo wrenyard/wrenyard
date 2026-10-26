@@ -49,6 +49,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@wrenyard/auto-routing':
+        specifier: workspace:*
+        version: link:../../packages/features/auto-routing
       '@wrenyard/control':
         specifier: workspace:*
         version: link:../../packages/control

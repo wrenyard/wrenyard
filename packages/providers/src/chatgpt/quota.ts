@@ -78,6 +78,35 @@ export function selectChatGptFundingSource(input: {
   }
 }
 
+/**
+ * Snapshot-level form of the subscription-first rule: it takes the raw
+ * provider observation pieces (window rows, provider-declared not-applicable
+ * window names, the stale flag, and the Credits balance row) and yields the
+ * same funding source selectChatGptFundingSource computes. A stale
+ * observation never confirms exhaustion and never reads fresh Credits
+ * availability; `availability` unknown or absent is 'unknown'.
+ */
+export function chatGptFundingSourceFromSnapshot(input: {
+  readonly stale?: boolean;
+  readonly windows: readonly { name: string; remainingPct: number }[];
+  readonly notApplicableWindows?: readonly string[];
+  readonly creditsBalance?: { availability?: string | null };
+}): ChatGptFundingSource {
+  const notApplicable = new Set(input.notApplicableWindows ?? []);
+  const applicable = input.stale === true
+    ? []
+    : input.windows.filter((window) => !notApplicable.has(window.name));
+  const subscriptionExhausted = applicable.some((window) => window.remainingPct <= 0);
+  const availability = input.creditsBalance?.availability;
+  const credits: 'available' | 'empty' | 'unknown' =
+    input.stale === true || availability === undefined || availability === null || availability === 'unknown'
+      ? 'unknown'
+      : availability === 'available' ? 'available'
+      : availability === 'unavailable' ? 'empty'
+      : 'unknown';
+  return selectChatGptFundingSource({ subscriptionExhausted, credits });
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : undefined;

@@ -2,10 +2,10 @@
 import { REASONING_EFFORTS, isMainstreamModelId } from '@wrenyard/models';
 import type { WrenyardGatewayModel } from '@wrenyard/control';
 import type { ProviderListResult, ProviderQuotaBalance, ProviderQuotaSnapshot } from '@wrenyard/protocol/provider';
-import { selectChatGptFundingSource } from '@wrenyard/providers/chatgpt';
+import { chatGptFundingSourceFromSnapshot } from '@wrenyard/providers/chatgpt';
+import { formatBalanceAmount } from '@wrenyard/auto-routing';
 import { selectSessionProtocol } from '@wrenyard/session/model-metadata';
 import { floorQuotaPercentage } from '../pet/shared/quota-percentage.js';
-import { floorDecimalInteger, twoDecimalAmount } from '../main/projections/quota-service.js';
 import type { SessionBridgeModelEntry } from './preload.js';
 
 /** Short label for one balance row: a unit row keeps its unit (e.g. Credits). */
@@ -16,11 +16,7 @@ function balanceSummary(balance: ProviderQuotaBalance): string | undefined {
   const amount = balance.amount;
   // Unknown Credits render as unknown, never as a fabricated paid amount.
   if (amount === null) return `${unit}未知`;
-  if (balance.unit !== undefined) return `${floorDecimalInteger(amount)} ${unit}`;
-  // Human-facing USD/CNY amounts show exactly two decimals (zero-padded,
-  // ordinarily rounded); other currencies keep the provider's precision.
-  const displayAmount = unit === 'USD' || unit === 'CNY' ? twoDecimalAmount(amount) : amount;
-  return `${displayAmount} ${unit}`;
+  return `${formatBalanceAmount(amount, unit)} ${unit}`;
 }
 
 /**
@@ -38,20 +34,12 @@ function providerQuotaSummary(row: ProviderQuotaSnapshot | undefined): string | 
   const balance = row.balances?.[0];
   const windows = row.windows ?? [];
   if (row.provider === 'chatgpt' && windows.length > 0) {
-    const notApplicable = new Set(row.not_applicable_windows ?? []);
-    // Stale observations never confirm exhaustion: unknown/stale subscription
-    // data alone keeps the subscription summary rather than switching to paid.
-    const applicable = row.stale === true ? [] : windows.filter((window) => !notApplicable.has(window.name));
-    const subscriptionExhausted = applicable.some((window) => 100 - window.pct <= 0);
-    // Credits availability comes from the parser's flag-derived `availability`,
-    // never reconstructed from the numeric amount.
-    const balanceKnown = row.stale !== true && balance !== undefined;
-    const availability = balance?.availability;
-    const credits = !balanceKnown ? 'unknown' as const
-      : availability === 'available' || availability === 'unavailable'
-        ? (availability === 'available' ? 'available' as const : 'empty' as const)
-        : 'unknown' as const;
-    const source = selectChatGptFundingSource({ subscriptionExhausted, credits });
+    const source = chatGptFundingSourceFromSnapshot({
+      stale: row.stale,
+      windows: windows.map((window) => ({ name: window.name, remainingPct: 100 - window.pct })),
+      notApplicableWindows: row.not_applicable_windows,
+      creditsBalance: balance,
+    });
     if (source === 'credits') return balanceSummary(balance!);
     if (source === 'unresolved') return '用量未知';
     const remaining = windows.map((window) => 100 - window.pct);

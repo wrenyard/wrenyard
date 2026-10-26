@@ -967,8 +967,6 @@ export interface QuotaBalanceSnapshot {
   /** Parser-attested flag availability (ChatGPT Credits only). */
   availability?: 'available' | 'unavailable' | 'unknown';
   display: string;
-  /** Per-pool state from the shared quota rules; a balance is never abundant. */
-  state?: QuotaPoolState;
 }
 
 /** Estimated spend inside one named quota window (daemon-computed, display-only). */

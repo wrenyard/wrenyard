@@ -1,6 +1,6 @@
 import { QUOTA_EVIDENCE_GRACE_MS, quotaStateOf } from '@wrenyard/auto-routing';
-import type { BalanceEvidence, QuotaEvidence } from '@wrenyard/auto-routing';
-import { CHATGPT_CREDITS_BALANCE_ID, selectChatGptFundingSource, type ChatGptFundingSource } from '@wrenyard/providers/chatgpt';
+import type { QuotaEvidence } from '@wrenyard/auto-routing';
+import { CHATGPT_CREDITS_BALANCE_ID, chatGptFundingSourceFromSnapshot } from '@wrenyard/providers/chatgpt';
 import type { QuotaProviderState } from './main/projections/quota-runtime';
 import type {
   ProviderAuthMode,
@@ -226,7 +226,7 @@ function projectProvider(id: string, provider: QuotaProviderState, lastSuccessAt
       ...(balance.availability === undefined ? {} : { availability: balance.availability }),
       display: sanitizeQuotaText(balance.display),
     };
-    return { ...row, state: balancePoolState(row, observedAtMs, nowMs) };
+    return row;
   });
   // A successful status preserves the runtime's friendly message (e.g. the
   // observed CodeBuddy monthly exhaustion) alongside any display line, while
@@ -266,7 +266,11 @@ function projectProvider(id: string, provider: QuotaProviderState, lastSuccessAt
     ...(provider.code ? { code: sanitizeQuotaText(provider.code) } : {}),
     ...(provider.estimatedSpend ? { estimatedSpend: provider.estimatedSpend } : {}),
     ...(id === 'chatgpt' && windows.length > 0
-      ? { fundingSource: chatGptFundingSource(provider.stale, windows, balances) }
+      ? { fundingSource: chatGptFundingSourceFromSnapshot({
+          stale: provider.stale,
+          windows,
+          creditsBalance: balances.find((entry) => entry.id === CHATGPT_CREDITS_BALANCE_ID),
+        }) }
       : {}),
   };
   const identity = {
@@ -274,25 +278,6 @@ function projectProvider(id: string, provider: QuotaProviderState, lastSuccessAt
     ...(idp ? { idp } : {}),
   };
   return { ...snapshot, ...identity };
-}
-
-/**
- * The shared subscription-first rule for the ChatGPT ring: any confirmed
- * exhausted window may hand off to Credits, while a stale observation never
- * fabricates a paid fallback. Credits availability is the parser's
- * flag-derived `availability`, never reconstructed from the amount.
- */
-function chatGptFundingSource(
-  stale: boolean,
-  windows: readonly QuotaWindowSnapshot[],
-  balances: readonly QuotaBalanceSnapshot[],
-): ChatGptFundingSource {
-  const availability = balances.find((entry) => entry.id === CHATGPT_CREDITS_BALANCE_ID)?.availability;
-  return selectChatGptFundingSource({
-    subscriptionExhausted: !stale && windows.some((entry) => entry.remainingPct <= 0),
-    credits: stale || availability === undefined || availability === 'unknown' ? 'unknown'
-      : availability === 'available' ? 'available' : 'empty',
-  });
 }
 
 function projectCatalog(
@@ -448,36 +433,6 @@ function windowPoolState(
     ...(cycle ?? {}),
   };
   return quotaStateOf([{ id: window.name, kind: 'quota', evidence }], nowMs).state;
-}
-
-/**
- * Per-pool state of one balance: exhausted at zero, insufficient at or below
- * its currency threshold. A unit row has no threshold (zero exhausts it); an
- * explicit unlimited row is sufficient; a reported-but-absent amount is
- * insufficient, never a fabricated zero. When the parser attested an explicit
- * flag availability (ChatGPT Credits), that classification is authoritative:
- * `unknown` short-circuits to insufficient before any amount/unlimited
- * handling, `available` is sufficient while the observation is fresh
- * regardless of the display-only amount, and `unavailable` is a confirmed
- * exhaustion that age never relaxes.
- */
-function balancePoolState(
-  balance: QuotaBalanceSnapshot,
-  observedAtMs: number,
-  nowMs: number,
-): QuotaPoolState {
-  const availability = balance.availability;
-  const balanceEvidence: BalanceEvidence = {
-    ...(balance.amount === null ? {} : { amount: balance.amount }),
-    currency: balance.currency ?? null,
-    ...(balance.unit === undefined ? {} : { unit: balance.unit }),
-    ...(balance.unlimited === true ? { unlimited: true } : {}),
-    ...(availability === 'available' || availability === 'unavailable' || availability === 'unknown'
-      ? { availability } : {}),
-    observedAtMs,
-    validForMs: QUOTA_EVIDENCE_GRACE_MS,
-  };
-  return quotaStateOf([{ id: balance.id ?? balance.currency ?? 'balance', kind: 'balance', evidence: null, balance: balanceEvidence }], nowMs).state;
 }
 
 function isQuotaUnavailable(status: QuotaProviderSnapshot['status']): boolean {
