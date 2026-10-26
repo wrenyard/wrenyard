@@ -778,7 +778,9 @@ function buildUnknownSnapshot(
     const retained = retainedRow(lastUsableRows, binding.providerId, nowMs);
     const requiredQuota = shape.targets.map((target) =>
       target.balanceId !== undefined
-        ? constraintOf(target, null, retained === null ? null : balanceEvidence(retained, RETAINED_EVIDENCE_VALID_FOR_MS), 'not_obtained')
+        ? constraintOf(target, null, retained === null ? null
+          : (unitBalanceEvidence(retained, target.balanceId, RETAINED_EVIDENCE_VALID_FOR_MS)
+            ?? balanceEvidence(retained, RETAINED_EVIDENCE_VALID_FOR_MS)), 'not_obtained')
         : constraintOf(target, retained === null || target.windowName === undefined
           ? null
           : windowEvidence(retained, target.windowName, target.resetKind, RETAINED_EVIDENCE_VALID_FOR_MS), null, 'not_obtained'),
@@ -843,9 +845,10 @@ function buildSnapshot(
       // value is never handed to evidence construction.
       let constraint: RequiredQuotaConstraint;
       if (target.balanceId !== undefined) {
+        const validFor = usable ? QUOTA_SNAPSHOT_VALID_FOR_MS : RETAINED_EVIDENCE_VALID_FOR_MS;
         const balance = source === null
           ? null
-          : balanceEvidence(source, usable ? QUOTA_SNAPSHOT_VALID_FOR_MS : RETAINED_EVIDENCE_VALID_FOR_MS);
+          : (unitBalanceEvidence(source, target.balanceId, validFor) ?? balanceEvidence(source, validFor));
         constraint = constraintOf(target, null, balance, usable && balance !== null ? 'measured' : 'not_obtained');
       } else {
         const evidence = source !== null && target.windowName !== undefined
