@@ -2,14 +2,13 @@ import type { ChildProcess } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { spawnProcess } from './process.ts';
+import { spawnOwnedUnixProcess, type OwnedUnixLaunch } from './process.ts';
+import { prepareWindowsOwnedLaunch } from './windows-owned-launch.ts';
 import { killProcessTree } from './process.ts';
 
 const MAX_QUEUED_EVENTS = 64;
 /** Extra queue slots reserved for the guaranteed terminal error + exit frames. */
 const RESERVED_TERMINAL_EVENTS = 2;
-/** Finite fallback when killProcessTree cannot confirm tree termination. */
-const TERMINATION_FALLBACK_MS = 5_000;
 /** Finite confirmation window for the child process being spawned. */
 const STARTUP_CONFIRM_MS = 15_000;
 /**
@@ -146,9 +145,6 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
   let closed = false;
   let childExitCode: number | null = null;
   let childSignal: NodeJS.Signals | null = null;
-  // Set once this session has asked the child to die; an unconfirmed kill is
-  // then retried before cleanup is ever reported as complete.
-  let killRequested = false;
   // Retained spawn failure; 'close' decides whether it describes a child that
   // never ran or one that exited normally after a later stream fault.
   let lastStartError: Error | undefined;
@@ -174,6 +170,11 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
     resolveStarted = resolve;
     rejectStarted = reject;
   });
+  let child: ChildProcess | undefined;
+  let ownedLaunch: OwnedUnixLaunch | { readonly child: ChildProcess; cleanup(): Promise<void> } | undefined;
+  let resolveLaunchFinished!: () => void;
+  const launchFinished = new Promise<void>((resolve) => { resolveLaunchFinished = resolve; });
+  let launchError: unknown;
   const session: ExecutionSession = { events: queue, result, write, closeInput, cancel, diagnostics: {} };
 
   const clearTimers = () => {
@@ -187,31 +188,25 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
    * A tree that cannot be confirmed gone is NOT reported as a clean cleanup:
    * the rejection is retained and re-thrown to `cancel`, so the caller learns
    * that an owned process may still be alive instead of seeing a silent
-   * success. A child whose normal exit already arrived needs no kill, and the
-   * `closed` snapshot gives that check the same ordering the native `close`
-   * event had.
+   * success. The owned launch handle is cleaned before the terminal result is
+   * published.
    *
-   * The leader's own close is not proof that its descendants are gone. The
-   * child is spawned detached on Unix (`detached: process.platform !== 'win32'`),
-   * so `pgid === pid`, and a surviving group member can still write into an
-   * owned run home after the leader closes. For a spec that owns a run home on
-   * Unix the group is therefore terminated and confirmed absent even when the
-   * leader has already closed; an unconfirmed group keeps `treeStopped` false
-   * so the run home is never removed. Windows cannot prove descendant
-   * termination after the leader exits with the existing taskkill behaviour, so
-   * its current semantics are preserved unchanged.
+   * The leader's own close is not proof that its Unix process group is gone.
+   * The child is spawned detached on Unix (`detached: process.platform !== 'win32'`),
+   * so `pgid === pid`; its owned launch also confirms the process group and
+   * marker-discovered descendants after close.
    */
   const terminateProcessTree = (): Promise<void> => {
     if (terminating) return terminating;
     terminating = (async () => {
-      const childPid = child?.pid;
-      if (!childPid) return;
-      const confirmOwnedGroup = spec.ownedRunHome !== undefined && process.platform !== 'win32';
-      if (closed && !killRequested && !confirmOwnedGroup) return;
-      await withTimeoutResolved(killProcessTree(childPid), TERMINATION_FALLBACK_MS, `process tree ${childPid} was not confirmed terminated`);
-      if (confirmOwnedGroup && !unixProcessGroupIsGone(childPid)) {
-        throw new Error(`process group ${childPid} was not confirmed stopped`);
+      await launchFinished;
+      if (ownedLaunch) {
+        await ownedLaunch.cleanup();
+        return;
       }
+      const childPid = child?.pid;
+      if (!childPid || closed) return;
+      await killProcessTree(childPid, process.platform !== 'win32' ? childPid : undefined);
     })();
     // Retain the rejection for this session's callers without leaving an
     // unhandled rejection on the shared promise.
@@ -256,7 +251,10 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
         cleanupFailure = `process-tree cleanup failed: ${errorMessageOf(error)}`;
       }
       await cleanupOwnedResources(success).catch(() => undefined);
-      if (treeStopped) await cleanupOwnedRunHome(spec.ownedRunHome, success).catch(() => undefined);
+      if (treeStopped) {
+        try { await cleanupOwnedRunHome(spec.ownedRunHome, success); }
+        catch (error) { cleanupFailure = [cleanupFailure, `run-home cleanup failed: ${errorMessageOf(error)}`].filter(Boolean).join('; '); }
+      }
       removeTreeListeners();
       const message = [errorMessage, cleanupFailure].filter(Boolean).join('; ') || undefined;
       if (message) acceptTerminal({ type: 'error', message });
@@ -313,7 +311,6 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
   function cancel(): Promise<void> {
     cancelling ??= (async () => {
       cancelRequested = true;
-      killRequested = true;
       if (!terminal) fail('execution cancelled');
       await result;
       // `result` is published after termination was attempted; surface a real
@@ -341,24 +338,40 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
     accept({ type: 'stderr', data: chunk });
   }
 
-  let child: ChildProcess | undefined;
   try {
     // The launch environment is the one the caller already composed in
     // `spec.env`. It is the FINAL environment: gateway endpoints, MCP wiring,
     // and native client configuration live there, so neither a task-level
     // `options.env` nor the ambient process environment may replace it.
     // `options.env` only contributes Windows' ComSpec for cmd-shim launches.
-    child = spawnProcess(spec.executable, spec.args, {
+    const spawnOptions: import('node:child_process').SpawnOptions = {
       env: spec.env,
       cwd: spec.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
-    });
+    };
+    ownedLaunch = process.platform === 'win32'
+      ? await prepareWindowsOwnedLaunch(spec.executable, spec.args, spawnOptions)
+      : spawnOwnedUnixProcess(spec.executable, spec.args, spawnOptions);
+    child = ownedLaunch.child;
   }
   catch (error) {
-    settle({ stdout: '', stderr: '', exitCode: null, signal: null }, false, errorMessageOf(error) || 'execution process could not start');
+    launchError = error;
+  }
+  finally {
+    resolveLaunchFinished();
+  }
+  if (launchError !== undefined) {
+    settle({ stdout: '', stderr: '', exitCode: null, signal: null }, false, errorMessageOf(launchError) || 'execution process could not start');
     return await startOutcome;
   }
+  if (!child) {
+    settle({ stdout: '', stderr: '', exitCode: null, signal: null }, false, 'execution process handle is missing');
+    return await startOutcome;
+  }
+
+  // The Windows launcher prepares asynchronously; attach listeners below
+  // before honoring cancellation that arrived during preparation.
 
   /**
    * Record the spawned child identity on the owned marker as soon as the
@@ -380,7 +393,6 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
       });
     }
     catch (error) {
-      killRequested = true;
       try { await terminateProcessTree(); }
       catch { /* unconfirmed termination retains the home for recovery */ }
       fail(`launch provenance could not be recorded: ${errorMessageOf(error)}`);
@@ -448,15 +460,28 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
     }, STDIO_DRAIN_GRACE_MS);
   });
 
+  // A wrapper can close between asynchronous preparation and listener
+  // attachment. Its close facts remain on ChildProcess, so replay that outcome
+  // through the same handler after listeners are installed.
+  if (child.exitCode !== null || child.signalCode !== null) {
+    const exitCode = child.exitCode;
+    const signal = child.signalCode;
+    closed = true;
+    childExitCode = exitCode;
+    childSignal = signal;
+    if (!started) confirmStarted(child.pid);
+    finishExit(exitCode, signal);
+  }
+
   if (options.signal) {
     if (options.signal.aborted) void cancel();
     else options.signal.addEventListener('abort', onAbort, { once: true });
   }
+  if (terminal || options.signal?.aborted) void terminateProcessTree();
   if (timeoutMs) {
     timer = setTimeout(() => {
       if (terminal) return;
       cancelRequested = true;
-      killRequested = true;
       fail('execution timed out');
     }, timeoutMs);
   }
