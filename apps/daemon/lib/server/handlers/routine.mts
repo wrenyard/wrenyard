@@ -38,7 +38,7 @@ export function registerRoutineHandlers(router: RpcRouter, options: RoutineRpcHa
   router.register('routine.create', (params, _message, context) =>
     call(context, 'routine.create', () => ({ routine: scheduler.create(params) })))
   router.register('routine.update', (params, _message, context) =>
-    call(context, 'routine.update', () => ({ routine: scheduler.update(params.id, params.state) })))
+    call(context, 'routine.update', () => ({ routine: scheduler.update(params.id, params) })))
   router.register('routine.run', (params, _message, context) =>
     call(context, 'routine.run', () => ({ routine: scheduler.run(params.id) })))
   router.register('routine.delete', (params, _message, context) =>

@@ -216,6 +216,7 @@ interface ForemanDaemonResources {
   /** Daemon-owned scheduled-prompt service; stopped first on shutdown so it
    *  starts no new turns during drain. */
   scheduler: Scheduler
+  unsubscribeTodoChanges: () => void
   /** Daemon-owned bot agent kernel; stopped with the scheduler so no bot turn
    *  starts during drain or a workspace switch. */
   botAgents: BotAgentKernel
@@ -267,6 +268,7 @@ interface WorkspaceScopedResources {
   workspaceTodoService: WorkspaceTodoService
   session: Session
   scheduler: Scheduler
+  unsubscribeTodoChanges: () => void
   /** Bot agent kernel for this workspace; replaced whole on a hot switch. */
   botAgents: BotAgentKernel
   /** Runs the task-output compile step for one existing run of this workspace. */
@@ -701,6 +703,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
           httpServer: resources.httpServer,
           session: resources.session,
           scheduler: resources.scheduler,
+          unsubscribeTodoChanges: resources.unsubscribeTodoChanges,
           botAgents: resources.botAgents,
           gateway: resources.gateway,
           restoreGatewayEnvironment: resources.restoreGatewayEnvironment,
@@ -1548,7 +1551,7 @@ async function createForemanDaemonResources(
       statePath: join(sessionStateRoot, 'routines.json'),
       // Late binding: the kernel is constructed right below the scheduler, so a
       // routine fire can only ever run once the kernel exists.
-      wake: routine => botAgents.wakeRoutine(routine),
+      wake: (routine, text) => botAgents.wakeRoutine(routine, text),
       busy: routine => botAgents.routineBusy(routine),
       workspaceRoot,
       log: writeDaemonLog,
@@ -1581,6 +1584,9 @@ async function createForemanDaemonResources(
       },
       log: (level, message) => writeDaemonLog(level, message),
     })
+    const unsubscribeTodoChanges = workspaceTodoService.subscribeTodoChanges(changes => {
+      void scheduler.todoChanged(changes).catch(error => writeDaemonLog('warn', 'todo routine wake failed', error))
+    })
     return {
       workspaceRoot,
       taskService,
@@ -1590,6 +1596,7 @@ async function createForemanDaemonResources(
       workspaceTodoService,
       session,
       scheduler,
+      unsubscribeTodoChanges,
       botAgents,
       taskOutputCompile,
     }
@@ -2592,6 +2599,7 @@ async function createForemanDaemonResources(
     runtime.runner.setTaskRouteState(taskRouteState)
     resources.session = staged.session
     resources.scheduler = staged.scheduler
+    resources.unsubscribeTodoChanges = staged.unsubscribeTodoChanges
     resources.botAgents = staged.botAgents
     resources.taskService = staged.taskService
     resources.taskgraphService = staged.taskgraphService
@@ -2638,6 +2646,7 @@ async function createForemanDaemonResources(
     gateway,
     session: workspaceScoped.session,
     scheduler: workspaceScoped.scheduler,
+    unsubscribeTodoChanges: workspaceScoped.unsubscribeTodoChanges,
     botAgents: workspaceScoped.botAgents,
     rpcRouter,
     taskService: workspaceScoped.taskService,
@@ -2729,6 +2738,7 @@ function persistWorkspaceRoot(configPath: string, root: string): void {
  * rather than thrown, because the switch has already published its new state.
  */
 async function teardownWorkspaceBindings(bindings: WorkspaceScopedResources): Promise<void> {
+  bindings.unsubscribeTodoChanges()
   try {
     bindings.scheduler.stop()
   } catch (error) {
@@ -2800,6 +2810,7 @@ interface DaemonResourceTeardownHandles {
    */
   liveUsage?: { dispose(): void }
   liveUsageUnsubscribe?: () => void
+  unsubscribeTodoChanges?: () => void
   /** Released after the HTTP close settles; set only by whoever retained the DB. */
   releaseDb?: () => void
 }
@@ -2837,6 +2848,10 @@ async function teardownDaemonResources(handles: DaemonResourceTeardownHandles): 
     } catch (error) {
       recordFailure('scheduler shutdown failed', error)
     }
+  }
+  if (handles.unsubscribeTodoChanges) {
+    try { handles.unsubscribeTodoChanges() }
+    catch (error) { recordFailure('todo change unsubscribe failed', error) }
   }
   // Stop the bot agent kernel at the same point: a late bot turn must not start
   // while the ledger and providers are being torn down.

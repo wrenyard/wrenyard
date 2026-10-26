@@ -21,8 +21,12 @@ export interface RoutineRecord {
   name?: string
   /** 1..4000 characters; used verbatim as the wake text when it fires. */
   prompt: string
-  /** Whole minutes between runs; 1..10080 (7 days). */
-  intervalMinutes: number
+  /** Whole minutes between runs; 1..10080 (7 days), absent for event routines. */
+  intervalMinutes?: number
+  /** Integration trigger; currently only `todo` is implemented. */
+  on?: string
+  /** Ordered event rules; first matching entry is used. */
+  match?: string[]
   state: RoutineState
   /** ISO timestamp of creation. */
   createdAt: string
@@ -41,13 +45,20 @@ export interface RoutineListResult { routines: RoutineRecord[] }
 export interface RoutineCreateParams {
   botId: string
   prompt: string
-  intervalMinutes: number
+  intervalMinutes?: number
+  on?: string
+  match?: string[]
   name?: string
 }
 export interface RoutineCreateResult { routine: RoutineRecord }
 export interface RoutineUpdateParams {
   id: string
-  state: 'active' | 'paused'
+  state?: 'active' | 'paused'
+  prompt?: string
+  name?: string
+  intervalMinutes?: number
+  on?: string
+  match?: string[]
 }
 export interface RoutineUpdateResult { routine: RoutineRecord }
 export interface RoutineRunParams { id: string }

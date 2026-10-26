@@ -38,6 +38,9 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
   const [prompt, setPrompt] = useState('');
   const [name, setName] = useState('');
   const [interval, setIntervalMinutes] = useState('5');
+  const [trigger, setTrigger] = useState<'interval' | 'todo'>('interval');
+  const [matchRules, setMatchRules] = useState('comment');
+  const [editingId, setEditingId] = useState<string | undefined>();
 
   const filterKey = (props.filter ?? '').trim().toLowerCase();
   const items: Routine[] = (routines.data?.routines ?? []).filter((item) =>
@@ -57,19 +60,28 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
 
   const submit = (): void => {
     const minutes = Math.floor(Number(interval));
-    if (prompt.trim().length === 0 || !Number.isFinite(minutes) || minutes < 1 || create.isPending) return;
-    create.mutate(
+    const rules = matchRules.split('\n').map(rule => rule.trim()).filter(Boolean);
+    if (prompt.trim().length === 0 || (trigger === 'interval' && (!Number.isFinite(minutes) || minutes < 1))
+      || (trigger === 'todo' && rules.length === 0) || create.isPending || update.isPending) return;
+    const fields = {
+      prompt: prompt.trim(),
+      name: name.trim() === '' ? undefined : name.trim(),
+      ...(trigger === 'interval' ? { intervalMinutes: minutes } : { on: 'todo' as const, match: rules }),
+    };
+    if (editingId !== undefined) {
+      update.mutate({ id: editingId, ...fields }, { onSuccess: () => { setEditingId(undefined); setCreating(false); } });
+    } else create.mutate(
       {
         botId: props.botId,
-        prompt: prompt.trim(),
-        intervalMinutes: minutes,
-        name: name.trim() === '' ? undefined : name.trim(),
+        ...fields,
       },
       {
         onSuccess: () => {
           setPrompt('');
           setIntervalMinutes('5');
           setName('');
+          setTrigger('interval');
+          setMatchRules('comment');
           setCreating(false);
         },
       },
@@ -129,7 +141,7 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
                       )}
                     </TableCell>
                     <TableCell className="text-muted-foreground tabular-nums">
-                      {frequencyText(item.intervalMinutes)}
+                      {frequencyText(item.intervalMinutes, item.on, item.match)}
                     </TableCell>
                     <TableCell>
                       <StatusBadge tone={view.tone} label={view.label} />
@@ -149,6 +161,12 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
                     </TableCell>
                     <TableCell>
                       <div className="flex shrink-0 items-center justify-end gap-1">
+                        <Button variant="ghost" size="xs" onClick={() => {
+                          setEditingId(item.id); setPrompt(item.prompt); setName(item.name ?? '');
+                          setTrigger(item.on === 'todo' ? 'todo' : 'interval');
+                          setIntervalMinutes(String(item.intervalMinutes ?? 5));
+                          setMatchRules((item.match ?? []).join('\n')); setCreating(true);
+                        }}>编辑</Button>
                         {item.state === 'active' && (
                           <Button variant="ghost" size="xs" disabled={update.isPending} onClick={() => update.mutate({ id: item.id, state: 'paused' })}>
                             暂停
@@ -159,9 +177,9 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
                             恢复
                           </Button>
                         )}
-                        <Button variant="outline" size="xs" disabled={run.isPending} onClick={() => run.mutate(item.id)}>
+                        {item.intervalMinutes !== undefined && <Button variant="outline" size="xs" disabled={run.isPending} onClick={() => run.mutate(item.id)}>
                           立即运行
-                        </Button>
+                        </Button>}
                         <Button variant="ghost" size="xs" className="text-destructive" disabled={remove.isPending} onClick={() => requestDelete(item)}>
                           删除
                         </Button>
@@ -178,6 +196,12 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
             <Textarea value={prompt} rows={2} placeholder="例行任务提示词" onChange={(event) => setPrompt(event.target.value)} />
             <div className="flex flex-wrap items-center gap-4">
               <Field className="flex items-center gap-2">
+                <FieldLabel>触发方式</FieldLabel>
+                <select className="h-9 rounded-md border bg-background px-2 text-sm" value={trigger} onChange={event => setTrigger(event.target.value as 'interval' | 'todo')}>
+                  <option value="interval">定时间隔</option><option value="todo">Todo 事件</option>
+                </select>
+              </Field>
+              <Field className="flex items-center gap-2">
                 <FieldLabel>名称（可选）</FieldLabel>
                 <Input
                   value={name}
@@ -186,7 +210,7 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
                   onChange={(event) => setName(event.target.value)}
                 />
               </Field>
-              <Field className="flex items-center gap-2">
+              {trigger === 'interval' ? <Field className="flex items-center gap-2">
                 <FieldLabel>间隔（分钟）</FieldLabel>
                 <Input
                   type="number"
@@ -195,15 +219,18 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
                   className="w-24"
                   onChange={(event) => setIntervalMinutes(event.target.value)}
                 />
-              </Field>
-              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setCreating(false)}>
+              </Field> : <Field className="flex min-w-64 flex-1 items-center gap-2">
+                <FieldLabel>匹配规则（每行一条）</FieldLabel>
+                <Textarea value={matchRules} rows={3} placeholder={'+delivered\nstatus:done\ncomment'} onChange={event => setMatchRules(event.target.value)} />
+              </Field>}
+              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setCreating(false); setEditingId(undefined); }}>
                 取消
               </Button>
               <Button size="sm" disabled={create.isPending} onClick={submit}>
-                新建
+                {editingId === undefined ? '新建' : '保存'}
               </Button>
             </div>
-            {create.isError && <span className="text-xs text-destructive">{errorMessage(create.error)}</span>}
+            {(create.isError || update.isError) && <span className="text-xs text-destructive">{errorMessage(create.error ?? update.error)}</span>}
           </div>
         ) : (
           <Button variant="outline" size="sm" className="self-start" onClick={() => setCreating(true)}>

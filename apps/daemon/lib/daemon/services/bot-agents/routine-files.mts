@@ -29,7 +29,9 @@ export interface RoutineDefinition {
   /** 8 lowercase hex characters, the file name without `.md`. */
   id: string
   name?: string
-  intervalMinutes: number
+  intervalMinutes?: number
+  on?: string
+  match?: string[]
   state: 'active' | 'paused'
   prompt: string
 }
@@ -40,7 +42,17 @@ export const MAX_INTERVAL_MINUTES = 10_080
 export const MAX_PROMPT_LENGTH = 4_000
 const MAX_NAME_LENGTH = 64
 const FRONT_MATTER = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/
-const KEYS = new Set(['name', 'intervalMinutes', 'state'])
+const KEYS = new Set(['name', 'intervalMinutes', 'on', 'match', 'state'])
+
+const VALID_STATUSES = new Set(['open', 'in_progress', 'done', 'cancelled'])
+
+function validateMatch(value: string): string {
+  if (value === 'comment') return value
+  if (value.startsWith('status:') && VALID_STATUSES.has(value.slice(7))) return value
+  const tag = /^[+-]([^\s\p{Cc}*]+)(\*)?$/u.exec(value)
+  if (tag !== null && tag[1] !== '') return value
+  throw new Error(`invalid routine match: ${value}`)
+}
 
 /** Validate one definition; throws naming the first problem. */
 export function validateRoutine(definition: RoutineDefinition): RoutineDefinition {
@@ -48,10 +60,16 @@ export function validateRoutine(definition: RoutineDefinition): RoutineDefinitio
   const prompt = definition.prompt.trim()
   if (prompt === '') throw new Error('routine prompt must not be empty')
   if (prompt.length > MAX_PROMPT_LENGTH) throw new Error(`routine prompt must be at most ${MAX_PROMPT_LENGTH} characters`)
-  if (!Number.isInteger(definition.intervalMinutes)
-    || definition.intervalMinutes < MIN_INTERVAL_MINUTES
-    || definition.intervalMinutes > MAX_INTERVAL_MINUTES) {
-    throw new Error(`intervalMinutes must be an integer between ${MIN_INTERVAL_MINUTES} and ${MAX_INTERVAL_MINUTES}`)
+  if (definition.on === undefined) {
+    if (definition.match !== undefined || !Number.isInteger(definition.intervalMinutes)
+      || definition.intervalMinutes! < MIN_INTERVAL_MINUTES || definition.intervalMinutes! > MAX_INTERVAL_MINUTES) {
+      throw new Error(`intervalMinutes must be an integer between ${MIN_INTERVAL_MINUTES} and ${MAX_INTERVAL_MINUTES}`)
+    }
+  } else {
+    if (definition.on !== 'todo') throw new Error('only on: todo is supported')
+    if (definition.intervalMinutes !== undefined) throw new Error('on/match and intervalMinutes are mutually exclusive')
+    if (!Array.isArray(definition.match) || definition.match.length === 0) throw new Error('event routines require a non-empty match array')
+    definition.match = definition.match.map(validateMatch)
   }
   if (definition.state !== 'active' && definition.state !== 'paused') throw new Error('state must be active or paused')
   const name = definition.name?.trim()
@@ -61,7 +79,8 @@ export function validateRoutine(definition: RoutineDefinition): RoutineDefinitio
   return {
     id: definition.id,
     ...(name === undefined ? {} : { name }),
-    intervalMinutes: definition.intervalMinutes,
+    ...(definition.intervalMinutes === undefined ? {} : { intervalMinutes: definition.intervalMinutes }),
+    ...(definition.on === undefined ? {} : { on: definition.on, match: [...definition.match!] }),
     state: definition.state,
     prompt,
   }
@@ -78,10 +97,17 @@ export function parseRoutine(id: string, text: string): RoutineDefinition {
     if (!KEYS.has(key)) throw new Error(`unknown routine key: ${key}`)
   }
   if (record.name !== undefined && typeof record.name !== 'string') throw new Error('routine name must be a string')
+  if (record.on !== undefined && typeof record.on !== 'string') throw new Error('routine on must be a string')
+  if (record.match !== undefined && (!Array.isArray(record.match) || record.match.some(item => typeof item !== 'string'))) throw new Error('routine match must be an array of strings')
+  if (record.on === undefined && record.match !== undefined) throw new Error('match requires on: todo')
+  if (record.on !== undefined && record.intervalMinutes !== undefined) throw new Error('on/match and intervalMinutes are mutually exclusive')
+  if (record.on !== undefined && record.match === undefined) throw new Error('event routines require a non-empty match array')
+  if (record.on === undefined && record.intervalMinutes === undefined) throw new Error('intervalMinutes is required')
   return validateRoutine({
     id,
     ...(typeof record.name === 'string' ? { name: record.name } : {}),
-    intervalMinutes: record.intervalMinutes as number,
+    ...(record.intervalMinutes === undefined ? {} : { intervalMinutes: record.intervalMinutes as number }),
+    ...(record.on === undefined ? {} : { on: record.on, ...(record.match === undefined ? {} : { match: record.match as string[] }) }),
     state: (record.state ?? 'active') as RoutineDefinition['state'],
     prompt: match[2]!,
   })
@@ -91,7 +117,8 @@ export function parseRoutine(id: string, text: string): RoutineDefinition {
 export function formatRoutine(definition: RoutineDefinition): string {
   const data: Record<string, unknown> = {}
   if (definition.name !== undefined) data.name = definition.name
-  data.intervalMinutes = definition.intervalMinutes
+  if (definition.intervalMinutes !== undefined) data.intervalMinutes = definition.intervalMinutes
+  if (definition.on !== undefined) { data.on = definition.on; data.match = definition.match }
   data.state = definition.state
   return `---\n${stringifyYaml(data).trimEnd()}\n---\n\n${definition.prompt.trim()}\n`
 }

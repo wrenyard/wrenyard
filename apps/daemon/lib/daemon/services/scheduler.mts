@@ -8,7 +8,7 @@ import type {
   RoutineRecord,
   RoutineState,
 } from '../../protocol/methods/routine.mts'
-import { writeRoutine, removeRoutine, type RoutineDefinition } from './bot-agents/routine-files.mts'
+import { validateRoutine, writeRoutine, removeRoutine, type RoutineDefinition } from './bot-agents/routine-files.mts'
 
 /** How often due routines are checked. */
 const TICK_MS = 5_000
@@ -26,7 +26,7 @@ export type SchedulerLog = (level: 'info' | 'warn' | 'error', message: string, m
  * sending into a session. A rejection (for example an unknown or disabled bot)
  * records `lastError` on the routine; a resolved call counts as a run.
  */
-export type RoutineWake = (routine: RoutineRecord) => void | Promise<void>
+export type RoutineWake = (routine: RoutineRecord, text?: string) => void | Promise<void>
 
 export interface CreateSchedulerOptions {
   /** JSON state file holding `{ version: 1, routines: [...] }`. */
@@ -80,7 +80,8 @@ export interface Scheduler {
   flush(): Promise<void>
   list(botId?: string): RoutineListResult
   create(input: RoutineCreateParams): RoutineRecord
-  update(id: string, state: 'active' | 'paused'): RoutineRecord
+  update(id: string, patch: import('../../protocol/methods/routine.mts').RoutineUpdateParams): RoutineRecord
+  todoChanged(changes: readonly { todoId: string; event: string; author: string }[]): Promise<void>
   run(id: string): RoutineRecord
   remove(id: string): void
   /**
@@ -123,7 +124,9 @@ function readRecord(value: unknown): RoutineRecord | undefined {
     typeof record.id !== 'string'
     || typeof record.botId !== 'string'
     || typeof record.prompt !== 'string'
-    || typeof record.intervalMinutes !== 'number'
+    || (record.intervalMinutes !== undefined && typeof record.intervalMinutes !== 'number')
+    || (record.on !== undefined && record.on !== 'todo')
+    || (record.match !== undefined && (!Array.isArray(record.match) || record.match.some(item => typeof item !== 'string')))
     || typeof record.createdAt !== 'string'
     || typeof record.runCount !== 'number'
     || (record.state !== 'active' && record.state !== 'paused' && record.state !== 'finished' && record.state !== 'failed')
@@ -135,7 +138,8 @@ function readRecord(value: unknown): RoutineRecord | undefined {
     id: record.id,
     botId: record.botId,
     prompt: record.prompt,
-    intervalMinutes: record.intervalMinutes,
+    ...(typeof record.intervalMinutes === 'number' ? { intervalMinutes: record.intervalMinutes } : {}),
+    ...(record.on === 'todo' ? { on: 'todo', match: record.match as string[] } : {}),
     // A routine an older store ended (finished or failed) comes back paused.
     state: record.state === 'active' ? 'active' : 'paused',
     createdAt: record.createdAt,
@@ -152,6 +156,12 @@ function readRecord(value: unknown): RoutineRecord | undefined {
  * in memory, persists every mutation through one serialized write chain, and a
  * 5 second timer wakes each due routine's owning bot agent.
  */
+function ruleMatches(rule: string, event: string): boolean {
+  if (rule === event) return true
+  const wildcard = /^([+-][^*]+)\*$/u.exec(rule)
+  return wildcard !== null && event.startsWith(wildcard[1]!)
+}
+
 export function createScheduler(options: CreateSchedulerOptions): Scheduler {
   const { statePath, wake, log, workspaceRoot, canRun, busy, routinesDir } = options
   /** The latest routine files per bot, applied again after the store loads. */
@@ -177,12 +187,18 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
   async function writeState(records: RoutineRecord[], associations: Map<string, string>): Promise<void> {
     await mkdir(dirname(statePath), { recursive: true })
     const tempPath = `${statePath}.${process.pid}.${randomUUID()}.tmp`
-    const known = new Set(records.map(record => record.id))
+    const persisted = records.filter(record => record.intervalMinutes !== undefined).map(record => {
+      const copy = copyRecord(record)
+      delete copy.on
+      delete copy.match
+      return copy
+    })
+    const known = new Set(persisted.map(record => record.id))
     const workspaces: Record<string, string> = {}
     for (const [id, root] of associations) {
       if (known.has(id)) workspaces[id] = root
     }
-    const payload = JSON.stringify({ version: 1, routines: records, workspaces } satisfies SchedulerStateFile)
+    const payload = JSON.stringify({ version: 1, routines: persisted, workspaces } satisfies SchedulerStateFile)
     try {
       await writeFile(tempPath, payload, 'utf-8')
       await rename(tempPath, statePath)
@@ -304,6 +320,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
       const dueIds = routines
         .filter(record =>
           recordWorkspace(record) === workspaceRoot
+          && record.intervalMinutes !== undefined
           && record.state === 'active'
           && record.nextRunAt !== undefined
           && Date.parse(record.nextRunAt) <= now)
@@ -348,7 +365,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
           // A wake rejection (unknown or disabled bot) skips the run, records
           // the failure and retries on the next interval.
           after.lastError = wakeError instanceof Error ? wakeError.message : String(wakeError)
-          after.nextRunAt = new Date(fireAt.getTime() + after.intervalMinutes * 60_000).toISOString()
+          if (after.intervalMinutes !== undefined) after.nextRunAt = new Date(fireAt.getTime() + after.intervalMinutes * 60_000).toISOString()
           changed = true
           log?.('warn', `scheduler failed to wake bot ${after.botId} for routine ${after.id}`, wakeError)
           continue
@@ -358,7 +375,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         after.runCount += 1
         after.lastRunAt = fireAt.toISOString()
         delete after.lastError
-        after.nextRunAt = new Date(fireAt.getTime() + after.intervalMinutes * 60_000).toISOString()
+        if (after.intervalMinutes !== undefined) after.nextRunAt = new Date(fireAt.getTime() + after.intervalMinutes * 60_000).toISOString()
         changed = true
         log?.('info', `scheduler fired routine ${after.id} for bot ${after.botId}`)
       }
@@ -374,7 +391,8 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     void writeRoutine(routinesDir(record.botId), {
       id: record.id,
       ...(record.name === undefined ? {} : { name: record.name }),
-      intervalMinutes: record.intervalMinutes,
+      ...(record.intervalMinutes === undefined ? {} : { intervalMinutes: record.intervalMinutes }),
+      ...(record.on === undefined ? {} : { on: record.on, match: record.match }),
       state: record.state,
       prompt: record.prompt,
     }).catch(error => log?.('warn', `scheduler could not write routine file ${record.id}`, error))
@@ -392,7 +410,6 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     let changed = false
     for (const record of owned) {
       if (wanted.has(record.id)) continue
-      if (routinesDir !== undefined && existsSync(join(routinesDir(botId), `${record.id}.md`))) continue
       routines = routines.filter(candidate => candidate !== record)
       routineWorkspaces.delete(record.id)
       changed = true
@@ -403,17 +420,18 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         log?.('warn', `routine ${file.id} of bot ${botId} clashes with a routine of bot ${record.botId}; skipped`)
         continue
       }
-      const next = new Date(now + file.intervalMinutes * 60_000).toISOString()
+      const next = file.intervalMinutes === undefined ? undefined : new Date(now + file.intervalMinutes * 60_000).toISOString()
       if (record === undefined) {
         routines.push({
           id: file.id,
           botId,
           ...(file.name === undefined ? {} : { name: file.name }),
           prompt: file.prompt,
-          intervalMinutes: file.intervalMinutes,
+          ...(file.intervalMinutes === undefined ? {} : { intervalMinutes: file.intervalMinutes }),
+          ...(file.on === undefined ? {} : { on: file.on, match: file.match }),
           state: file.state,
           createdAt: new Date(now).toISOString(),
-          ...(file.state === 'active' ? { nextRunAt: next } : {}),
+          ...(file.state === 'active' && next !== undefined ? { nextRunAt: next } : {}),
           runCount: 0,
         })
         routineWorkspaces.set(file.id, workspaceRoot)
@@ -421,20 +439,26 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         continue
       }
       const before = JSON.stringify(record)
+      const priorInterval = record.intervalMinutes
       record.prompt = file.prompt
+      if (file.intervalMinutes === undefined) delete record.intervalMinutes
+      else record.intervalMinutes = file.intervalMinutes
+      if (file.on === undefined) { delete record.on; delete record.match }
+      else { record.on = file.on; record.match = file.match }
       if (file.name === undefined) delete record.name
       else record.name = file.name
-      if (record.intervalMinutes !== file.intervalMinutes) {
-        record.intervalMinutes = file.intervalMinutes
-        if (record.nextRunAt !== undefined && Date.parse(record.nextRunAt) > Date.parse(next)) record.nextRunAt = next
+      if (priorInterval !== file.intervalMinutes && file.intervalMinutes !== undefined
+        && record.nextRunAt !== undefined && next !== undefined && Date.parse(record.nextRunAt) > Date.parse(next)) {
+        record.nextRunAt = next
       }
+      if (file.intervalMinutes === undefined) delete record.nextRunAt
       if (file.state === 'paused') {
         record.state = 'paused'
       } else if (record.state !== 'active') {
         record.state = 'active'
-        if (record.nextRunAt === undefined || Date.parse(record.nextRunAt) <= now) record.nextRunAt = next
+        if (next !== undefined && (record.nextRunAt === undefined || Date.parse(record.nextRunAt) <= now)) record.nextRunAt = next
       } else if (record.nextRunAt === undefined) {
-        record.nextRunAt = next
+        if (next !== undefined) record.nextRunAt = next
       }
       if (JSON.stringify(record) !== before) changed = true
     }
@@ -499,24 +523,22 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
       const prompt = input.prompt.trim()
       if (prompt.length === 0) throw new Error('prompt must not be empty')
       if (prompt.length > MAX_PROMPT_LENGTH) throw new Error(`prompt must be at most ${MAX_PROMPT_LENGTH} characters`)
-      if (!Number.isInteger(input.intervalMinutes)
-        || input.intervalMinutes < MIN_INTERVAL_MINUTES
-        || input.intervalMinutes > MAX_INTERVAL_MINUTES) {
-        throw new Error(`intervalMinutes must be an integer between ${MIN_INTERVAL_MINUTES} and ${MAX_INTERVAL_MINUTES}`)
-      }
+      const definition: RoutineDefinition = { id: nextId(), ...(input.name === undefined ? {} : { name: input.name }), ...(input.intervalMinutes === undefined ? {} : { intervalMinutes: input.intervalMinutes }), ...(input.on === undefined ? {} : { on: input.on }), ...(input.match === undefined ? {} : { match: input.match }), state: 'active', prompt }
+      const valid = validateRoutine(definition)
       const activeCount = routines.filter(record => record.botId === input.botId).length
       if (activeCount >= MAX_PER_BOT) throw new Error(`routine limit reached (${MAX_PER_BOT} per bot)`)
       const now = new Date()
       const name = input.name?.trim()
       const record: RoutineRecord = {
-        id: nextId(),
+        id: valid.id,
         botId: input.botId,
         ...(name !== undefined && name !== '' ? { name } : {}),
         prompt,
-        intervalMinutes: input.intervalMinutes,
+        ...(valid.intervalMinutes === undefined ? {} : { intervalMinutes: valid.intervalMinutes }),
+        ...(valid.on === undefined ? {} : { on: valid.on, match: valid.match }),
         state: 'active',
         createdAt: now.toISOString(),
-        nextRunAt: new Date(now.getTime() + input.intervalMinutes * 60_000).toISOString(),
+        ...(valid.intervalMinutes === undefined ? {} : { nextRunAt: new Date(now.getTime() + valid.intervalMinutes * 60_000).toISOString() }),
         runCount: 0,
       }
       routines.push(record)
@@ -526,23 +548,65 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
       saveFile(record)
       return copyRecord(record)
     },
-    update(id: string, state: 'active' | 'paused'): RoutineRecord {
+    update(id: string, patch: import('../../protocol/methods/routine.mts').RoutineUpdateParams): RoutineRecord {
       const record = findRecord(id)
+      if (patch.intervalMinutes !== undefined && (patch.on !== undefined || patch.match !== undefined)) {
+        throw new Error('on/match and intervalMinutes are mutually exclusive')
+      }
+      if (patch.match !== undefined && patch.on === undefined && record.on === undefined) {
+        throw new Error('match requires an event routine')
+      }
+      const definition = validateRoutine({
+        id: record.id,
+        ...(patch.name ?? record.name ? { name: patch.name ?? record.name } : {}),
+        ...(patch.intervalMinutes !== undefined
+          ? { intervalMinutes: patch.intervalMinutes }
+          : patch.on !== undefined ? { on: patch.on, match: patch.match ?? (patch.on === record.on ? record.match : undefined) }
+            : record.on !== undefined ? { on: record.on, match: patch.match ?? record.match }
+              : { intervalMinutes: record.intervalMinutes }),
+        state: patch.state ?? record.state,
+        prompt: patch.prompt ?? record.prompt,
+      })
+      record.prompt = definition.prompt
+      if (definition.name === undefined) delete record.name
+      else record.name = definition.name
+      if (definition.intervalMinutes === undefined) { delete record.intervalMinutes; delete record.nextRunAt }
+      else record.intervalMinutes = definition.intervalMinutes
+      if (definition.on === undefined) { delete record.on; delete record.match }
+      else { record.on = definition.on; record.match = definition.match }
+      const state = patch.state ?? record.state
       if (state === 'paused') {
         record.state = 'paused'
       } else {
         record.state = 'active'
         const due = record.nextRunAt === undefined ? Number.NaN : Date.parse(record.nextRunAt)
         if (record.nextRunAt === undefined || due <= Date.now()) {
-          record.nextRunAt = new Date(Date.now() + record.intervalMinutes * 60_000).toISOString()
+          if (record.intervalMinutes !== undefined) record.nextRunAt = new Date(Date.now() + record.intervalMinutes * 60_000).toISOString()
         }
       }
       persist()
       saveFile(record)
       return copyRecord(record)
     },
+    async todoChanged(changes): Promise<void> {
+      if (stopped || canRun?.() === false) return
+      const candidates = routines.filter(record => recordWorkspace(record) === workspaceRoot
+        && record.state === 'active' && record.on === 'todo' && record.match !== undefined)
+      for (const record of candidates) {
+        const selected = record.match!.flatMap(matched => {
+          const change = changes.find(item => item.author !== record.botId && ruleMatches(matched, item.event))
+          return change === undefined ? [] : [{ change, matched }]
+        })[0]
+        if (selected === undefined || stopped || canRun?.() === false) continue
+        const transient = copyRecord(record)
+        const text = `[wake:todo ${selected.change.todoId} ${selected.matched} by ${selected.change.author}] ${record.prompt}`
+        try { await wake(transient, text) }
+        catch (error) { log?.('warn', `scheduler failed to wake bot ${record.botId} for todo event`, error) }
+      }
+    },
     run(id: string): RoutineRecord {
       const record = findRecord(id)
+      if (record.intervalMinutes === undefined) throw new Error('event routines cannot be run by timer')
       record.state = 'active'
       delete record.lastError
       record.nextRunAt = new Date().toISOString()

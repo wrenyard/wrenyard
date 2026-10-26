@@ -43,14 +43,17 @@ const routineStateSchema = {
 
 const routineRecordSchema = {
   type: 'object',
-  required: ['id', 'botId', 'prompt', 'intervalMinutes', 'state', 'createdAt', 'runCount'],
+  required: ['id', 'botId', 'prompt', 'state', 'createdAt', 'runCount'],
   additionalProperties: false,
+  anyOf: [{ required: ['intervalMinutes'] }, { required: ['on', 'match'] }],
   properties: {
     id: routineIdSchema,
     botId: botIdSchema,
     name: { type: 'string', minLength: 1, maxLength: 64 },
     prompt: { type: 'string', minLength: 1, maxLength: 4000 },
     intervalMinutes: { type: 'integer', minimum: 1, maximum: 10080 },
+    on: { type: 'string', enum: ['todo'] },
+    match: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
     state: routineStateSchema,
     createdAt: { type: 'string', minLength: 1 },
     nextRunAt: { type: 'string', minLength: 1 },
@@ -73,11 +76,15 @@ export const routineListResultSchema = {
 
 export const routineCreateParamsSchema = {
   description: 'Create one routine owned by a bot.',
-  type: 'object', required: ['botId', 'prompt', 'intervalMinutes'], additionalProperties: false,
+  type: 'object', required: ['botId', 'prompt'], additionalProperties: false,
+  anyOf: [{ required: ['intervalMinutes'] }, { required: ['on', 'match'] }],
+  not: { required: ['intervalMinutes', 'on'] },
   properties: {
     botId: botIdSchema,
     prompt: { type: 'string', minLength: 1, maxLength: 4000 },
     intervalMinutes: { type: 'integer', minimum: 1, maximum: 10080 },
+    on: { type: 'string', enum: ['todo'] },
+    match: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
     name: { type: 'string', minLength: 1, maxLength: 64 },
   },
 } as const satisfies JsonSchema
@@ -89,10 +96,20 @@ export const routineCreateResultSchema = {
 
 export const routineUpdateParamsSchema = {
   description: 'Pause or resume one routine.',
-  type: 'object', required: ['id', 'state'], additionalProperties: false,
+  type: 'object', required: ['id'], additionalProperties: false,
+  anyOf: [
+    { required: ['state'] }, { required: ['prompt'] }, { required: ['name'] },
+    { required: ['intervalMinutes'] }, { required: ['on', 'match'] }, { required: ['match'] },
+  ],
+  not: { required: ['intervalMinutes', 'on'] },
   properties: {
     id: routineIdSchema,
     state: { type: 'string', enum: ['active', 'paused'] },
+    prompt: { type: 'string', minLength: 1, maxLength: 4000 },
+    name: { type: 'string', minLength: 1, maxLength: 64 },
+    intervalMinutes: { type: 'integer', minimum: 1, maximum: 10080 },
+    on: { type: 'string', enum: ['todo'] },
+    match: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
   },
 } as const satisfies JsonSchema
 export const routineUpdateResultSchema = {

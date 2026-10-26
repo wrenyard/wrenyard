@@ -167,6 +167,7 @@ export interface TodoUpdateInput {
 
 export interface TodoTagMutationResult { tags: string[]; changed: boolean }
 export interface TodoCommentMutationResult { comments: TodoComment[]; changed: boolean }
+export type TodoChange = { todoId: string; event: string; author: string }
 
 /** Structured failure for todo operations, carrying a specific code. */
 export class WorkspaceTodoError extends Error {
@@ -180,6 +181,7 @@ export class WorkspaceTodoError extends Error {
 }
 
 export class WorkspaceTodoService {
+  private readonly todoChangeObservers = new Set<(changes: readonly TodoChange[]) => void>()
   private readonly workspaceRoot: string
   private readonly todosDir: string
   /** The disposable index path, or undefined when only the files are consulted. */
@@ -208,6 +210,18 @@ export class WorkspaceTodoService {
     // The index path is injected by the caller (the daemon points it at its own
     // local state), never derived from the workspace tree.
     this.indexDbPath = indexDbPath === undefined ? undefined : resolve(indexDbPath)
+  }
+
+  subscribeTodoChanges(observer: (changes: readonly TodoChange[]) => void): () => void {
+    this.todoChangeObservers.add(observer)
+    return () => this.todoChangeObservers.delete(observer)
+  }
+
+  private emitTodoChanges(changes: TodoChange[]): void {
+    if (changes.length === 0) return
+    for (const observer of this.todoChangeObservers) {
+      try { observer(changes) } catch { /* observers cannot fail a completed mutation */ }
+    }
   }
 
   /** Every todo currently on disk, ordered by id. Unparseable files are skipped. */
@@ -274,8 +288,8 @@ export class WorkspaceTodoService {
   }
 
   /** Update an existing todo; id and created are preserved, updated refreshed. */
-  async updateTodo(input: TodoUpdateInput): Promise<Todo> {
-    return this.withLock(async () => {
+  async updateTodo(input: TodoUpdateInput, author = 'user'): Promise<Todo> {
+    const result = await this.withLock(async () => {
       const filePath = this.todoPath(input.id)
       const current = await this.readTodoFile(filePath, input.id)
       assertDescriptionCurrent(input.title, input.old_title, current.title, 'title', current.id)
@@ -295,12 +309,15 @@ export class WorkspaceTodoService {
       await this.assertDependenciesKnownLocked(next)
       this.writeTodo(filePath, next)
       await this.refreshIndexLocked()
-      return next
+      const events: TodoChange[] = current.status === next.status ? [] : [{ todoId: next.id, event: `status:${next.status}`, author }]
+      return { todo: next, events }
     })
+    this.emitTodoChanges(result.events)
+    return result.todo
   }
 
-  async addTodoTags(id: string, tags: string[]): Promise<TodoTagMutationResult> {
-    return this.withLock(async () => {
+  async addTodoTags(id: string, tags: string[], author = 'user'): Promise<TodoTagMutationResult> {
+    const result = await this.withLock(async () => {
       const filePath = this.todoPath(id)
       const todo = await this.readTodoFile(filePath, id)
       const additions = requireTags(tags, id)
@@ -309,12 +326,14 @@ export class WorkspaceTodoService {
       const changed = nextTags.length !== todo.tags.length
       if (changed) this.writeTodo(filePath, { ...todo, tags: nextTags, updated: new Date().toISOString() })
       await this.refreshIndexLocked()
-      return { tags: nextTags, changed }
+      return { result: { tags: nextTags, changed }, events: additions.filter(tag => !todo.tags.includes(tag)).map(tag => ({ todoId: id, event: `+${tag}`, author })) }
     })
+    this.emitTodoChanges(result.events)
+    return result.result
   }
 
-  async removeTodoTag(id: string, tag: string): Promise<TodoTagMutationResult> {
-    return this.withLock(async () => {
+  async removeTodoTag(id: string, tag: string, author = 'user'): Promise<TodoTagMutationResult> {
+    const result = await this.withLock(async () => {
       const filePath = this.todoPath(id)
       const todo = await this.readTodoFile(filePath, id)
       const target = requireTag(tag, id)
@@ -322,20 +341,24 @@ export class WorkspaceTodoService {
       const changed = tags.length !== todo.tags.length
       if (changed) this.writeTodo(filePath, { ...todo, tags, updated: new Date().toISOString() })
       await this.refreshIndexLocked()
-      return { tags, changed }
+      return { result: { tags, changed }, events: changed ? [{ todoId: id, event: `-${target}`, author }] : [] }
     })
+    this.emitTodoChanges(result.events)
+    return result.result
   }
 
   async appendTodoComment(id: string, author: string, text: string): Promise<TodoCommentMutationResult> {
-    return this.withLock(async () => {
+    const result = await this.withLock(async () => {
       const filePath = this.todoPath(id)
       const todo = await this.readTodoFile(filePath, id)
       const comment: TodoComment = { id: this.nextCommentId(todo.comments), author: requireCommentAuthor(author, id), at: new Date().toISOString(), text }
       const comments = [...todo.comments, comment]
       this.writeTodo(filePath, { ...todo, comments, updated: new Date().toISOString() })
       await this.refreshIndexLocked()
-      return { comments, changed: true }
+      return { result: { comments, changed: true }, event: { todoId: id, event: 'comment', author: comment.author } }
     })
+    this.emitTodoChanges([result.event])
+    return result.result
   }
 
   async deleteTodoComment(id: string, commentId: string, author: string): Promise<TodoCommentMutationResult> {

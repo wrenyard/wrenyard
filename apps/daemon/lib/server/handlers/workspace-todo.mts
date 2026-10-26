@@ -37,9 +37,9 @@ export interface WorkspaceTodoHandlerService {
   getLastSkippedTodoFiles(): NonNullable<TodoListResult['skipped']>
   getTodo(id: string): Promise<Todo>
   createTodo(input: TodoCreateInput): Promise<Todo>
-  updateTodo(input: TodoUpdateInput): Promise<Todo>
-  addTodoTags(id: string, tags: string[]): Promise<TodoTagMutationResult>
-  removeTodoTag(id: string, tag: string): Promise<TodoTagMutationResult>
+  updateTodo(input: TodoUpdateInput, author?: string): Promise<Todo>
+  addTodoTags(id: string, tags: string[], author?: string): Promise<TodoTagMutationResult>
+  removeTodoTag(id: string, tag: string, author?: string): Promise<TodoTagMutationResult>
   appendTodoComment(id: string, author: string, text: string): Promise<TodoCommentMutationResult>
   deleteTodoComment(id: string, commentId: string, author: string): Promise<TodoCommentMutationResult>
 }
@@ -93,17 +93,17 @@ export function registerWorkspaceTodoHandlers(router: RpcRouter, service?: Works
   })
   router.register('todo.update', async (params: TodoUpdateParams) => {
     try {
-      return { todo: await service.updateTodo(params) } satisfies TodoUpdateResult
+      return { todo: await service.updateTodo(params, 'user') } satisfies TodoUpdateResult
     } catch (error) {
       throw mapServiceError(error, 'workspace-todo', 'todo_error')
     }
   })
   router.register('todo.tag', async (params: TodoAddTagsInput) => {
-    try { return await service.addTodoTags(params.id, params.tags) satisfies TodoTagResult }
+    try { return await service.addTodoTags(params.id, params.tags, 'user') satisfies TodoTagResult }
     catch (error) { throw mapServiceError(error, 'workspace-todo', 'todo_error') }
   })
   router.register('todo.untag', async (params: TodoRemoveTagInput) => {
-    try { return await service.removeTodoTag(params.id, params.tag) satisfies TodoTagResult }
+    try { return await service.removeTodoTag(params.id, params.tag, 'user') satisfies TodoTagResult }
     catch (error) { throw mapServiceError(error, 'workspace-todo', 'todo_error') }
   })
   router.register('todo.comment', async (params: TodoAppendCommentInput) => {

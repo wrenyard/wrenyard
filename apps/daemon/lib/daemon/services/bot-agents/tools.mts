@@ -255,6 +255,8 @@ const ROUTINE_TOOL: ToolSpec = {
       name: { type: 'string', description: 'Short routine name.' },
       text: { type: 'string', description: 'The trigger text the routine wakes you with.' },
       intervalMinutes: { type: 'integer', description: 'Minutes between runs (1 to 10080); required to create.' },
+      on: { type: 'string', enum: ['todo'], description: 'Event integration trigger.' },
+      match: { type: 'array', items: { type: 'string' }, description: 'Todo event rules; required with on.' },
       state: { type: 'string', enum: ['active', 'paused'], description: 'New routines start active.' },
     },
     required: ['op'],
@@ -618,7 +620,7 @@ async function runTodoTool(
       if (Object.hasOwn(args, 'author')) return failed('author is not a supported todo argument')
       const id = requireString(args, 'id', 'set_status requires id')
       const status = requireString(args, 'status', 'set_status requires status')
-      const todo = await deps.todos.updateTodo({ id, status: status as TodoStatus })
+      const todo = await deps.todos.updateTodo({ id, status: status as TodoStatus }, ctx.botId)
       return done({ id: todo.id, status: todo.status })
     }
     case 'update': {
@@ -643,7 +645,7 @@ async function runTodoTool(
         ...(dependsOn === undefined ? {} : { depends_on: dependsOn }),
         ...(attachments === undefined ? {} : { attachments }),
       }
-      const todo = await deps.todos.updateTodo(input)
+      const todo = await deps.todos.updateTodo(input, ctx.botId)
       return done({ id, status: todo.status })
     }
     case 'comment': {
@@ -665,13 +667,13 @@ async function runTodoTool(
         if (typeof tag !== 'string') throw new Error('tags must contain only strings')
         return tag
       }) : [requireString(args, 'tag', 'tag requires tag or tags')]
-      return done(await deps.todos.addTodoTags(id, tags))
+      return done(await deps.todos.addTodoTags(id, tags, ctx.botId))
     }
     case 'untag': {
       if (Object.hasOwn(args, 'author')) return failed('author is not a supported todo argument')
       const id = requireString(args, 'id', 'untag requires id')
       const tag = requireString(args, 'tag', 'untag requires tag')
-      return done(await deps.todos.removeTodoTag(id, tag))
+      return done(await deps.todos.removeTodoTag(id, tag, ctx.botId))
     }
     default:
       return failed(`unsupported todo op: ${String(args.op)}`)
@@ -799,28 +801,47 @@ async function writeOwnRoutine(
   const name = optionalString(args, 'name')
   const prompt = optionalString(args, 'text')
   const interval = args.intervalMinutes
+  const on = optionalString(args, 'on')
+  const hasOn = Object.prototype.hasOwnProperty.call(args, 'on')
+  const hasMatch = Object.prototype.hasOwnProperty.call(args, 'match')
+  const match = args.match
+  if (hasOn && on === undefined) throw new Error('on must be a string')
+  if (on !== undefined && on !== 'todo') throw new Error('only on: todo is supported')
+  if (match !== undefined && (!Array.isArray(match) || match.some(item => typeof item !== 'string'))) throw new Error('match must be an array of strings')
   if (interval !== undefined && typeof interval !== 'number') throw new Error('intervalMinutes must be an integer')
+  if (interval !== undefined && (hasOn || hasMatch)) throw new Error('on/match and intervalMinutes are mutually exclusive')
   const state = optionalString(args, 'state')
   if (state !== undefined && state !== 'active' && state !== 'paused') throw new Error('state must be active or paused')
   if (id === undefined) {
     if (prompt === undefined) throw new Error('create requires text')
-    if (interval === undefined) throw new Error('create requires intervalMinutes')
+    if ((interval === undefined) === (on === undefined)) throw new Error('create requires intervalMinutes or on with match')
+    if (on !== undefined && match === undefined) throw new Error('on: todo requires match')
     return await writeRoutine(ctx.routinesDir, {
       id: newRoutineId(existing.map(routine => routine.id)),
       ...(name === undefined ? {} : { name }),
-      intervalMinutes: interval,
+      ...(interval === undefined ? {} : { intervalMinutes: interval }),
+      ...(on === undefined ? {} : { on, match: match as string[] }),
       state: state ?? 'active',
       prompt,
     })
   }
   const current = requireRoutineId(id, read)
-  return await writeRoutine(ctx.routinesDir, {
+  if (hasMatch && !hasOn && current.on !== 'todo') throw new Error('match requires an event routine')
+  if (hasOn && on === 'todo' && !hasMatch && current.on !== 'todo') throw new Error('switching to on: todo requires match')
+  const switchingToInterval = interval !== undefined
+  const switchingToEvent = hasOn && on === 'todo'
+  const updated: RoutineDefinition = {
     ...current,
     ...(name === undefined ? {} : { name }),
-    ...(interval === undefined ? {} : { intervalMinutes: interval }),
+    ...(switchingToInterval ? { intervalMinutes: interval as number } : {}),
+    ...(switchingToEvent ? { on } : {}),
+    ...(hasMatch ? { match: match as string[] } : {}),
     ...(state === undefined ? {} : { state }),
     ...(prompt === undefined ? {} : { prompt }),
-  })
+  }
+  if (switchingToInterval) { delete updated.on; delete updated.match }
+  if (switchingToEvent) delete updated.intervalMinutes
+  return await writeRoutine(ctx.routinesDir, updated)
 }
 
 /**

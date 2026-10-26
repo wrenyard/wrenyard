@@ -97,6 +97,8 @@ interface Wake {
   id: string
   botId: string
   source: WakeSource
+  /** Todo-trigger wakes are transient and must never enter persisted snapshots. */
+  transient?: boolean
   /** The exact text the bot turn is started with. */
   text: string
   /** The routine that fired this wake, read by the per-routine busy gate. */
@@ -282,7 +284,7 @@ export interface BotAgentKernel {
   wake(id: string, text: string): { queued: number }
   /** Drop every watch of one session, in memory and in the persisted state. */
   removeWatches(sessionId: string): void
-  wakeRoutine(routine: RoutineRecord): Promise<void>
+  wakeRoutine(routine: RoutineRecord, text?: string): Promise<void>
   routineBusy(routine: RoutineRecord): boolean
   /** Read one bounded page of the shared group transcript. */
   groupEvents(input: GroupEventsInput): GroupEventsPage
@@ -439,6 +441,7 @@ function emptyState(): KernelState {
 
 function readWake(value: unknown): Wake | undefined {
   if (!isPlainObject(value)) return undefined
+  if (value.transient === true) return undefined
   const { id, botId, text, source } = value
   if (typeof id !== 'string' || typeof botId !== 'string' || typeof text !== 'string') return undefined
   if (source !== 'user' && source !== 'routine' && source !== 'session' && source !== 'message') return undefined
@@ -866,7 +869,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
 
   function enqueue(
     botId: string,
-    input: { source: WakeSource; text: string; routineId?: string; meta?: { sessionId: string; turn: number } },
+    input: { source: WakeSource; text: string; routineId?: string; meta?: { sessionId: string; turn: number }; transient?: boolean },
   ): Wake {
     const wake: Wake = {
       id: randomUUID(),
@@ -876,13 +879,21 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       createdAt: new Date().toISOString(),
       ...(input.routineId === undefined ? {} : { routineId: input.routineId }),
       ...(input.meta === undefined ? {} : { meta: input.meta }),
+      ...(input.transient === true ? { transient: true } : {}),
     }
     ensureBotState(botId).queue.push(wake)
     return wake
   }
 
   function persist(): void {
-    const payload = JSON.stringify(state)
+    const snapshot: KernelState = {
+      ...state,
+      bots: Object.fromEntries(Object.entries(state.bots).map(([id, bot]) => [id, {
+        ...bot,
+        queue: bot.queue.filter(wake => wake.transient !== true),
+      }])),
+    }
+    const payload = JSON.stringify(snapshot)
     const write = async (): Promise<void> => {
       await mkdir(options.stateDir, { recursive: true })
       const tempPath = `${statePath}.${process.pid}.${randomUUID()}.tmp`
@@ -1986,11 +1997,12 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       removeWatches(sessionId)
     },
 
-    async wakeRoutine(routine: RoutineRecord): Promise<void> {
+    async wakeRoutine(routine: RoutineRecord, text?: string): Promise<void> {
       const entry = requireBot(routine.botId)
       const wake = enqueue(entry.id, {
         source: 'routine',
-        text: `[wake:routine ${routine.id}] ${routine.prompt}`,
+        ...(routine.on === 'todo' ? { transient: true } : {}),
+        text: text ?? `[wake:routine ${routine.id}] ${routine.prompt}`,
         routineId: routine.id,
       })
       persist()

@@ -304,10 +304,20 @@ export const ROUTINE_STATE_VIEW: Record<RoutineState, { label: string; tone: 'ru
 };
 
 /** `每 N 分钟` for a routine. */
-export function frequencyText(intervalMinutes: number): string {
+export function frequencyText(intervalMinutes?: number, on?: string, match?: string[]): string {
+  if (on === 'todo') return `待办事件：${(match ?? []).map(todoMatchText).join('、')}`;
+  if (intervalMinutes === undefined) return '未设置触发条件';
   const unit = intervalMinutes % 1440 === 0 ? `${intervalMinutes / 1440} 天`
     : intervalMinutes % 60 === 0 ? `${intervalMinutes / 60} 小时`
       : `${intervalMinutes} 分钟`;
   return `每 ${unit}`;
+}
+
+function todoMatchText(rule: string): string {
+  if (rule === 'comment') return '新增评论';
+  if (rule.startsWith('status:')) return `状态变为 ${{ open: '未开始', in_progress: '进行中', done: '已完成', cancelled: '已取消' }[rule.slice(7)] ?? rule.slice(7)}`;
+  if (rule.startsWith('+')) return `添加标签 ${rule.slice(1)}`;
+  if (rule.startsWith('-')) return `移除标签 ${rule.slice(1)}`;
+  return rule;
 }
 
