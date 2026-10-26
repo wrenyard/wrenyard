@@ -1029,9 +1029,19 @@ async function createForemanDaemonResources(
   // persisted append + publish path now that the event store exists, and the
   // terminal task.run.* subscription is retained so a teardown can release it.
   const liveUsage = runtime.liveUsage
-  liveUsage.bindEmit((event) => {
-    gatewayEventStore.append(event)
-    return getForemanEventBus().publish(event)
+  liveUsage.bindEmit(async (event) => {
+    // The agent supervisor allocates each execution's event seqs itself, so a
+    // live usage row must stay out of that sequence: persist it without the
+    // execution ref (readers take data.executionId). A failed write or publish
+    // is logged and never escapes into the flush timer.
+    const refs = { ...event.refs }
+    delete refs.executionId
+    try {
+      gatewayEventStore.append({ ...event, refs })
+      await getForemanEventBus().publish(event)
+    } catch (error) {
+      writeDaemonLog('warn', 'live usage event dropped', { executionId: event.refs.executionId, error: String(error) })
+    }
   })
   const liveUsageUnsubscribe = getForemanEventBus().subscribe({
     handle: (event) => {
