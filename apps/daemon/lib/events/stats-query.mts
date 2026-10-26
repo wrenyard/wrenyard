@@ -466,7 +466,7 @@ function emptySealDayTotals(): SealDayTotals {
 const SQL_LOAD_SEAL_USAGE = `WITH usage AS MATERIALIZED (
        SELECT e.created_at,
               ${SQL_USAGE_JSON_ALIASES}
-       FROM events e
+       FROM events e INDEXED BY idx_event_type_created
        WHERE e.created_at >= ? AND e.created_at < ?
          AND e.type = 'turn_usage'
      )
@@ -477,7 +477,7 @@ const SQL_LOAD_SEAL_USAGE = `WITH usage AS MATERIALIZED (
      FROM usage`
 
 const SQL_LOAD_SEAL_DISPATCH = `SELECT e.created_at
-     FROM events e
+     FROM events e INDEXED BY idx_event_type_created
      WHERE e.created_at >= ? AND e.created_at < ?
        AND e.type = 'dispatch'`
 
@@ -617,7 +617,7 @@ export function readTodayStats(now = new Date()): DailyStatsResponse {
   const window = localDayWindow(now)
   const dispatchRow = dbGet<{ count: number }>(
     `SELECT COUNT(*) AS count
-    FROM events
+    FROM events INDEXED BY idx_event_type_created
     WHERE type = 'dispatch'
       AND created_at >= ?
       AND created_at < ?`,
@@ -626,7 +626,7 @@ export function readTodayStats(now = new Date()): DailyStatsResponse {
   )
   const usageRows = dbQuery<{ execution_id: string | null; data: string | null }>(
     `SELECT execution_id, data
-    FROM events
+    FROM events INDEXED BY idx_event_type_created
     WHERE type = 'turn_usage'
       AND created_at >= ?
       AND created_at < ?`,
@@ -652,7 +652,7 @@ export function readTodayStats(now = new Date()): DailyStatsResponse {
   // partition independently.
   const gatewayRows = dbQuery<{ created_at: string; data: string | null }>(
     `SELECT created_at, data
-    FROM events
+    FROM events INDEXED BY idx_event_type_created
     WHERE type = 'gateway.request.completed'
       AND created_at >= ?
       AND created_at < ?
@@ -859,7 +859,7 @@ function readStatsSummaryUncached(
     `WITH ev AS MATERIALIZED (
        SELECT e.execution_id, e.task_id, e.type, e.created_at,
               ${SQL_USAGE_JSON_ALIASES}
-       FROM events e
+       FROM events e INDEXED BY idx_event_type_created
        WHERE e.type IN ('dispatch', 'turn_usage', 'gateway.request.completed')
          AND e.created_at >= ? AND e.created_at < ?
      ),
@@ -903,7 +903,7 @@ function readStatsSummaryUncached(
                        AND json_extract(e.data, '$.output_tokens') >= 0
                   THEN 1 ELSE 0 END) AS has_out
        FROM run_exec re
-       LEFT JOIN events e ON e.execution_id = re.execution_id AND e.type = 'turn_usage'
+       LEFT JOIN events e INDEXED BY idx_event_exec_type ON e.execution_id = re.execution_id AND e.type = 'turn_usage'
        GROUP BY re.task_run_id
      )
      SELECT ev.type, ev.execution_id, re.task_run_id, ev.created_at,
