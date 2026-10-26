@@ -2,7 +2,7 @@ import type { Catalog, DispatchCandidate, DispatchPlan, LocalSpeedSample, ModelD
 import type { TaskDispatchRequirements } from '@wrenyard/auto-routing';
 import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, resolveModelSpeed, routingReferencePriceOf, explicitFreeAutoEligibility } from '@wrenyard/providers/catalog';
 import { excludedModelIdsFor, resolveConstrainedDispatch } from '@wrenyard/auto-routing';
-import { resolveHistoricalOfferedModelId, resolveRuntimeTaskPlans, mcpTransportsForClient, type ProviderRuntime } from '@wrenyard/providers'
+import { resolveHistoricalOfferedModelId, resolveRuntimeTaskPlans, type ProviderRuntime } from '@wrenyard/providers'
 import { isMainstreamModelId } from '@wrenyard/models'
 import type { TaskResolvedDispatch } from '@wrenyard/protocol'
 import {
@@ -395,15 +395,6 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
           return atGate('no_available_provider', 'text_input_unsupported')
         }
         return atGate('no_available_provider')
-      }
-    }
-
-    const requiredMcpTransports = requirements.requiredMcpTransports ?? []
-    if (requiredMcpTransports.length > 0) {
-      const supported = mcpTransportsForClient(candidate.client)
-      const unsatisfied = requiredMcpTransports.some((transport) => !supported.includes(transport))
-      if (unsatisfied) {
-        return atGate('no_available_provider', 'mcp_transport_unsupported')
       }
     }
 

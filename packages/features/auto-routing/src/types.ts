@@ -308,10 +308,6 @@ export interface TaskDispatchRequirements {
   maxOutputUsdPerMillion?: number;
   /** Required input support. Missing/unknown model support fails admission. */
   requiredCapabilities?: readonly ModelCapability[];
-  /** Required MCP server transports the dispatched client must support. A
-   * candidate whose client cannot host every listed transport is eliminated;
-   * absent or empty imposes no transport constraint. */
-  requiredMcpTransports?: readonly ('stdio' | 'http')[];
   excludeModelIds?: readonly string[];
   excludeProfileIds?: readonly string[];
   excludeClientIds?: readonly string[];

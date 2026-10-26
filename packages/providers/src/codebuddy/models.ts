@@ -125,7 +125,6 @@ export const codeBuddyClient: ClientDefinition = {
   nativeProvider: 'codebuddy',
   gatewayProtocols: [],
   taskCapable: true,
-  mcpTransports: ['stdio', 'http'],
 };
 
 /**

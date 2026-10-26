@@ -54,7 +54,6 @@ export const TASK_RESOLUTION_FAILURE_DETAILS = [
   'web_search_unsupported',
   'image_input_unsupported',
   'text_input_unsupported',
-  'mcp_transport_unsupported',
 ] as const
 
 export type TaskResolutionFailureDetail = (typeof TASK_RESOLUTION_FAILURE_DETAILS)[number]
@@ -68,7 +67,6 @@ export const TASK_RESOLUTION_FAILURE_DETAIL_MESSAGES: Readonly<Record<TaskResolu
   web_search_unsupported: '不支持联网搜索',
   image_input_unsupported: '不支持图片输入',
   text_input_unsupported: '不支持文本输入',
-  mcp_transport_unsupported: '不支持所需的 MCP 传输',
 }
 
 /** Fixed stable tie-break order; also the schema/union order on the wire. */
