@@ -70,7 +70,7 @@ export type { AgentModelRoute } from './tools.mts'
 /** How often the config directory is polled for new, changed or removed files. */
 const CONFIG_POLL_MS = 5_000
 /** Default page size of the shared group transcript. */
-const GROUP_PAGE_SIZE = 100
+const GROUP_PAGE_SIZE = 200
 /** Hard cap on one group transcript page. */
 const GROUP_PAGE_MAX = 500
 /** How many published reply source keys are remembered for deduplication. */
@@ -294,12 +294,19 @@ export interface BotAgentKernel {
 
 export interface GroupEventsInput {
   afterSeq?: number
+  beforeSeq?: number
+  latest?: boolean
   limit?: number
 }
 
 export interface GroupEventsPage {
   messages: GroupMessage[]
+  firstSeq: number
   lastSeq: number
+  earliestSeq: number
+  latestSeq: number
+  hasMoreBefore: boolean
+  hasMoreAfter: boolean
 }
 
 export interface GroupSendResult {
@@ -1946,21 +1953,54 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     },
 
     groupEvents(input: GroupEventsInput): GroupEventsPage {
-      const afterSeq = typeof input.afterSeq === 'number' && Number.isInteger(input.afterSeq) && input.afterSeq > 0
-        ? input.afterSeq
-        : 0
+      const all = state.group.messages
+      const latestSeq = state.group.seq
+      const rawAfter = input.afterSeq
+      const rawBefore = input.beforeSeq
+      const hasAfter = typeof rawAfter === 'number'
+      const hasBefore = typeof rawBefore === 'number'
+      const wantsLatest = input.latest === true
+      if ((hasAfter ? 1 : 0) + (hasBefore ? 1 : 0) + (wantsLatest ? 1 : 0) !== 1) {
+        throw new Error('group transcript read needs exactly one of afterSeq, beforeSeq or latest')
+      }
+      const afterSeq = hasAfter && Number.isInteger(rawAfter) && rawAfter > 0 ? rawAfter : 0
+      if (hasBefore && (!Number.isInteger(rawBefore) || rawBefore < 1)) {
+        throw new Error('group transcript beforeSeq must be an integer >= 1')
+      }
+      const beforeSeq = hasBefore ? rawBefore : 0
       const requested = typeof input.limit === 'number' && Number.isInteger(input.limit) && input.limit > 0
         ? input.limit
         : GROUP_PAGE_SIZE
       const limit = Math.min(GROUP_PAGE_MAX, requested)
-      const messages = state.group.messages
-        .filter(message => message.seq > afterSeq)
-        .slice(0, limit)
-        .map(toWireMessage)
+      // Window and watermark come from this one synchronous read; appends cannot interleave.
+      let start = 0
+      let end = 0
+      if (wantsLatest) {
+        end = all.length
+        start = Math.max(0, end - limit)
+      } else if (hasBefore) {
+        end = all.length
+        while (end > 0 && all[end - 1]!.seq >= beforeSeq) end -= 1
+        start = Math.max(0, end - limit)
+      } else {
+        while (start < all.length && all[start]!.seq <= afterSeq) start += 1
+        end = Math.min(all.length, start + limit)
+      }
+      const messages = all.slice(start, end).map(toWireMessage)
+      const firstSeq = messages.length > 0 ? messages[0]!.seq : 0
       const lastSeq = messages.length > 0
         ? messages[messages.length - 1]!.seq
-        : Math.min(afterSeq, state.group.seq)
-      return { messages, lastSeq }
+        : hasAfter ? Math.min(afterSeq, latestSeq) : 0
+      const earliestSeq = all.length > 0 ? all[0]!.seq : 0
+      return {
+        messages,
+        firstSeq,
+        lastSeq,
+        earliestSeq,
+        latestSeq,
+        hasMoreBefore: start > 0,
+        hasMoreAfter: end < all.length,
+      }
     },
 
     groupSend(text: string): GroupSendResult {

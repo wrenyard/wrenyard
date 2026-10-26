@@ -156,19 +156,28 @@ const groupMessageSchema = {
 } as const satisfies JsonSchema
 
 export const agentGroupEventsParamsSchema = {
-  description: 'Read one bounded page of the shared group transcript after a sequence number.',
-  type: 'object', required: ['afterSeq'], additionalProperties: false,
+  description: 'Read one bounded window of the shared group transcript: a forward page after a sequence, a backward page before a sequence, or the latest tail window. Exactly one of afterSeq/beforeSeq/latest must select the window.',
+  type: 'object', additionalProperties: false,
   properties: {
     afterSeq: { type: 'integer', minimum: 0 },
+    beforeSeq: { type: 'integer', minimum: 1 },
+    latest: { type: 'boolean' },
     limit: { type: 'integer', minimum: 1, maximum: 500 },
   },
 } as const satisfies JsonSchema
 export const agentGroupEventsResultSchema = {
-  description: 'The requested transcript page and the sequence of its last message.',
-  type: 'object', required: ['messages', 'lastSeq'], additionalProperties: false,
+  description: 'The requested transcript window, its boundary cursors and the transcript watermark from the same read.',
+  type: 'object',
+  required: ['messages', 'firstSeq', 'lastSeq', 'earliestSeq', 'latestSeq', 'hasMoreBefore', 'hasMoreAfter'],
+  additionalProperties: false,
   properties: {
     messages: { type: 'array', items: groupMessageSchema },
+    firstSeq: { type: 'integer', minimum: 0 },
     lastSeq: { type: 'integer', minimum: 0 },
+    earliestSeq: { type: 'integer', minimum: 0 },
+    latestSeq: { type: 'integer', minimum: 0 },
+    hasMoreBefore: { type: 'boolean' },
+    hasMoreAfter: { type: 'boolean' },
   },
 } as const satisfies JsonSchema
 

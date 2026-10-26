@@ -66,7 +66,9 @@ export function registerAgentHandlers(router: RpcRouter, options: AgentRpcHandle
     call(context, 'agent.wake', () => kernel.wake(params.id, params.text)))
   router.register('agent.group.events', (params, _message, context) =>
     call(context, 'agent.group.events', () => kernel.groupEvents({
-      afterSeq: params.afterSeq,
+      ...(params.afterSeq === undefined ? {} : { afterSeq: params.afterSeq }),
+      ...(params.beforeSeq === undefined ? {} : { beforeSeq: params.beforeSeq }),
+      ...(params.latest === undefined ? {} : { latest: params.latest }),
       ...(params.limit === undefined ? {} : { limit: params.limit }),
     })))
   router.register('agent.group.send', (params, _message, context) =>

@@ -132,12 +132,32 @@ export interface GroupMessage {
 }
 
 export interface AgentGroupEventsParams {
-  afterSeq: number
+  /** Forward page: entries with seq > afterSeq. Mutually exclusive with beforeSeq/latest. */
+  afterSeq?: number
+  /** Backward page: the newest entries with seq < beforeSeq. Mutually exclusive with afterSeq/latest. */
+  beforeSeq?: number
+  /** Tail snapshot: the newest entries. Mutually exclusive with afterSeq/beforeSeq. */
+  latest?: boolean
   limit?: number
 }
 export interface AgentGroupEventsResult {
+  /** Requested window in ascending seq order. */
   messages: GroupMessage[]
+  /** Seq of the first returned message, 0 when the window is empty. */
+  firstSeq: number
+  /**
+   * Seq of the last returned message; for an empty afterSeq page,
+   * min(afterSeq, latestSeq). This is a page cursor, not a transcript watermark.
+   */
   lastSeq: number
+  /** Oldest retained seq, 0 when the transcript is empty. */
+  earliestSeq: number
+  /** Highest seq assigned when this window was read; new entries after it are read with afterSeq. */
+  latestSeq: number
+  /** Older retained entries exist before firstSeq. */
+  hasMoreBefore: boolean
+  /** Newer retained entries exist after lastSeq. */
+  hasMoreAfter: boolean
 }
 
 export interface AgentGroupSendParams {
