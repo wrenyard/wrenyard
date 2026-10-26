@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import type { AgentRequest } from '@wrenyard/agent-client';
 import { claudeFamilyMcpConfig, resolveMcpServers } from '@wrenyard/agent-client/mcp';
 import { assertLaunch, clientStateDirForEnv, createOwnedClientRunHome, preserveClientRunHomeSessionSnapshot, stringEnv } from '@wrenyard/agent-client/native';
-import { registerRunHomeSessionPreserveSlot, type ProcessSpec } from '@wrenyard/execution';
+import type { ProcessSpec } from '@wrenyard/execution';
+import { registerRunHomeSessionPreserveSlot } from './session-preserve.ts';
 
 export async function launchCodeBuddy(request: AgentRequest, env: NodeJS.ProcessEnv, executable: string): Promise<ProcessSpec> {
     assertLaunch(request);
@@ -15,7 +16,7 @@ export async function launchCodeBuddy(request: AgentRequest, env: NodeJS.Process
     const ownedHome = await createOwnedClientRunHome(env, 'codebuddy');
     try {
     const preserveSlot = { snapshotDir: ownedHome.path, sessionId: '', preserveTo: '' };
-    const executionId = env.WRENYARD_EXECUTION_ID?.trim();
+    const executionId = request.executionId?.trim();
     if (executionId) registerRunHomeSessionPreserveSlot(executionId, preserveSlot);
     ownedHome.preserveSession = async (homePath, context) => {
         if (context?.success) return;

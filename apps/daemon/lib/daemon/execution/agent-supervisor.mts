@@ -1,10 +1,8 @@
-import { createAgentClients, type AgentEvent, type AgentRequest, type AgentSession } from '@wrenyard/clients';
-import { clientStateDirForEnv, messageEvent } from '@wrenyard/agent-client/native';
+import { createAgentClients, type AgentClient, type AgentEvent, type AgentRequest, type AgentSession } from '@wrenyard/clients';
+import { messageEvent } from '@wrenyard/agent-client/native';
 import { ExecService, type ExecRequest } from '@wrenyard/exec';
-import { armRunHomeSessionPreserve, clearRunHomeSessionPreserveSlot } from '../../../../../packages/execution/src/index.ts';
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
 import { delimiter, join } from 'node:path'
 import type { ForemanDatabase } from '../../db/types.mts'
 import { resolveWrenyardSuiteRoot } from '../../layout/suite-root.mts'
@@ -15,7 +13,7 @@ import { killProcessTree } from '../../adapters/shell/process.mts'
 import { redactDiagnosticText, redactEvent, redactJsonString } from './redaction.mts'
 import { RepoWriteLocks } from './repo-write-locks.mts'
 import { minimalRunFactsForTaskRun } from './run-facts.mts'
-import { desktopLane, DesktopLaneClosedError, toOperationIds, OperationAdapter, type PreparedOperations } from './operation-adapter.mts'
+import { desktopLane, DesktopLaneClosedError, toOperationIds, OperationAdapter } from './operation-adapter.mts'
 
 function summaryFromTerminalOutput(output: string | null | undefined): string | undefined {
   if (!output) return undefined
@@ -30,7 +28,6 @@ import { createBuiltinCatalog } from '@wrenyard/providers'
 import type {
   AgentExecutionHost,
   ClientFamily,
-  CodeBuddyExecutionBinding,
   ExecutionHandle,
   ExecutionRecord,
   ExecutionResult,
@@ -78,6 +75,7 @@ const CANCEL_SETTLEMENT_TIMEOUT_MS = 5_000
 const EXECUTIONS_LEGACY_PERMISSION = 'yolo'
 
 export interface AgentExecutionSupervisorOptions {
+  clients?: ReadonlyMap<string, AgentClient>
   canStartExecution?: () => { status: 'ok' | 'low' | 'unavailable'; availableBytes: number | null; minimumBytes: number; error: string | null }
   db: ForemanDatabase
   repoWriteLocks: RepoWriteLocks
@@ -176,9 +174,16 @@ interface RegistryEntry {
   repoWriteLock: boolean
   writePaths?: readonly string[]
   /** Private admission-only binding retained in memory while queued. */
-  codeBuddyExecution?: CodeBuddyExecutionBinding
+  admissionBinding?: StartExecutionOpts['executionAdmission']
+  /** Resolved agent client; retained so post-commit `finalize` can run. */
+  agentClient?: AgentClient
+  agentEnv?: NodeJS.ProcessEnv
+  finalization?: Promise<void>
+  clientStartDone?: Promise<void>
+  resolveClientStartDone?: () => void
+  clientStreamDone?: Promise<void>
+  resolveClientStreamDone?: () => void
   session?: AgentSession
-  releasePrepared?: () => Promise<void>
   pid?: number
   pgid?: number
   timeoutTimer?: ReturnType<typeof setTimeout>
@@ -215,10 +220,6 @@ interface RegistryEntry {
   finished?: Extract<AgentEvent, { type: 'finished' }>
   pendingNativeSessionId?: string
   pendingClientFamily?: ClientFamily
-  /** Native session resumed by this execution (`opts.resume`), when set. */
-  resumeSessionId?: string
-  /** Client family chosen at launch; used for codebuddy-only session snapshots. */
-  launchClientFamily?: ClientFamily
   pendingFailureClass?: string
   /** Resolved by the attempt-deadline (timeout) handler so a bounded
    *  stream-drain await converges at the deadline instead of hanging on a
@@ -262,12 +263,13 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
    *  close it on shutdown. A shared, externally supplied service is never
    *  closed here. */
   private readonly ownsExecService: boolean
+  private readonly clients: ReadonlyMap<string, AgentClient>
   private readonly registry = new Map<string, RegistryEntry>()
   private acceptingNew = true
   private promoting = false
   private readonly canStartExecution?: AgentExecutionSupervisorOptions['canStartExecution']
 
-  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService, operations, canStartExecution, onExecutionCompleted, onExecutionStarted, onExecutionTerminal }: AgentExecutionSupervisorOptions) {
+  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, clients, execService, operations, canStartExecution, onExecutionCompleted, onExecutionStarted, onExecutionTerminal }: AgentExecutionSupervisorOptions) {
     this.db = db
     this.repoWriteLocks = repoWriteLocks
     this.logger = logger
@@ -279,7 +281,10 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     // an ExecService. It builds one over its own client map when the daemon does
     // not supply the shared configured service, so the supervisor never has a
     // direct client.start fallback and always owns only what it created.
-    this.execService = execService ?? new ExecService({ clients: agentClients })
+    // The execution service owns the client instances used by start. Use that
+    // same group for supervisor lifecycle finalization when supplied alone.
+    this.execService = execService ?? new ExecService({ clients: clients ?? agentClients })
+    this.clients = clients ?? new Map([...agentClients].map(([id, client]) => [id, this.execService.getClient(id) ?? client]))
     this.ownsExecService = execService === undefined
     this.operations = operations
     this.canStartExecution = canStartExecution
@@ -749,8 +754,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       cwd: opts.cwd,
       repoWriteLock: opts.repoWriteLock === true,
       writePaths: opts.writePaths ? [...opts.writePaths] : undefined,
-      codeBuddyExecution: isCodeBuddyExecution(opts) && opts.codeBuddyExecution
-        ? Object.freeze({ ...opts.codeBuddyExecution })
+      admissionBinding: opts.executionAdmission
+        ? Object.freeze({ ...opts.executionAdmission })
         : undefined,
       cancelRequested: false,
       shutdownRequested: false,
@@ -769,8 +774,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       outputTailChars: 0,
       outputTruncated: false,
       pendingClientFamily: opts.clientFamily,
-      resumeSessionId: opts.resume,
-      launchClientFamily: opts.clientFamily,
     }
   }
 
@@ -795,26 +798,23 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     const resolvedProfile = this.readResolvedProfile(entry.executionId)
 
     let session: AgentSession
-    let prepared: PreparedOperations | undefined
     const laneAbort = new AbortController()
     try {
       const profile = resolvedProfile ?? opts.profile;
       const syntax = profile.includes(':') ? parseRunSyntax(profile) : undefined;
       const clientId = syntax?.client ?? opts.clientFamily;
-      const client = clientId ? agentClients.get(clientId) : undefined;
+      const client = clientId ? this.clients.get(clientId) : undefined;
       if (!client?.capabilities.run) throw new Error('Execution requires a resolved agent client');
       if (!syntax?.model) throw new Error('Execution requires a resolved model');
       const plan = this.buildReasoningEffortPlanEnv(entry.executionId, opts.dispatchSnapshot?.fast)?.plan ?? this.catalog.resolveRun(syntax.client, syntax.provider, syntax.model, opts.dispatchSnapshot?.reasoningEffort, opts.dispatchSnapshot?.fast);
       // A native dispatch must hand the CLI the exact wire spelling the
-      // installed product/login declares — e.g. canonical `claude-sonnet-5` is
-      // the product's 1M row `claude-sonnet-5-1m`, not the 200K row that shares
-      // the public id. The admission binding already carries that wire id for
+      // installed product/login declares. The admission binding carries that wire id for
       // this exact execution (resolved from the current product snapshot when
       // the run was admitted); an explicit reasoning-effort-mapped substitution still
       // wins. The public canonical id stays in canonicalModel, so observed ids
       // normalize back and no wire spelling ever reaches a public surface.
       const launchModel = plan.upstreamModel
-        ?? (plan.mode === 'native' ? entry.codeBuddyExecution?.expectedWireModel : undefined)
+        ?? (plan.mode === 'native' ? entry.admissionBinding?.expectedWireModel : undefined)
         ?? syntax.model;
       this.log('debug', '[foreman] starting agent execution ' + entry.executionId, {client: client.id, model: syntax.model});
       // The resolved client/provider/model/mode/reasoning-effort/cwd are all owned by
@@ -823,6 +823,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       // launch/feature/replay implementation.
       if (plan.reasoningEffort === undefined) throw new Error("Execution requires a persisted reasoningEffort");
       const agentRequest: AgentRequest = {
+        executionId: entry.executionId,
         model: launchModel,
         canonicalModel: syntax.model,
         provider: syntax.provider,
@@ -837,37 +838,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         ...(plan.clientReasoningEnvironment === undefined ? {} : { clientReasoningEnvironment: plan.clientReasoningEnvironment }),
       };
       const operationIds = toOperationIds(opts.features)
-      if (operationIds.length > 0) {
-        if (!this.operations) throw new Error('Operation components are not available in this runtime')
-        const laneWatch = setInterval(() => {
-          if (entry.cancelRequested || entry.terminalIntent) laneAbort.abort()
-        }, 250)
-        try {
-          prepared = await this.operations.prepare({
-            prompt: opts.prompt,
-            ids: operationIds,
-            runId: entry.executionId,
-            owner: opts.taskId ?? entry.executionId,
-            clientId,
-            signal: laneAbort.signal,
-            onQueued: () => {
-              if (opts.taskId) this.taskRuns().markWaiting(opts.taskId, nowIso())
-            },
-          })
-        } finally {
-          clearInterval(laneWatch)
-        }
-      }
-      // The fully resolved user request is shaped once, then lowered onto the
-      // shared exec surface. Requested operation components (legacy ids
-      // browser/browser-use and computer/computer-use) are resolved by the shared
-      // operation adapter: it checks readiness on this host, attaches the CLI
-      // environment or MCP server and the guidance text, and fails before spawn
-      // when a component is not ready. An unknown id still throws.
       const execRequest: ExecRequest = {
         ...agentRequest,
-        prompt: prepared?.prompt ?? agentRequest.prompt,
-        ...(prepared?.mcpServers ? { mcpServers: prepared.mcpServers } : {}),
         client: client.id,
       };
       // The authoritative task run id is always derived from `opts.taskId`, whether the
@@ -878,11 +850,26 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         this.buildReasoningEffortPlanEnv(entry.executionId, opts.dispatchSnapshot?.fast),
         entry.executionId,
       )
-      if (clientId === 'codebuddy') {
-        baseEnv.WRENYARD_EXECUTION_ID = entry.executionId
-      }
+      const laneWatch = setInterval(() => {
+        if (entry.cancelRequested || entry.terminalIntent) laneAbort.abort()
+      }, 250)
       const operationOptions = {
-        env: prepared ? prepared.applyEnv(baseEnv) : baseEnv,
+        env: baseEnv,
+        deferFinalize: true,
+        onStreamClosed: () => entry.resolveClientStreamDone?.(),
+        onPrepared: (env: NodeJS.ProcessEnv) => { entry.agentEnv = env },
+        prepare: operationIds.length > 0 ? (() => {
+          if (!this.operations) throw new Error('Operation components are not available in this runtime')
+          return this.operations.preparation({
+            ids: operationIds,
+            runId: entry.executionId,
+            owner: opts.taskId ?? entry.executionId,
+            clientId,
+            signal: laneAbort.signal,
+            onQueued: () => { if (opts.taskId) this.taskRuns().markWaiting(opts.taskId, nowIso()) },
+          })
+        })() : undefined,
+        signal: laneAbort.signal,
       };
       const claimed = this.run(
         `UPDATE executions
@@ -892,14 +879,20 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         entry.executionId,
       )
       if (claimed.changes !== 1) {
-        await prepared?.release().catch(() => undefined)
+        clearInterval(laneWatch)
         return
       }
       if (opts.taskId) this.taskRuns().markStarted(opts.taskId, nowIso())
-      session = await this.execService.start(execRequest, operationOptions)
-      if (prepared) entry.releasePrepared = () => prepared!.release()
+      entry.agentClient = client
+      entry.agentEnv = operationOptions.env
+      entry.clientStreamDone = new Promise<void>((resolve) => { entry.resolveClientStreamDone = resolve })
+      entry.clientStartDone = new Promise<void>((resolve) => { entry.resolveClientStartDone = resolve })
+      try { session = await this.execService.start(execRequest, operationOptions) }
+      finally {
+        clearInterval(laneWatch)
+        entry.resolveClientStartDone?.()
+      }
     } catch (error) {
-      await prepared?.release().catch(() => undefined)
       if (entry.cancelRequested || entry.terminalIntent) return
       if (error instanceof DesktopLaneClosedError) {
         this.terminalizeQueued(entry, 'cancelled', 'cancel', 'cancelled')
@@ -913,8 +906,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     entry.pid = session.diagnostics.pid
 
     const timestamp = nowIso()
+    let runningClaimed = false
     this.tx(() => {
-      this.run(
+      const claimed = this.run(
         `UPDATE executions
         SET status = 'running', pid = ?, pgid = ?, started_at = ?, updated_at = ?
         WHERE id = ? AND status = 'starting'`,
@@ -924,6 +918,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         timestamp,
         entry.executionId,
       )
+      if (claimed.changes !== 1) return
+      runningClaimed = true
       this.insertEvent({
         executionId: entry.executionId,
         taskId: entry.taskId,
@@ -937,6 +933,20 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         timestamp,
       })
     })
+
+    if (!runningClaimed) {
+      const row = this.getExecution(entry.executionId)
+      if (row && isTerminalStatus(row.status)) {
+        void session.cancel().catch(() => undefined)
+        entry.terminalGeneration += 1
+        this.resolveAndForget(entry, resultFromRow(row))
+        this.finalizeClient(entry, row.status)
+        void this.promoteQueued()
+      } else {
+        this.terminalizeStartingFailure(entry, new Error(`Execution '${entry.executionId}' lost its starting transition`))
+      }
+      return
+    }
 
     if (opts.timeoutMs !== undefined && opts.timeoutMs > 0) {
       let resolveDeadline!: () => void
@@ -969,7 +979,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       this.log('warn', `[foreman] stream consumer failed for ${entry.executionId}: ${redactDiagnosticText(errorMessage(error))}`)
     })
     void entry.streamDone.then(async () => {
-      await entry.releasePrepared?.().catch(() => undefined)
       void this.handleChildClose(entry).catch((error: unknown) => {
         this.log('error', `[foreman] close handler failed for ${entry.executionId}: ${errorMessage(error)}`)
       })
@@ -986,9 +995,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       if (entry.terminalGeneration > 0) return
       if (agentEvent.type === 'session') {
         entry.pendingNativeSessionId = agentEvent.nativeSessionId
-        if (entry.pendingClientFamily === 'codebuddy') {
-          armRunHomeSessionPreserve(entry.executionId, entry.pendingClientFamily, agentEvent.nativeSessionId)
-        }
         if (agentEvent.profile) this.captureResolvedProfileOnce(entry.executionId, agentEvent.profile, nowIso())
       }
       if (agentEvent.type === 'finished') {
@@ -1005,9 +1011,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         }
         if (agentEvent.nativeSessionId) entry.pendingNativeSessionId = agentEvent.nativeSessionId
         if (agentEvent.clientFamily) entry.pendingClientFamily = agentEvent.clientFamily as ClientFamily
-        if (agentEvent.clientFamily === 'codebuddy' && agentEvent.nativeSessionId) {
-          armRunHomeSessionPreserve(entry.executionId, 'codebuddy', agentEvent.nativeSessionId)
-        }
         if (agentEvent.profile) this.captureResolvedProfileOnce(entry.executionId, agentEvent.profile, nowIso())
         if (agentEvent.failureClass) entry.pendingFailureClass = agentEvent.failureClass
       }
@@ -1250,15 +1253,10 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           )
         }
       }
-      if (committed) {
-        void this.finalizeCodeBuddyResumeSnapshot(entry, terminal.status).catch((error: unknown) => {
-          this.log(
-            'warn',
-            `[foreman] Failed to finalize codebuddy session snapshot for ${entry.executionId}: ${errorMessage(error)}`,
-          )
-        })
-        clearRunHomeSessionPreserveSlot(entry.executionId)
-      }
+      // The committed terminal status is now final (cancel/timeout/shutdown
+      // precedence already resolved above), so the client's own post-run
+      // hook can safely retain or clean up its session state.
+      if (committed) this.finalizeClient(entry, terminal.status)
       if (committed && terminal.status === 'done') {
         // The execution's usage is durable at this point, so the local speed
         // window can pick up its paired sample. This is best-effort: a failure
@@ -1340,12 +1338,14 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         this.rejectAndForget(entry, terminalError)
       } else if (committed || result) {
         entry.terminalGeneration += 1
-        this.resolveAndForget(entry, result ?? {
+        const terminalResult = result ?? {
           executionId: entry.executionId,
           status: 'failed',
           error: message,
           killReason: 'spawn-error',
-        })
+        } satisfies ExecutionResult
+        this.resolveAndForget(entry, terminalResult)
+        this.finalizeClient(entry, terminalResult.status)
       }
       if (terminalError || committed || result) void this.promoteQueued()
     }
@@ -1413,12 +1413,14 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         this.rejectAndForget(entry, terminalError)
       } else if (committed || result) {
         entry.terminalGeneration += 1
-        this.resolveAndForget(entry, result ?? {
+        const terminalResult = result ?? {
           executionId: entry.executionId,
           status,
           error,
           killReason,
-        })
+        } satisfies ExecutionResult
+        this.resolveAndForget(entry, terminalResult)
+        this.finalizeClient(entry, terminalResult.status)
       }
       if (terminalError || committed || result) void this.promoteQueued()
     }
@@ -1529,6 +1531,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     if (result) {
       entry.terminalGeneration += 1
       this.resolveAndForget(entry, result)
+      this.finalizeClient(entry, result.status)
     }
   }
 
@@ -1547,6 +1550,31 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       return
     }
     await Promise.race([streamDone, deadline])
+  }
+
+  private finalizeClient(entry: RegistryEntry, status: string): void {
+    if (entry.finalization || !entry.agentClient?.finalize) return
+    const finalize = async () => {
+      await entry.clientStartDone
+      const streamDone = entry.clientStreamDone ?? entry.streamDone
+      if (streamDone) {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const boundedWait = new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, this.cancelSettlementTimeoutMs)
+        })
+        try {
+          const bounds = [streamDone.catch(() => undefined), boundedWait]
+          if (entry.attemptDeadlinePromise) bounds.push(entry.attemptDeadlinePromise)
+          await Promise.race(bounds)
+        } finally {
+          if (timer) clearTimeout(timer)
+        }
+      }
+      await entry.agentClient!.finalize!(status, { executionId: entry.executionId, env: entry.agentEnv ?? process.env })
+    }
+    entry.finalization = finalize().catch((error: unknown) => {
+      this.log('warn', `[foreman] Failed to finalize agent client state for ${entry.executionId}: ${errorMessage(error)}`)
+    })
   }
 
   /**
@@ -1588,6 +1616,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     if (result) {
       entry.terminalGeneration += 1
       this.resolveAndForget(entry, result)
+      this.finalizeClient(entry, result.status)
     }
   }
 
@@ -1773,14 +1802,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       if (entry.session && entry.terminalGeneration === 0) count += 1
     }
     return count
-  }
-
-  /** Drop a successful resume snapshot; non-done resume runs refresh via run-home preserve. */
-  private async finalizeCodeBuddyResumeSnapshot(entry: RegistryEntry, status: TerminalStatus): Promise<void> {
-    if (entry.launchClientFamily !== 'codebuddy' || !entry.resumeSessionId) return
-    if (status !== 'done') return
-    const snapshot = clientStateDirForEnv(process.env, 'codebuddy', 'sessions', entry.resumeSessionId)
-    await rm(snapshot, { recursive: true, force: true })
   }
 
   private persistNativeSessionIfCaptured(entry: RegistryEntry, timestamp: string): void {
@@ -2134,7 +2155,9 @@ function mapTpsSamples(value: unknown): unknown[] | undefined {
 }
 
 function isClientFamily(value: string | null | undefined): value is ClientFamily {
-  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'cursor' || value === 'grok' || value === 'dsh' || value === 'codebuddy' || value === 'pi' || value === 'kimi'
+  // The registered clients map is the source of truth for known client ids;
+  // no per-family whitelist lives at this layer.
+  return value !== null && value !== undefined && agentClients.has(value)
 }
 
 function extractFinalResult(event: Extract<AgentEvent, { type: 'finished' }>): { isError: boolean; output?: string } {
@@ -2151,10 +2174,10 @@ function assertStartExecutionOpts(opts: StartExecutionOpts): void {
   if (opts.clientFamily !== undefined && !isClientFamily(opts.clientFamily)) {
     throw new Error(`Invalid client family '${opts.clientFamily}'`)
   }
-  if (isCodeBuddyExecution(opts) && !validCodeBuddyExecutionBinding(opts.codeBuddyExecution)) {
+  if (opts.executionAdmission !== undefined && !validExecutionAdmissionBinding(opts.executionAdmission)) {
     // Generic by design: no expected/current scope, environment, or wire value
     // may enter an error string or log record.
-    throw new Error('CodeBuddy execution admission binding is unavailable')
+    throw new Error('Execution admission binding is unavailable')
   }
   assertValidTimeoutMs(opts.timeoutMs, 'startExecution timeoutMs')
 }
@@ -2173,28 +2196,15 @@ function repoWriteLockMode(writePaths: readonly string[] | undefined): 'edit' | 
   return writePaths && writePaths.length > 0 ? 'edit' : 'yolo'
 }
 
-function isCodeBuddyExecution(opts: StartExecutionOpts): boolean {
-  const snapshot = opts.dispatchSnapshot
-  if (snapshot?.provider === 'codebuddy' && snapshot.client === 'codebuddy' && snapshot.mode === 'native') {
-    return true
-  }
-  try {
-    const parsed = parseRunSyntax(opts.profile)
-    return parsed.provider === 'codebuddy' && parsed.client === 'codebuddy'
-  } catch {
-    return false
-  }
-}
-
-function validCodeBuddyExecutionBinding(
-  binding: CodeBuddyExecutionBinding | undefined,
-): binding is CodeBuddyExecutionBinding {
+function validExecutionAdmissionBinding(
+  binding: NonNullable<StartExecutionOpts['executionAdmission']> | undefined,
+): binding is NonNullable<StartExecutionOpts['executionAdmission']> {
   if (binding === undefined) return false
   const values = [binding.expectedScope, binding.expectedEnvironment, binding.expectedWireModel]
-  if (!values.every((value) => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !value.includes('\0'))) {
+  if (!values.every((value) => typeof value === 'string' && value.trim().length > 0 && value.length <= 1024 && !/[\0-\x1f\x7f]/u.test(value))) {
     return false
   }
-  return ['internal', 'ioa', 'cloudhosted', 'external', 'unknown'].includes(binding.expectedEnvironment)
+  return true
 }
 
 function optsFromRow(row: LaunchFieldRow, entry: RegistryEntry): StartExecutionOpts {

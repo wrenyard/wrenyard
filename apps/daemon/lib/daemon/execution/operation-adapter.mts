@@ -327,6 +327,18 @@ export class OperationAdapter {
     this.#components = components
   }
 
+  preparation(input: Omit<PrepareOperationInput, 'prompt' | 'mcpServers'>) {
+    return async (request: import('@wrenyard/agent-client').AgentRequest, env: NodeJS.ProcessEnv) => {
+      const prepared = await this.prepare({ ...input, prompt: request.prompt, mcpServers: request.mcpServers })
+      return {
+        prompt: prepared.prompt,
+        mcpServers: prepared.mcpServers,
+        env: prepared.applyEnv(env),
+        release: () => prepared.release(),
+      }
+    }
+  }
+
   async prepare(input: PrepareOperationInput): Promise<PreparedOperations> {
     const { prompt, mcpServers, ids, runId, owner, clientId } = input
 

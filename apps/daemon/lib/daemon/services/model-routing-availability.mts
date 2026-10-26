@@ -122,7 +122,7 @@ export function createRoutingAvailability(options: {
           quota: 'unknown',
           available: true,
           ...(freeSupply ? { freeSupply } : {}),
-          codeBuddyExecution: {
+          executionAdmission: {
             expectedScope: activeSnapshot.stableScope,
             expectedEnvironment: activeSnapshot.environment,
             expectedWireModel: wireModel,

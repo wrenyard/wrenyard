@@ -88,7 +88,7 @@ import type {
   TaskRunSettingsParams,
   TaskRunSettingsResolution,
 } from '../../types.mts'
-import type { CodeBuddyExecutionBinding } from '../../core/operations/types.mts'
+import type { ExecutionAdmissionBinding } from '../../core/operations/types.mts'
 import type { NativeProviderReadinessSnapshot } from '../execution/native-provider-readiness.mts'
 
 export type {
@@ -177,7 +177,7 @@ export interface TaskSettingsProviderAvailability {
   /** Private execution admission tuple derived from the same current
    * CodeBuddy snapshot as readiness/free supply. Never serialized into task
    * settings previews, routing decisions, or persisted dispatch metadata. */
-  codeBuddyExecution?: CodeBuddyExecutionBinding
+  executionAdmission?: ExecutionAdmissionBinding
 }
 
 /** Request-bound private availability context. Presence is significant: an
@@ -999,8 +999,8 @@ export class TaskSettingsService {
     return {
       exactAgentRuntime: selection.exactAgentRuntime,
       dispatch: selection.dispatch,
-      ...(selection.codeBuddyExecution
-        ? { codeBuddyExecution: selection.codeBuddyExecution }
+      ...(selection.executionAdmission
+        ? { executionAdmission: selection.executionAdmission }
         : {}),
       runTimeLimitMinutes: effective.runTimeLimitMinutes,
       sources: toRunSources(effective.sources),
@@ -2159,8 +2159,8 @@ export class TaskSettingsService {
       dispatch,
       decision,
       reason,
-      ...(chosen.availability?.codeBuddyExecution
-        ? { codeBuddyExecution: chosen.availability.codeBuddyExecution }
+      ...(chosen.availability?.executionAdmission
+        ? { executionAdmission: chosen.availability.executionAdmission }
         : {}),
     }
   }
@@ -2398,7 +2398,7 @@ type AutomaticSelectionResult =
       dispatch: TaskResolvedDispatch
       decision: TaskAutoRoutingDecision
       reason: string
-      codeBuddyExecution?: CodeBuddyExecutionBinding
+      executionAdmission?: ExecutionAdmissionBinding
     }
   | { ok: false; error: NoEligiblePlanError }
 

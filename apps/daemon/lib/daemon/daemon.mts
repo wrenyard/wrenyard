@@ -3347,9 +3347,8 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
     // same launch path and shutdown handling. The service runs resolved clients
     // with direct MCP servers and prompts supplied by the operation adapter; no
     // credential or environment value crosses the public IPC surface.
-    const execService = new ExecService({
-      clients: createAgentClients(),
-    })
+    const clients = createAgentClients()
+    const execService = new ExecService({ clients })
     const operationComponents = new OperationComponents({
       stateRoot: foremanStateRoot(),
       log: (message) => writeDaemonLog('warn', message),
@@ -3367,6 +3366,7 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
     const supervisor = new AgentExecutionSupervisor({
       db,
       repoWriteLocks,
+      clients,
       logger: createDaemonSupervisorLogger(),
       catalog,
       execService,

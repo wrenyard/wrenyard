@@ -87,7 +87,6 @@ import {
   desktopLane,
   toOperationIds,
   type OperationAdapter,
-  type PreparedOperations,
 } from '../../daemon/execution/operation-adapter.mts'
 import type { ExecService, ExecRequest } from '@wrenyard/exec'
 import type { ExecStartParams } from '@wrenyard/protocol'
@@ -732,41 +731,29 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
           onCancel: () => laneAbort.abort(),
         })
         void (async () => {
-          let prepared: PreparedOperations | undefined
           try {
-            prepared = await options.operationAdapter!.prepare({
-              prompt: merged.prompt,
-              mcpServers: merged.mcpServers,
-              ids,
-              runId,
-              owner: runId,
-              signal: laneAbort.signal,
-              onQueued: (position) => service.setQueuePosition(runId, position),
-            })
             handle = await service.start(
+              merged,
               {
-                ...merged,
-                prompt: prepared.prompt,
-                ...(prepared.mcpServers ? { mcpServers: prepared.mcpServers } : {}),
-              },
-              {
-                env: prepared.applyEnv(process.env),
                 signal: laneAbort.signal,
                 id: runId,
                 queued: true,
                 onCancel: () => laneAbort.abort(),
+                prepare: options.operationAdapter!.preparation({
+                  ids,
+                  runId,
+                  owner: runId,
+                  signal: laneAbort.signal,
+                  onQueued: (position) => service.setQueuePosition(runId, position),
+                }),
               },
             )
-            const preparedRun = prepared
             void (async () => {
               try {
                 for await (const _event of handle.events) { /* drain semantic events */ }
               } catch { /* release prepared resources when the stream closes */ }
-            })().finally(() => {
-                void preparedRun.release()
-              })
+            })()
           } catch (error) {
-            await prepared?.release().catch(() => undefined)
             if (error instanceof DesktopLaneClosedError) {
               await service.cancel(runId).catch(() => undefined)
               return

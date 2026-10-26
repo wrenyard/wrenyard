@@ -19,7 +19,7 @@ export type ClientFamily = 'claude' | 'codex' | 'opencode' | 'cursor' | 'grok' |
  * these values may reach only the local client admission process environment
  * and must never enter telemetry, protocol DTOs, logs, or database rows.
  */
-export interface CodeBuddyExecutionBinding {
+export interface ExecutionAdmissionBinding {
   readonly expectedScope: string
   readonly expectedEnvironment: string
   readonly expectedWireModel: string
@@ -74,8 +74,8 @@ export interface StartAgentExecutionOptions {
   /** Per-attempt dispatch snapshot produced by the daemon resolver. Persisted
    *  by the supervisor keyed by execution_id/task_id. */
   dispatchSnapshot?: TaskDispatchSnapshot | null
-  /** Private CodeBuddy admission binding; kept in memory only. */
-  codeBuddyExecution?: CodeBuddyExecutionBinding
+  /** Private execution admission binding; kept in memory only. */
+  executionAdmission?: ExecutionAdmissionBinding
   /** Canonical agent-runtime failure class, when supplied by the resolver. */
   failureClass?: AgentFailureClass | string | null
 }

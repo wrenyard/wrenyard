@@ -7,6 +7,7 @@ import type {
   ExecutionStatus,
 } from '../types.mts'
 import type { TaskDispatchSnapshot } from '../types.mts'
+import { parseRunSyntax } from '@wrenyard/providers/catalog'
 
 export type AgentStatus = 'done' | 'failed' | 'cancelled'
 
@@ -30,7 +31,7 @@ export interface AgentOpts {
   /** Full per-attempt dispatch snapshot produced by the daemon resolver. */
   dispatchSnapshot?: import('../types.mts').TaskDispatchSnapshot | null
   /** Private non-persistent CodeBuddy admission binding. */
-  codeBuddyExecution?: import('../types.mts').CodeBuddyExecutionBinding
+  executionAdmission?: import('../types.mts').ExecutionAdmissionBinding
   /** Canonical agent-runtime failure class supplied by the resolver. */
   failureClass?: string | null
 }
@@ -103,6 +104,23 @@ async function runAgentWithHost(
   // conservative default (repo-wide write lock); observational callers opt out
   // explicitly with `false`.
   const repoWriteLock = opts.repoWriteLock ?? true
+  let profileSyntax: ReturnType<typeof parseRunSyntax> | undefined
+  try {
+    profileSyntax = parseRunSyntax(profile)
+  } catch {
+    // Preserve the host's existing invalid-profile handling below.
+  }
+  const codeBuddyExecution = opts.dispatchSnapshot?.provider === 'codebuddy'
+    || opts.dispatchSnapshot?.client === 'codebuddy'
+    || profileSyntax?.provider === 'codebuddy'
+    || profileSyntax?.client === 'codebuddy'
+  const admission = opts.executionAdmission
+  const validAdmission = admission !== undefined
+    && [admission.expectedScope, admission.expectedEnvironment, admission.expectedWireModel]
+      .every((value) => typeof value === 'string' && value.trim().length > 0 && value.length <= 1024 && !/[\0-\x1f\x7f]/u.test(value))
+  if ((codeBuddyExecution && opts.dispatchSnapshot?.mode === 'native' || profileSyntax?.provider === 'codebuddy' || profileSyntax?.client === 'codebuddy') && !validAdmission) {
+    throw new Error('Execution admission binding is unavailable')
+  }
   const handle = await host.startExecution({
     taskId: opts.taskId,
     profile,
@@ -116,7 +134,7 @@ async function runAgentWithHost(
     features: opts.features,
     writePaths: opts.writePaths,
     dispatchSnapshot: opts.dispatchSnapshot ?? null,
-    codeBuddyExecution: opts.codeBuddyExecution,
+    executionAdmission: opts.executionAdmission,
     failureClass: opts.failureClass ?? null,
   })
 

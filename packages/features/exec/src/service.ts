@@ -1,6 +1,7 @@
 import {
   createAgentClients,
   type AgentClient,
+  type AgentClientPreparation,
   type AgentEvent,
   type AgentRequest,
   type AgentSession,
@@ -121,6 +122,10 @@ interface PreparedRun {
  */
 export class ExecService {
   readonly #clients: ReadonlyMap<string, AgentClient>;
+  /** Return the exact client instance used by this service for an execution. */
+  getClient(id: string): AgentClient | undefined {
+    return this.#clients.get(id);
+  }
   readonly #maxRetainedEvents: number;
   readonly #maxRetainedBytes: number;
   readonly #maxCompletedRuns: number;
@@ -167,8 +172,24 @@ export class ExecService {
     delete clientOptions.queued;
     delete clientOptions.onCancel;
     this.#pendingStarts += 1;
+    let operationPreparation: AgentClientPreparation | void = undefined
+    let env = clientOptions.env ?? process.env;
     try {
-      const session = await client.start(prepared.request, { ...clientOptions, signal });
+      let launchRequest = prepared.request;
+      if (clientOptions.prepare) {
+        operationPreparation = await clientOptions.prepare(launchRequest, env);
+        if (operationPreparation?.prompt !== undefined) launchRequest = { ...launchRequest, prompt: operationPreparation.prompt };
+        if (operationPreparation?.mcpServers) launchRequest = { ...launchRequest, mcpServers: operationPreparation.mcpServers };
+        if (operationPreparation?.env) env = { ...env, ...operationPreparation.env };
+      }
+      if (client.prepare) {
+        const preparation = await client.prepare(launchRequest, { ...clientOptions, signal });
+        if (preparation?.prompt !== undefined) launchRequest = { ...launchRequest, prompt: preparation.prompt };
+        if (preparation?.mcpServers) launchRequest = { ...launchRequest, mcpServers: preparation.mcpServers };
+        if (preparation?.env) env = { ...env, ...preparation.env };
+      }
+      clientOptions.onPrepared?.(env);
+      const session = await client.start(launchRequest, { ...clientOptions, env, signal });
       if (this.#closed || entry.terminal) {
         await session.cancel();
         throw new Error(this.#closed ? 'ExecService is closed' : 'Execution was cancelled before start');
@@ -176,10 +197,15 @@ export class ExecService {
       entry.status = 'running';
       delete entry.queuePosition;
       entry.onCancel = undefined;
-      const handle = this.#bind(entry, session);
+      const handle = this.#bind(entry, session, client, launchRequest, env, options?.deferFinalize === true, operationPreparation?.release, clientOptions.onStreamClosed);
       void this.#pruneCompleted();
       return handle;
     } catch (error) {
+      await operationPreparation?.release?.().catch(() => undefined);
+      clientOptions.onStreamClosed?.();
+      if (!options?.deferFinalize && client.finalize && prepared.request.executionId) {
+        await client.finalize('failed', { executionId: prepared.request.executionId, env }).catch(() => undefined);
+      }
       if (preregistered) {
         this.#settle(entry, { error: error instanceof Error ? error.message : 'execution failed' });
       }
@@ -359,10 +385,10 @@ export class ExecService {
    * promise is stored on the entry immediately, so a `close()` racing the first
    * `start()` still finds a live entry and a consumer that exists.
    */
-  #bind(entry: ExecEntry, session: AgentSession): ExecHandle {
+  #bind(entry: ExecEntry, session: AgentSession, client: AgentClient, request: AgentRequest, env: NodeJS.ProcessEnv, deferFinalize: boolean, release?: () => Promise<void>, onStreamClosed?: () => void): ExecHandle {
     entry.session = session;
     this.#runs.set(entry.id, entry);
-    entry.consumer = this.#consume(entry, session).catch(() => undefined);
+    entry.consumer = this.#consume(entry, session, client, request, env, deferFinalize, release, onStreamClosed).catch(() => undefined);
     return {
       id: entry.id,
       snapshot: snapshotOf(entry),
@@ -403,7 +429,7 @@ export class ExecService {
    * the run is settled from the semantic terminal event. A missing terminal
    * after stream completion is a failure.
    */
-  async #consume(entry: ExecEntry, session: AgentSession): Promise<void> {
+  async #consume(entry: ExecEntry, session: AgentSession, client: AgentClient, request: AgentRequest, env: NodeJS.ProcessEnv, deferFinalize: boolean, release?: () => Promise<void>, onStreamClosed?: () => void): Promise<void> {
     const observed: ObservedFacts = {};
     try {
       for await (const event of session.events) {
@@ -414,6 +440,12 @@ export class ExecService {
       await session.cancel().catch(() => undefined);
     } finally {
       this.#settle(entry, observed);
+      await release?.().catch(() => undefined);
+      onStreamClosed?.();
+      if (!deferFinalize && client.finalize) {
+        const status = entry.status === 'completed' ? 'done' : entry.status === 'cancelled' ? 'cancelled' : 'failed';
+        await client.finalize(status, { executionId: request.executionId, env }).catch(() => undefined);
+      }
     }
   }
 

@@ -12,7 +12,12 @@ export interface OperationOptions {
     readonly env?: NodeJS.ProcessEnv;
     readonly signal?: AbortSignal;
     readonly timeoutMs?: number;
+    readonly prepare?: (request: AgentRequest, env: NodeJS.ProcessEnv) => Promise<AgentClientPreparation | void>;
+    readonly deferFinalize?: boolean;
+    readonly onPrepared?: (env: NodeJS.ProcessEnv) => void;
+    readonly onStreamClosed?: () => void;
 }
+export interface AgentFinalizeContext { readonly executionId?: string; readonly env: NodeJS.ProcessEnv }
 export interface InspectOptions extends OperationOptions {
     readonly executable?: string;
     readonly refresh?: boolean;
@@ -51,6 +56,12 @@ export interface AgentRequest {
      * Public reasoning-effort level selected by the caller. Every run names an
      * exact level; `assertLaunch` rejects a missing or unknown value.
      */
+    /**
+     * Execution id assigned by the execution layer. Set for supervised task
+     * runs; adapters that need run-scoped state key it off this value rather
+     * than a supervisor-injected environment variable.
+     */
+    readonly executionId?: string;
     readonly reasoningEffort: ReasoningEffort;
     /** Optional Fast mode flag; native clients may apply a provider-verified fast variant. */
     readonly fast?: boolean;
@@ -128,11 +139,38 @@ export interface ReadinessOptions extends OperationOptions {
     /** Optional explicit home override, mirroring client native credential paths. */
     readonly home?: string;
 }
+/**
+ * Client-side launch preparation returned by {@link AgentClient.prepare}. The
+ * `env` entries are merged over the caller-supplied operation env before
+ * `start`, composing with any env the operation-component preparation
+ * (browser env modifiers, desktop lane release ordering, core.mts exec.start
+ * reuse) already produced — the client never replaces that env wholesale.
+ */
+export interface AgentClientPreparation {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly prompt?: string;
+    readonly mcpServers?: Readonly<Record<string, McpServer>>;
+    readonly release?: () => Promise<void>;
+}
 export interface AgentClient {
     readonly id: string;
     readonly capabilities: ClientCapabilities;
     inspect(options?: InspectOptions): Promise<ClientStatus>;
+    /**
+     * Optional pre-start hook: runs before {@link start} with the fully
+     * resolved request (including `executionId`) and the composed operation
+     * env available, so the adapter can contribute run-scoped env or bind
+     * per-execution state. Clients that do not implement it are unaffected.
+     */
+    prepare?(request: AgentRequest, options?: OperationOptions): Promise<AgentClientPreparation | void>;
     start(request: AgentRequest, options?: OperationOptions): Promise<AgentSession>;
+    /**
+     * Optional post-run hook: runs after the run's committed terminal status
+     * is known. Cancel/timeout/shutdown intent precedence is already resolved
+     * by the execution supervisor, so `status` is the durable outcome; the
+     * adapter uses it for its own session-snapshot retention/cleanup.
+     */
+    finalize?(status: string, context: AgentFinalizeContext): Promise<void>;
     readAccount?(options?: AccountOptions): Promise<AccountSnapshot>;
     /**
      * Optional non-inference native auth/model observation. Cheap and separate

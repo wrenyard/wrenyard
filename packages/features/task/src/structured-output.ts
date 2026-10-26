@@ -7,7 +7,7 @@ import type { TaskResolvedDispatch } from '@wrenyard/protocol'
  * free of daemon operation wiring: the daemon's own binding is structurally
  * identical and satisfies this shape.
  */
-export interface CodeBuddyExecutionBinding {
+export interface ExecutionAdmissionBinding {
   readonly expectedScope: string
   readonly expectedEnvironment: string
   readonly expectedWireModel: string
@@ -60,7 +60,7 @@ export interface StructuredOutputOptions {
   /** Full per-attempt dispatch snapshot produced by the daemon resolver. */
   dispatchSnapshot?: TaskResolvedDispatch | null
   /** Private CodeBuddy admission binding, forwarded unchanged to the attempt. */
-  codeBuddyExecution?: CodeBuddyExecutionBinding
+  executionAdmission?: ExecutionAdmissionBinding
   /** Optional shared-circuit accounting for this structured run. */
   onRouteSuccess?: () => void
   onRouteFault?: (fault: TaskRouteFault) => void
@@ -140,7 +140,7 @@ export interface StructuredOutputAgentOptions {
   writePaths?: readonly string[]
   requestedAgentRuntime?: string
   dispatchSnapshot?: TaskResolvedDispatch | null
-  codeBuddyExecution?: CodeBuddyExecutionBinding
+  executionAdmission?: ExecutionAdmissionBinding
 }
 
 export interface StructuredOutputAgentResult {
@@ -212,7 +212,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
         writePaths: opts.writePaths,
         requestedAgentRuntime: opts.requestedAgentRuntime,
         dispatchSnapshot: opts.dispatchSnapshot,
-        codeBuddyExecution: opts.codeBuddyExecution,
+        executionAdmission: opts.executionAdmission,
       },
     )
   } catch (error) {

@@ -49,7 +49,7 @@ export interface AgentOpts {
   /** Per-attempt dispatch snapshot produced by the daemon resolver. */
   dispatchSnapshot?: import('./core/operations/types.mts').TaskDispatchSnapshot | null
   /** Private non-persistent CodeBuddy admission binding. */
-  codeBuddyExecution?: import('./core/operations/types.mts').CodeBuddyExecutionBinding
+  executionAdmission?: import('./core/operations/types.mts').ExecutionAdmissionBinding
   /** Canonical agent-runtime failure class, when classified by the runtime. */
   failureClass?: import('@wrenyard/task').AgentFailureClass | string | null
 }
@@ -181,7 +181,7 @@ export interface TaskRunSettingsResolution {
   dispatch: import('./core/operations/types.mts').TaskDispatchSnapshot | null
   /** Private CodeBuddy admission binding captured with this resolution. Never
    * persisted or projected through public task settings/telemetry DTOs. */
-  codeBuddyExecution?: import('./core/operations/types.mts').CodeBuddyExecutionBinding
+  executionAdmission?: import('./core/operations/types.mts').ExecutionAdmissionBinding
   /** Effective global task run time limit in minutes after all layer merges. */
   runTimeLimitMinutes: number | null
   /** Per-field winning source layer. */
