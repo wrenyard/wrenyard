@@ -6,7 +6,7 @@ import { balancePool } from '../base/quota-helpers.ts';
 import { productCreditsAreFree } from '../codebuddy/product.ts';
 import type { WorkBuddyAccountIdentity, WorkBuddyAccountKind } from './credentials.ts';
 
-const WORKBUDDY_CREDITS_UNIT = 'Points';
+const WORKBUDDY_CREDITS_UNIT = '积分';
 const WORKBUDDY_QUOTA_PARSER = 'packages/providers/src/workbuddy/quota.ts';
 
 function creditsPool(providerId: string, usageUnknown = false): ProviderQuotaPool {
