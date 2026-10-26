@@ -178,7 +178,7 @@ interface RegistryEntry {
   /** Private admission-only binding retained in memory while queued. */
   codeBuddyExecution?: CodeBuddyExecutionBinding
   session?: AgentSession
-  pendingExit?: { exitCode: number | null; signal: NodeJS.Signals | null }
+  releasePrepared?: () => Promise<void>
   pid?: number
   pgid?: number
   timeoutTimer?: ReturnType<typeof setTimeout>
@@ -210,14 +210,9 @@ interface RegistryEntry {
   /** True once the middle of the output has been replaced by the marker. */
   outputTruncated: boolean
   finalOutput?: string
-  stderrTail: string
   rawResult?: string
-  resultErrorTail: string
-  streamError?: string
   streamDone?: Promise<void>
-  childError?: string
-  sawTerminalResult: boolean
-  sawErrorResult: boolean
+  finished?: Extract<AgentEvent, { type: 'finished' }>
   pendingNativeSessionId?: string
   pendingClientFamily?: ClientFamily
   /** Native session resumed by this execution (`opts.resume`), when set. */
@@ -225,10 +220,6 @@ interface RegistryEntry {
   /** Client family chosen at launch; used for codebuddy-only session snapshots. */
   launchClientFamily?: ClientFamily
   pendingFailureClass?: string
-  // Structured upstream identity from a failed terminal record, verbatim.
-  pendingUpstreamError?: UpstreamError
-  /** True when pendingUpstreamError came from the terminal record's structured error field. */
-  pendingUpstreamErrorProvenance?: boolean
   /** Resolved by the attempt-deadline (timeout) handler so a bounded
    *  stream-drain await converges at the deadline instead of hanging on a
    *  held stdio pipe after an early child close. */
@@ -246,7 +237,6 @@ type LaunchFieldRow = Pick<
 type TerminalStatus = 'done' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
 type KillReason = 'cancel' | 'timeout' | 'shutdown' | 'crash' | 'spawn-error' | null
 type TerminalIntent =
-  | { kind: 'exit'; exitCode: number | null; signal: NodeJS.Signals | null }
   | { kind: 'cancel' }
   | { kind: 'timeout' }
   | { kind: 'shutdown' }
@@ -778,10 +768,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       outputHeadChars: 0,
       outputTailChars: 0,
       outputTruncated: false,
-      stderrTail: '',
-      resultErrorTail: '',
-      sawTerminalResult: false,
-      sawErrorResult: false,
       pendingClientFamily: opts.clientFamily,
       resumeSessionId: opts.resume,
       launchClientFamily: opts.clientFamily,
@@ -911,10 +897,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       }
       if (opts.taskId) this.taskRuns().markStarted(opts.taskId, nowIso())
       session = await this.execService.start(execRequest, operationOptions)
-      if (prepared) {
-        const release = prepared
-        void Promise.resolve(session.result).catch(() => undefined).finally(() => { void release.release() })
-      }
+      if (prepared) entry.releasePrepared = () => prepared!.release()
     } catch (error) {
       await prepared?.release().catch(() => undefined)
       if (entry.cancelRequested || entry.terminalIntent) return
@@ -982,13 +965,12 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     if (!entry.session) return
 
     entry.streamDone = this.consumeStream(entry).catch((error: unknown) => {
-      entry.streamError = redactDiagnosticText(errorMessage(error))
-      this.log('warn', `[foreman] stream consumer failed for ${entry.executionId}: ${entry.streamError}`)
+      entry.finished = { type: 'finished', status: 'failed', isError: true, error: redactDiagnosticText(errorMessage(error)) }
+      this.log('warn', `[foreman] stream consumer failed for ${entry.executionId}: ${redactDiagnosticText(errorMessage(error))}`)
     })
-    void entry.streamDone.then(() => {
-      const exit = entry.pendingExit
-      if (!exit) return
-      void this.handleChildClose(entry, exit.exitCode, exit.signal).catch((error: unknown) => {
+    void entry.streamDone.then(async () => {
+      await entry.releasePrepared?.().catch(() => undefined)
+      void this.handleChildClose(entry).catch((error: unknown) => {
         this.log('error', `[foreman] close handler failed for ${entry.executionId}: ${errorMessage(error)}`)
       })
     })
@@ -998,24 +980,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     if (!entry.session) return
 
     for await (const agentEvent of entry.session.events) {
-      if (agentEvent.type === 'stderr') {
-        // Scrub the combined previous/current text (not just the new chunk)
-        // before bounding, so a sensitive key split across chunk boundaries is
-        // still redacted without losing its label to the tail cut.
-        entry.stderrTail = tailString(
-          redactDiagnosticText(entry.stderrTail + agentEvent.text),
-          STDERR_TAIL_MAX_LEN,
-        )
-        continue
-      }
-      if (agentEvent.type === 'error') {
-        entry.childError = redactDiagnosticText(agentEvent.message)
-        continue
-      }
-      if (agentEvent.type === 'exit') {
-        entry.pendingExit = { exitCode: agentEvent.exitCode, signal: agentEvent.signal }
-        return
-      }
       // A bounded cancellation may have terminalized and forgotten this entry
       // while the stream is stalled; late stream events must not mutate the
       // terminal state or insert post-terminal events.
@@ -1028,6 +992,17 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         if (agentEvent.profile) this.captureResolvedProfileOnce(entry.executionId, agentEvent.profile, nowIso())
       }
       if (agentEvent.type === 'finished') {
+        const upstreamError = agentEvent.upstreamError
+        entry.finished = {
+          ...agentEvent,
+          ...(isRecord(agentEvent.error) && typeof agentEvent.error.message === 'string'
+            ? { error: { ...agentEvent.error, message: redactDiagnosticText(agentEvent.error.message) } }
+            : {}),
+          ...(typeof agentEvent.error === 'string' ? { error: redactDiagnosticText(agentEvent.error) } : {}),
+          ...(upstreamError && typeof upstreamError.message === 'string'
+            ? { upstreamError: { ...upstreamError, message: redactDiagnosticText(upstreamError.message) } }
+            : {}),
+        }
         if (agentEvent.nativeSessionId) entry.pendingNativeSessionId = agentEvent.nativeSessionId
         if (agentEvent.clientFamily) entry.pendingClientFamily = agentEvent.clientFamily as ClientFamily
         if (agentEvent.clientFamily === 'codebuddy' && agentEvent.nativeSessionId) {
@@ -1040,9 +1015,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       const finishedEvent = agentEvent.type === 'finished' ? agentEvent : undefined
       const final = finishedEvent ? extractFinalResult(finishedEvent) : undefined
       if (final) {
-        entry.rawResult = redactJsonString(stableStringify(agentEvent))
-        entry.sawTerminalResult ||= !final.isError
-        entry.sawErrorResult ||= final.isError
+        entry.rawResult = redactJsonString(stableStringify(entry.finished ?? agentEvent))
         if (final.output) {
           entry.finalOutput = final.output
           const redacted = redactEvent('message', messageEvent(final.output))
@@ -1053,24 +1026,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           }
         }
       }
-      // A failed terminal record can carry the upstream identity as a
-      // structured error object; keep it verbatim beside the scraped text.
-      if (final?.isError) {
-        const structured = finishedEvent ? extractUpstreamErrorRecord(finishedEvent) : undefined
-        if (structured) {
-          entry.pendingUpstreamError = mergeUpstreamError(entry.pendingUpstreamError, structured)
-          entry.pendingUpstreamErrorProvenance = true
-        }
-      }
-      const streamErrorText = agentEvent.type === 'finished' && final?.isError
-        ? (finishedEvent ? extractStreamJsonErrorText(finishedEvent) : undefined)
-        : undefined
-      if (streamErrorText) {
-        entry.resultErrorTail = tailString(
-          redactDiagnosticText(`${entry.resultErrorTail}${entry.resultErrorTail ? '\n' : ''}${streamErrorText}`),
-          STDERR_TAIL_MAX_LEN,
-        )
-      }
+      if (final?.isError && typeof finishedEvent?.error === 'string')
+        entry.abnormalProseParts.push(redactDiagnosticText(finishedEvent.error))
 
       const mappedEvents = mapStreamEventToBClass(agentEvent)
       if (mappedEvents.length > 0) {
@@ -1101,11 +1058,10 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     }
   }
 
-  private async handleChildClose(entry: RegistryEntry, exitCode: number | null, signal: NodeJS.Signals | null): Promise<void> {
-    this.claimTerminalIntent(entry, { kind: 'exit', exitCode, signal })
+  private async handleChildClose(entry: RegistryEntry): Promise<void> {
     const intent = entry.terminalIntent
     await this.drainStreamAtDeadline(entry)
-    const status = this.determineTerminalStatus(entry, intent)
+    const status = this.determineTerminalStatus(entry, intent, entry.finished?.status)
     const killReason = this.determineKillReason(entry, status, intent)
     const messageOutput = (entry.finalOutput ?? entry.outputParts.join('')).trim() || null
     // Failed and timed-out runs return the ordered model prose followed by a
@@ -1115,38 +1071,17 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       ? this.assembleAbnormalOutput(entry)
       : null
     const rawAgentOutput = processOutput === null ? messageOutput : processOutput
-    // A failed execution keeps a bounded, redacted diagnostic tail of the
-    // child's captured error signals, so the real cause (e.g. an HTTP 400
-    // unsupported-model message) is retained even when a generic child error
-    // also exists. The tail is carried in the execution output as well as the
-    // error. Any failed agent output that accompanies the diagnostics is
-    // scrubbed too: a failed child can echo plain-text credentials that no
-    // structured field would have caught.
-    const failureDiagnostic = status === 'failed' ? this.failedDiagnosticTail(entry) : null
     const agentOutput = status === 'failed' && rawAgentOutput !== null
       ? redactDiagnosticText(rawAgentOutput)
       : rawAgentOutput
-    const output = failureDiagnostic === null
-      ? agentOutput
-      : (agentOutput === null ? failureDiagnostic : `${agentOutput}\n${failureDiagnostic}`)
-    const error = this.determineTerminalError(entry, status, failureDiagnostic, exitCode, signal)
-    // The upstream identity the client reported, when its captured diagnostics
-    // state one. It is carried beside the failure diagnostic so the downstream
-    // gateway classification can decide the fault; this layer never classifies.
-    // A structured error object on the terminal record wins per-field over the
-    // scraped text.
-    // Read from the client's own messages and diagnostics, never from tool
-    // results, so a status line the agent merely printed cannot fault a route.
-    const upstreamError = status === 'failed'
-      ? entry.pendingUpstreamErrorProvenance
-        ? entry.pendingUpstreamError
-        : mergeUpstreamError(entry.pendingUpstreamError, extractUpstreamError([messageOutput === null ? null : redactDiagnosticText(messageOutput), failureDiagnostic].filter((part): part is string => part !== null).join('\n') || null))
-      : undefined
+    const output = agentOutput
+    const errorValue = entry.finished?.error
+    const errorText = typeof errorValue === 'string' ? errorValue : isRecord(errorValue) ? stringProp(errorValue, 'message') : null
+    const error = status === 'failed' ? redactDiagnosticText(errorText || 'execution failed') : null
+    const upstreamError = status === 'failed' ? entry.finished?.upstreamError : undefined
 
     this.terminalizeRunning(entry, {
       status,
-      exitCode,
-      signal,
       killReason,
       output,
       error,
@@ -1171,26 +1106,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   }
 
   /**
-   * Bounded, redacted diagnostic tail of a failed execution assembled from every
-   * captured client signal (raw stderr tail, structured result error tail, stream
-   * error, child error). The concise, structured causes follow the raw stderr so
-   * they survive the tail bound, each part is scrubbed with the shared
-   * diagnostic-text redactor (JSON/JSONL keys plus plain key=value and token
-   * forms) before it is retained, persisted or published, and the joined text is
-   * bounded to STDERR_TAIL_MAX_LEN. Returns null when nothing was captured.
-   */
-  private failedDiagnosticTail(entry: RegistryEntry): string | null {
-    const parts = compactStrings([
-      entry.stderrTail,
-      entry.resultErrorTail,
-      entry.streamError,
-      entry.childError,
-    ]).map((part) => redactDiagnosticText(part))
-    if (parts.length === 0) return null
-    return tailString(parts.join('\n'), STDERR_TAIL_MAX_LEN)
-  }
-
-  /**
    * The failure classification carried to route health. Only a class the client
    * itself reported on its terminal record is carried; the upstream status and
    * error identity are extracted separately as `upstreamError`, so a diagnostic
@@ -1200,13 +1115,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     return entry.pendingFailureClass ?? null
   }
 
-  private determineTerminalStatus(entry: RegistryEntry, intent: TerminalIntent | undefined): TerminalStatus {
+  private determineTerminalStatus(entry: RegistryEntry, intent: TerminalIntent | undefined, finishedStatus?: 'done' | 'failed'): TerminalStatus {
     if (intent?.kind === 'shutdown') return 'interrupted'
     if (intent?.kind === 'cancel') return 'cancelled'
     if (intent?.kind === 'timeout') return 'timeout'
-    const exitCode = intent?.kind === 'exit' ? intent.exitCode : null
-    if (exitCode === 0 && entry.sawTerminalResult && !entry.sawErrorResult) return 'done'
-    return 'failed'
+    return finishedStatus === 'done' ? 'done' : 'failed'
   }
 
   private determineKillReason(
@@ -1217,56 +1130,18 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     if (status === 'cancelled') return 'cancel'
     if (status === 'timeout') return 'timeout'
     if (status === 'interrupted') return 'shutdown'
-    const exitCode = intent?.kind === 'exit' ? intent.exitCode : null
-    if (status === 'failed' && exitCode !== 0) return 'crash'
     return null
-  }
-
-  private determineTerminalError(
-    entry: RegistryEntry,
-    status: TerminalStatus,
-    failureDiagnostic: string | null,
-    exitCode: number | null,
-    signal: NodeJS.Signals | null,
-  ): string | null {
-    if (status === 'done') return null
-    if (status === 'cancelled') return 'cancelled'
-    if (status === 'timeout') return 'timeout'
-    // The whole bounded, redacted diagnostic tail is reported instead of only the
-    // first truthy captured field, so a generic child error never hides the real
-    // cause.
-    if (!entry.sawTerminalResult && !entry.sawErrorResult) {
-      return this.appendKnownProcessExitFacts(failureDiagnostic ?? 'no terminal event', exitCode, signal)
-    }
-    return this.appendKnownProcessExitFacts(failureDiagnostic ?? 'execution failed', exitCode, signal)
-  }
-
-  private appendKnownProcessExitFacts(
-    message: string,
-    exitCode: number | null,
-    signal: NodeJS.Signals | null,
-  ): string {
-    let text = message
-    if (exitCode !== null && !text.includes(`(execution exited with code ${exitCode})`)) {
-      text = `${text} (execution exited with code ${exitCode})`
-    }
-    if (signal !== null && !text.includes(`(signal ${signal})`)) {
-      text = `${text} (signal ${signal})`
-    }
-    return text
   }
 
   private terminalizeRunning(
     entry: RegistryEntry,
   terminal: {
     status: TerminalStatus
-    exitCode: number | null
-    signal: NodeJS.Signals | null
     killReason: KillReason
     output: string | null
     error: string | null
     failureClass?: string | null
-    upstreamError?: UpstreamError
+    upstreamError?: Extract<AgentEvent, { type: 'finished' }>['upstreamError']
   },
   ): void {
     if (entry.terminalGeneration > 0) return
@@ -1287,13 +1162,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       this.tx(() => {
         const updateResult = this.run(
           `UPDATE executions
-          SET status = ?, ended_at = ?, exit_code = ?, kill_signal = ?, kill_reason = ?,
+          SET status = ?, ended_at = ?, kill_reason = ?,
             output = ?, raw_result = ?, error = ?, updated_at = ?
           WHERE id = ? AND status = 'running'`,
           terminal.status,
           endedAt,
-          terminal.exitCode,
-          terminal.signal,
           terminal.killReason,
           terminal.output,
           entry.rawResult === undefined ? null : redactJsonString(entry.rawResult),
@@ -1312,7 +1185,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           type: terminal.status === 'cancelled' ? 'cancelled' : 'terminal',
           data: dropUndefined({ summary: terminalSummary }),
           status: terminal.status === 'cancelled' ? undefined : eventStatus,
-          exitCode: terminal.status === 'cancelled' ? undefined : terminal.exitCode,
           isError: terminal.status === 'cancelled' ? undefined : (eventStatus === 'failed' ? 1 : 0),
           timestamp: endedAt,
         })
@@ -1325,7 +1197,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
             type: 'result',
             data: dropUndefined({ summary: terminalSummary }),
             status: eventStatus,
-            exitCode: terminal.exitCode,
             isError: eventStatus === 'failed' ? 1 : 0,
             timestamp: endedAt,
           })
@@ -1349,12 +1220,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       committed = applied
 
       if (committed) {
-        const terminalResult: ExecutionResult & { upstreamError?: UpstreamError | null } = {
+        const terminalResult: ExecutionResult & { upstreamError?: Extract<AgentEvent, { type: 'finished' }>['upstreamError'] | null } = {
           executionId: entry.executionId,
           status: terminal.status,
           output: terminal.output,
           error: terminal.error,
-          exitCode: terminal.exitCode,
           killReason: terminal.killReason,
           failureClass: terminal.failureClass ?? null,
           upstreamError: terminal.upstreamError ?? null,
@@ -1444,7 +1314,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           type: 'terminal',
           data: {},
           status: 'failed',
-          exitCode: null,
           isError: 1,
           timestamp: endedAt,
         })
@@ -1518,7 +1387,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           type: status === 'cancelled' ? 'cancelled' : 'terminal',
           data: {},
           status: status === 'cancelled' ? undefined : eventStatus,
-          exitCode: null,
           isError: status === 'cancelled' ? undefined : (eventStatus === 'failed' ? 1 : 0),
           timestamp: endedAt,
         })
@@ -1649,7 +1517,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         status: 'cancelled',
         output: (entry.finalOutput ?? entry.outputParts.join('')).trim() || null,
         error: 'cancelled',
-        exitCode: null,
         killReason: 'cancel',
       }
     } else {
@@ -1704,7 +1571,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         status: 'timeout',
         output,
         error: 'timeout',
-        exitCode: null,
         killReason: 'timeout',
       }
       try {
@@ -1760,7 +1626,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         type: 'terminal',
         data: {},
         status: 'failed',
-        exitCode: null,
         isError: 1,
         timestamp: endedAt,
       })
@@ -2021,7 +1886,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     type: string
     data: unknown
     status?: 'done' | 'failed'
-    exitCode?: number | null
     isError?: 0 | 1
     timestamp?: string
   }): void {
@@ -2033,7 +1897,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       type: opts.type,
       data: opts.data,
       status: opts.status,
-      exitCode: opts.exitCode,
       isError: opts.isError,
       timestamp,
     })
@@ -2274,122 +2137,11 @@ function isClientFamily(value: string | null | undefined): value is ClientFamily
   return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'cursor' || value === 'grok' || value === 'dsh' || value === 'codebuddy' || value === 'pi' || value === 'kimi'
 }
 
-/**
- * The upstream HTTP status and error identity a failed native client reported.
- * Parsed only from explicit status markers or error fields in the captured
- * diagnostics; a missing field stays missing rather than being guessed.
- */
-interface UpstreamError {
-  status?: number
-  errorType?: string
-  message?: string
-  /** An explicitly stated reset instant, as an ISO timestamp. */
-  resetsAt?: string
-}
-
-/** An explicit HTTP status: `HTTP 403`, `HTTP/1.1 403`, or a labeled status field. */
-const UPSTREAM_HTTP_STATUS_PATTERN = /\bHTTP(?:\/[\d.]+)?\s+(4\d{2}|5\d{2})\b/iu
-const UPSTREAM_STATUS_FIELD_PATTERN = /\bstatus(?:[ _-]?code)?["']?\s*[:=]\s*["']?(4\d{2}|5\d{2})\b/iu
-/** An error identity printed after the status, e.g. `FreeTierError`. */
-const UPSTREAM_ERROR_TYPE_PATTERN = /\bHTTP\s+(?:4\d{2}|5\d{2})\s+([A-Za-z_][\w.-]*(?:Error|Exception))\b/u
-/** The provider error type in a JSON diagnostic (`{ "error": { "type": … } }`). */
-const UPSTREAM_JSON_ERROR_TYPE_PATTERN = /"error"\s*:\s*\{[^{}]{0,200}?"type"\s*:\s*"([^"]+)"/u
-/** An explicitly labeled error identity field. */
-const UPSTREAM_ERROR_TYPE_FIELD_PATTERN = /"error_?type"\s*:\s*"([^"]+)"/iu
-/** The message that follows the upstream status/identity, up to the line end. */
-const UPSTREAM_ERROR_MESSAGE_PATTERN = /\bHTTP\s+(?:4\d{2}|5\d{2})\s+(?:[A-Za-z_][\w.-]*(?:Error|Exception))?\s*:\s*([^\r\n]+)/u
-/**
- * A native client failure whose output begins with a bare status line, e.g.
- * CodeBuddy's `429 <message>`. Only the very first line counts, so agent text
- * that merely mentions a status later can never be read as one.
- */
-const UPSTREAM_STATUS_LINE_PATTERN = /^(4\d{2}|5\d{2})\s+(\S[^\r\n]*)/u
-/** An explicit reset instant on a line that says it resets, e.g. `2026-01-02 03:04:05 UTC+8 重置`. */
-const UPSTREAM_RESET_PATTERN = /(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s*UTC([+-])(\d{1,2})(?::?(\d{2}))?[^\r\n]*?(?:重置|reset)/iu
-/** A JSON error message, unescaped after capture. */
-const UPSTREAM_JSON_MESSAGE_PATTERN = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/u
-
-function extractUpstreamError(text: string | null): UpstreamError | undefined {
-  if (text === null || text === '') return undefined
-  const statusLine = UPSTREAM_STATUS_LINE_PATTERN.exec(text)
-  const statusText = UPSTREAM_HTTP_STATUS_PATTERN.exec(text)?.[1] ?? UPSTREAM_STATUS_FIELD_PATTERN.exec(text)?.[1] ?? statusLine?.[1]
-  const status = statusText === undefined ? undefined : Number(statusText)
-  const errorType = UPSTREAM_ERROR_TYPE_PATTERN.exec(text)?.[1]
-    ?? UPSTREAM_JSON_ERROR_TYPE_PATTERN.exec(text)?.[1]
-    ?? UPSTREAM_ERROR_TYPE_FIELD_PATTERN.exec(text)?.[1]
-  const rawMessage = UPSTREAM_ERROR_MESSAGE_PATTERN.exec(text)?.[1]
-    ?? UPSTREAM_JSON_MESSAGE_PATTERN.exec(text)?.[1]
-    ?? statusLine?.[2]
-  const message = rawMessage === undefined ? undefined : unescapeJsonString(rawMessage)
-  const reset = UPSTREAM_RESET_PATTERN.exec(text)
-  const resetsAt = reset === null
-    ? undefined
-    : `${reset[1]}T${reset[2]}${reset[3]}${reset[4]!.padStart(2, '0')}:${reset[5] ?? '00'}`
-  if (status === undefined && errorType === undefined && message === undefined) return undefined
-  return {
-    ...(status === undefined ? {} : { status }),
-    ...(errorType === undefined ? {} : { errorType }),
-    ...(message === undefined ? {} : { message }),
-    ...(resetsAt === undefined || Number.isNaN(Date.parse(resetsAt)) ? {} : { resetsAt }),
-  }
-}
-
-/** The structured upstream identity on a failed terminal record, verbatim. */
-function extractUpstreamErrorRecord(event: Extract<AgentEvent, { type: 'finished' }>): UpstreamError | undefined {
-  const error = isRecord(event.error) ? event.error : null
-  if (error === null) return undefined
-  const status = numberProp(error, 'status') ?? undefined
-  const errorType = stringProp(error, 'type') ?? undefined
-  const message = stringProp(error, 'message') ?? undefined
-  const resetsAt = stringProp(error, 'resets_at') ?? undefined
-  if (status === undefined && errorType === undefined && message === undefined && resetsAt === undefined) return undefined
-  return {
-    ...(status === undefined ? {} : { status }),
-    ...(errorType === undefined || errorType === '' ? {} : { errorType }),
-    ...(message === undefined || message === '' ? {} : { message }),
-    ...(resetsAt === undefined || resetsAt === '' || Number.isNaN(Date.parse(resetsAt)) ? {} : { resetsAt }),
-  }
-}
-
-/** Structured fields win per-field over the scraped text identity. */
-function mergeUpstreamError(structured: UpstreamError | undefined, scraped: UpstreamError | undefined): UpstreamError | undefined {
-  if (structured === undefined) return scraped
-  if (scraped === undefined) return structured
-  const status = structured.status ?? scraped.status
-  const errorType = structured.errorType ?? scraped.errorType
-  const message = structured.message ?? scraped.message
-  const resetsAt = structured.resetsAt ?? scraped.resetsAt
-  if (status === undefined && errorType === undefined && message === undefined && resetsAt === undefined) return undefined
-  return {
-    ...(status === undefined ? {} : { status }),
-    ...(errorType === undefined ? {} : { errorType }),
-    ...(message === undefined ? {} : { message }),
-    ...(resetsAt === undefined ? {} : { resetsAt }),
-  }
-}
-
-function unescapeJsonString(text: string): string {
-  if (!text.includes('\\')) return text
-  try {
-    return JSON.parse(`"${text}"`) as string
-  } catch {
-    return text
-  }
-}
-
 function extractFinalResult(event: Extract<AgentEvent, { type: 'finished' }>): { isError: boolean; output?: string } {
   return {
     isError: event.isError === true || event.status === 'failed',
     output: typeof event.output === 'string' ? event.output : undefined,
   }
-}
-
-function extractStreamJsonErrorText(event: Extract<AgentEvent, { type: 'finished' }>): string | undefined {
-  return compactStrings([
-    typeof event.error === 'string' ? event.error : undefined,
-    stringProp(isRecord(event.error) ? event.error : null, 'message'),
-    event.output,
-  ]).join('\n') || stableStringify(event)
 }
 
 function assertStartExecutionOpts(opts: StartExecutionOpts): void {
@@ -2489,7 +2241,6 @@ function resultFromRow(row: ExecutionRecord): ExecutionResult {
     status: row.status,
     output: row.output,
     error: row.error,
-    exitCode: row.exit_code,
     killReason: row.kill_reason,
   }
 }

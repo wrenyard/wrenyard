@@ -24,9 +24,9 @@ export class DshClient implements AgentClient {
         const launch = await prepareDshLaunch(request, undefined, env);
         try {
             const session = await openSession(launch.spec, decodeDsh, options);
+            void session.result.finally(() => launch.cleanup()).catch(() => undefined);
             return {
                 events: session.events,
-                result: session.result.finally(() => launch.cleanup()),
                 cancel: async () => {
                     try {
                         await session.cancel();

@@ -1,6 +1,6 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
+import type { AgentEvent, InternalAgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
     readNativeRecords, recordOf, runFinishedRecord, sessionIdOf, stringOf, toolCallRecord, toolResultRecord,
     turnUsageRecord,
@@ -61,8 +61,8 @@ interface WireFacts {
     quotaRetryAfterMs?: number;
 }
 
-export function decodeKimi(options: DecodeKimiOptions): (events: AsyncIterable<StreamChunk>) => AsyncGenerator<AgentEvent> {
-    return async function* (events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent> {
+export function decodeKimi(options: DecodeKimiOptions): (events: AsyncIterable<StreamChunk>) => AsyncGenerator<AgentEvent | InternalAgentEvent> {
+    return async function* (events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent | InternalAgentEvent> {
         let sessionId: string | undefined;
         let output = '';
         let emittedTerminal = false;
@@ -77,15 +77,12 @@ export function decodeKimi(options: DecodeKimiOptions): (events: AsyncIterable<S
                     // home that was never cleaned (e.g. unconfirmed tree kill).
                     const facts = options.captured.facts ?? await readWireFacts(options.runHome, options.skipWireBytes);
                     if (facts.protocolVersion !== undefined && facts.protocolVersion !== KNOWN_WIRE_PROTOCOL_VERSION)
-                        yield { type: 'stderr', text: `kimi: wire protocol version ${facts.protocolVersion} was not observed before; fields may have moved` };
+                        stderrText += `kimi: wire protocol version ${facts.protocolVersion} was not observed before; fields may have moved`;
                     // A silent upstream fallback (e.g. an unknown wire id falling
                     // back to K2.8) is a failed run even when the exit code is 0.
                     const modelMismatch = facts.model !== undefined && facts.model !== options.expectedModel;
                     const completed = facts.endReason === 'completed';
-                    const failed = modelMismatch
-                        || (!completed && !facts.aborted)
-                        || item.event.exitCode !== 0
-                        || item.event.signal !== null;
+                    const failed = modelMismatch || (!completed && !facts.aborted);
                     if (facts.usage.seenAny) {
                         const usage = wireUsageRecord(facts.usage, facts);
                         if (usage)
@@ -110,8 +107,8 @@ export function decodeKimi(options: DecodeKimiOptions): (events: AsyncIterable<S
                             });
                         }
                     }
+                    return;
                 }
-                yield item.event;
                 continue;
             }
             const record = item.record;
@@ -138,7 +135,7 @@ export function decodeKimi(options: DecodeKimiOptions): (events: AsyncIterable<S
             if (type === 'turn.step.retrying') {
                 const attempt = nonnegativeInt(record.failed_attempt);
                 const max = nonnegativeInt(record.max_attempts);
-                yield { type: 'stderr', text: `kimi: upstream retry${attempt !== undefined ? ` ${attempt}${max !== undefined ? `/${max}` : ''}` : ''}: ${stringOf(record, 'error_name') || stringOf(record, 'error') || 'unknown error'}` };
+                stderrText += `kimi: upstream retry${attempt !== undefined ? ` ${attempt}${max !== undefined ? `/${max}` : ''}` : ''}: ${stringOf(record, 'error_name') || stringOf(record, 'error') || 'unknown error'}`;
                 continue;
             }
             if (type === 'session.resume_hint') {
@@ -149,6 +146,8 @@ export function decodeKimi(options: DecodeKimiOptions): (events: AsyncIterable<S
             }
             // `system.version` and unknown record types carry no turn state.
         }
+        if (!emittedTerminal)
+            yield runFinishedRecord('kimi', 'failed', sessionId, { is_error: true, error: 'transport ended without a terminal result' });
     };
 }
 

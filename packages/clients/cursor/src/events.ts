@@ -1,5 +1,5 @@
 import { turnUsageRecord } from '@wrenyard/agent-client/native';
-import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
+import type { AgentEvent, InternalAgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
     finishedEvent, jsonStringValue, messageEvent, readNativeRecords, reasoningRecord, recordOf, sessionIdOf, stringOf, toolCallRecord, toolResultRecord,
 } from '@wrenyard/agent-client/native';
@@ -17,7 +17,7 @@ import {
  * observable serial generation window yields exactly one aggregate
  * speed sample, while any structural surprise yields none.
  */
-export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: string): AsyncGenerator<AgentEvent> {
+export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: string): AsyncGenerator<AgentEvent | InternalAgentEvent> {
     let sessionId: string | undefined;
     let output = '';
     let finished = false;
@@ -43,10 +43,9 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: s
             if (item.event.type === 'stderr')
                 stderrTail = (stderrTail + item.event.text).slice(-4096);
             else if (item.event.type === 'error' && !endReason)
-                endReason = item.event.message ?? 'cursor execution failed';
-            else if (item.event.type === 'exit' && !endReason && item.event.exitCode !== 0 && item.event.exitCode !== null)
-                endReason = `cursor exited with code ${item.event.exitCode}`;
-            if (item.event.type === 'exit') {
+                endReason = item.event.message;
+            if (item.event.type === 'exit' && !finished) {
+                finished = true;
                 const text = deduper.finish();
                 if (text)
                     message += text;
@@ -68,7 +67,6 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: s
                 }
                 yield finishedEvent('cursor', sessionId, output, failed, runError);
             }
-            yield item.event;
             continue;
         }
         const record = item.record;
@@ -117,6 +115,18 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: s
     const flushed = flushMessage();
     if (flushed)
         yield flushed;
+    if (!finished) {
+        finished = true;
+        if (usage)
+            yield turnUsageRecord(withSample(usage, sampler, model));
+        const failed = endReason !== '' || !terminal || terminal.signal !== undefined;
+        const stderrLine = lastNonEmptyStderrLine(stderrTail, 600);
+        const runError = terminal?.signal !== undefined
+            ? cursorTerminalError(terminal.signal, terminal.record)
+            : endReason !== '' ? (stderrLine === '' ? endReason : `${endReason}; stderr: ${stderrLine}`)
+                : stderrLine !== '' ? `stderr: ${stderrLine}` : undefined;
+        yield finishedEvent('cursor', sessionId, output, failed, runError);
+    }
 }
 
 /** Attaches the aggregate sample only when the terminal usage is itself complete. */

@@ -1,4 +1,4 @@
-import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
+import type { AgentEvent, InternalAgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
     finishedEvent, fnv1a64Hex, jsonStringValue, messageEvent, readNativeRecords, recordOf, runFinishedRecord, sessionIdOf, stringOf, toolCallRecord, toolResultRecord,
     turnUsageRecord,
@@ -26,7 +26,7 @@ interface WrenyardRetryPayload {
     next?: string;
 }
 
-export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent> {
+export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent | InternalAgentEvent> {
     let sessionId: string | undefined;
     let output = '';
     // Completion/error bookkeeping. A healthy invocation must end its last model
@@ -36,6 +36,7 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
     let sawError = false;
     let completedStep = false;
     let emittedTerminal = false;
+    let pendingTerminal: AgentEvent | undefined;
     let retryStderrBuffer = '';
     const usage = {
         input: 0, output: 0, reasoning: 0, total: 0, cacheRead: 0, cacheWrite: 0,
@@ -85,12 +86,11 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
                 const retry = consumeWrenyardRetryStderr(retryStderrBuffer, item.event.text);
                 retryStderrBuffer = retry.buffer;
                 if (retry.payload && !emittedTerminal) {
-                    emittedTerminal = true;
                     sawError = true;
                     const payload = retry.payload;
                     if (payload.sessionID)
                         sessionId = payload.sessionID;
-                    yield runFinishedRecord('opencode', 'failed', sessionId, {
+                    pendingTerminal = runFinishedRecord('opencode', 'failed', sessionId, {
                         is_error: true,
                         error: openCodeRetryUpstreamError(payload),
                     });
@@ -100,10 +100,10 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
                 const terminal = flushUsage();
                 if (terminal)
                     yield terminal;
-                if (!emittedTerminal)
-                    yield finishedEvent('opencode', sessionId, output, sawError || !completedStep || item.event.exitCode !== 0 || item.event.signal !== null);
+                emittedTerminal = true;
+                yield pendingTerminal ?? finishedEvent('opencode', sessionId, output, sawError || !completedStep);
+                return;
             }
-            yield item.event;
             continue;
         }
         const record = item.record;
@@ -137,10 +137,16 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
         if (type === 'error') {
             sawError = true;
             const errorText = openCodeErrorText(record);
-            if (errorText)
-                yield { type: 'error', message: errorText };
-            yield finishedEvent('opencode', sessionId, output, true);
+            pendingTerminal = runFinishedRecord('opencode', 'failed', sessionId, {
+                ...(errorText ? { error: errorText } : {}),
+                is_error: true,
+            });
         }
+    }
+    if (!emittedTerminal) {
+        const terminal = flushUsage();
+        if (terminal) yield terminal;
+        yield pendingTerminal ?? finishedEvent('opencode', sessionId, output, true);
     }
 }
 

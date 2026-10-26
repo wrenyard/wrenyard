@@ -65,8 +65,19 @@ export interface AgentRequest {
     /** MCP servers to inject, keyed by the name exposed to the client. */
     readonly mcpServers?: Readonly<Record<string, McpServer>>;
 }
+export interface UpstreamError {
+    readonly status?: number;
+    readonly errorType?: string;
+    readonly message?: string;
+    readonly resetsAt?: string;
+}
+/** Semantic terminal result retained as a type for existing client imports. */
 export interface AgentResult {
-    readonly exitCode: number | null;
+    readonly status: 'done' | 'failed';
+    readonly error?: string;
+    readonly failureClass?: string;
+    readonly upstreamError?: UpstreamError;
+    readonly profile?: string;
 }
 export type AgentEvent =
     | { readonly type: 'session'; readonly nativeSessionId: string; readonly profile?: string }
@@ -75,13 +86,14 @@ export type AgentEvent =
     | { readonly type: 'tool_call'; readonly callId: string; readonly name: string; readonly inputSummary: string; readonly nativeSessionId?: string }
     | { readonly type: 'tool_result'; readonly callId: string; readonly status: 'ok' | 'error'; readonly outputTail: string; readonly nativeSessionId?: string }
     | ({ readonly type: 'usage' } & Readonly<Record<string, unknown>>)
-    | ({ readonly type: 'finished'; readonly status: 'done' | 'failed'; readonly nativeSessionId?: string; readonly clientFamily?: string; readonly output?: string; readonly isError?: boolean; readonly error?: unknown; readonly failureClass?: string; readonly recoveryAt?: string; readonly retryAfterSeconds?: number; readonly profile?: string } & Readonly<Record<string, unknown>>)
+    | ({ readonly type: 'finished'; readonly status: 'done' | 'failed'; readonly nativeSessionId?: string; readonly clientFamily?: string; readonly output?: string; readonly isError?: boolean; readonly error?: unknown; readonly failureClass?: string; readonly upstreamError?: UpstreamError; readonly recoveryAt?: string; readonly retryAfterSeconds?: number; readonly profile?: string } & Readonly<Record<string, unknown>>);
+/** Decoder-only diagnostics and transport termination, removed by openSession. */
+export type InternalAgentEvent =
     | { readonly type: 'stderr'; readonly text: string }
     | { readonly type: 'error'; readonly message: string }
     | { readonly type: 'exit'; readonly exitCode: number | null; readonly signal: NodeJS.Signals | null };
 export interface AgentSession {
     readonly events: AsyncIterable<AgentEvent>;
-    readonly result: Promise<AgentResult>;
     cancel(): Promise<void>;
     readonly diagnostics: {
         readonly pid?: number;

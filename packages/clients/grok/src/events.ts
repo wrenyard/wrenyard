@@ -1,4 +1,4 @@
-import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
+import type { AgentEvent, InternalAgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
     failureRecord, finishedEvent, jsonStringValue, messageEvent, readNativeRecords, recordOf, runFinishedRecord, sessionIdOf, stringOf, toolCallRecord, toolResultRecord,
     turnUsageRecord,
@@ -17,7 +17,7 @@ import { positiveInt } from '@wrenyard/agent-client/statistics';
 export async function* decodeGrok(
     events: AsyncIterable<StreamChunk>,
     discoverSessionId?: () => Promise<string | undefined>,
-): AsyncGenerator<AgentEvent> {
+): AsyncGenerator<AgentEvent | InternalAgentEvent> {
     let sessionId: string | undefined;
     let output = '';
     let message = '';
@@ -68,10 +68,10 @@ export async function* decodeGrok(
                             yield terminal;
                     }
                     else
-                        yield finishedEvent('grok', sessionId, output, failed || !ended || item.event.exitCode !== 0 && item.event.exitCode !== null);
+                        yield finishedEvent('grok', sessionId, output, failed || !ended);
+                    return;
                 }
             }
-            yield item.event;
             continue;
         }
         const record = item.record;
@@ -133,8 +133,7 @@ export async function* decodeGrok(
         const canonical = canonicalUsage(usage);
         if (canonical)
             yield canonical;
-        if (terminal)
-            yield terminal;
+        yield terminal ?? finishedEvent('grok', sessionId, output, true);
     }
 }
 

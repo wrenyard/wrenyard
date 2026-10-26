@@ -4,7 +4,65 @@ import { StringDecoder } from 'node:string_decoder';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
 import { resolveWrenyardClientStateDir, resolveWrenyardStateRoot } from '@wrenyard/paths';
-import type { AgentEvent, AgentRequest, StreamChunk } from './index.ts';
+import type { AgentEvent, AgentRequest, InternalAgentEvent, StreamChunk, UpstreamError } from './index.ts';
+
+const UPSTREAM_HTTP_STATUS_PATTERN = /\bHTTP(?:\/[\d.]+)?\s+(4\d{2}|5\d{2})\b/iu;
+const UPSTREAM_STATUS_FIELD_PATTERN = /\bstatus(?:[ _-]?code)?["']?\s*[:=]\s*["']?(4\d{2}|5\d{2})\b/iu;
+const UPSTREAM_ERROR_TYPE_PATTERN = /\bHTTP\s+(?:4\d{2}|5\d{2})\s+([A-Za-z_][\w.-]*(?:Error|Exception))\b/u;
+const UPSTREAM_JSON_ERROR_TYPE_PATTERN = /"error"\s*:\s*\{[^{}]{0,200}?"type"\s*:\s*"([^"]+)"/u;
+const UPSTREAM_ERROR_TYPE_FIELD_PATTERN = /"error_?type"\s*:\s*"([^"]+)"/iu;
+const UPSTREAM_ERROR_MESSAGE_PATTERN = /\bHTTP\s+(?:4\d{2}|5\d{2})\s+(?:[A-Za-z_][\w.-]*(?:Error|Exception))?\s*:\s*([^\r\n]+)/u;
+const UPSTREAM_STATUS_LINE_PATTERN = /^(4\d{2}|5\d{2})\s+(\S[^\r\n]*)/u;
+const UPSTREAM_RESET_PATTERN = /(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s*UTC([+-])(\d{1,2})(?::?(\d{2}))?[^\r\n]*?(?:重置|reset)/iu;
+const UPSTREAM_JSON_MESSAGE_PATTERN = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/u;
+
+export function extractUpstreamError(text: string | null): UpstreamError | undefined {
+    if (!text) return undefined;
+    const statusLine = UPSTREAM_STATUS_LINE_PATTERN.exec(text);
+    const statusText = UPSTREAM_HTTP_STATUS_PATTERN.exec(text)?.[1] ?? UPSTREAM_STATUS_FIELD_PATTERN.exec(text)?.[1] ?? statusLine?.[1];
+    const status = statusText === undefined ? undefined : Number(statusText);
+    const errorType = UPSTREAM_ERROR_TYPE_PATTERN.exec(text)?.[1] ?? UPSTREAM_JSON_ERROR_TYPE_PATTERN.exec(text)?.[1] ?? UPSTREAM_ERROR_TYPE_FIELD_PATTERN.exec(text)?.[1];
+    const rawMessage = UPSTREAM_ERROR_MESSAGE_PATTERN.exec(text)?.[1] ?? UPSTREAM_JSON_MESSAGE_PATTERN.exec(text)?.[1] ?? statusLine?.[2];
+    const message = rawMessage?.includes('\\') ? (() => { try { return JSON.parse(`"${rawMessage}"`) as string; } catch { return rawMessage; } })() : rawMessage;
+    const reset = UPSTREAM_RESET_PATTERN.exec(text);
+    const resetsAt = reset ? `${reset[1]}T${reset[2]}${reset[3]}${reset[4]!.padStart(2, '0')}:${reset[5] ?? '00'}` : undefined;
+    if (status === undefined && errorType === undefined && message === undefined) return undefined;
+    return { ...(status === undefined ? {} : { status }), ...(errorType === undefined ? {} : { errorType }), ...(message === undefined ? {} : { message }), ...(resetsAt === undefined || Number.isNaN(Date.parse(resetsAt)) ? {} : { resetsAt }) };
+}
+
+export function enrichFinishedEvent(event: AgentEvent, diagnosticText?: string): AgentEvent {
+    if (event.type !== 'finished' || event.status !== 'failed') return event;
+    const structured = event.upstreamError ?? (event.error && typeof event.error === 'object' ? (() => {
+        const value = event.error as Record<string, unknown>;
+        const status = typeof value.status === 'number' ? value.status : undefined;
+        const errorType = typeof value.type === 'string' ? value.type : undefined;
+        const message = typeof value.message === 'string' ? value.message : undefined;
+        const resetsAt = typeof value.resets_at === 'string' ? value.resets_at : undefined;
+        return status === undefined && errorType === undefined && message === undefined && resetsAt === undefined ? undefined : {
+            ...(status !== undefined ? { status } : {}),
+            ...(errorType !== undefined ? { errorType } : {}),
+            ...(message !== undefined ? { message } : {}),
+            ...(resetsAt !== undefined ? { resetsAt } : {}),
+        };
+    })() : undefined);
+    const scraped = extractUpstreamError([typeof event.error === 'string' ? event.error : undefined, typeof event.output === 'string' ? event.output : undefined, diagnosticText].filter(Boolean).join('\n') || null);
+    const valid = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
+    const scrapedMetadata: UpstreamError = {
+        ...(scraped?.status !== undefined ? { status: scraped.status } : {}),
+        ...(valid(scraped?.errorType) ? { errorType: scraped.errorType } : {}),
+        ...(valid(scraped?.message) ? { message: scraped.message } : {}),
+        ...(valid(scraped?.resetsAt) && !Number.isNaN(Date.parse(scraped.resetsAt)) ? { resetsAt: scraped.resetsAt } : {}),
+    };
+    const metadata = structured as UpstreamError | undefined;
+    const upstreamError: UpstreamError = {
+        ...scrapedMetadata,
+        ...(metadata?.status !== undefined ? { status: metadata.status } : {}),
+        ...(valid(metadata?.errorType) ? { errorType: metadata.errorType } : {}),
+        ...(valid(metadata?.message) ? { message: metadata.message } : {}),
+        ...(valid(metadata?.resetsAt) && !Number.isNaN(Date.parse(metadata.resetsAt)) ? { resetsAt: metadata.resetsAt } : {}),
+    };
+    return Object.keys(upstreamError).length ? { ...event, upstreamError } : event;
+}
 
 export function messageEvent(text: string, role: 'assistant' = 'assistant'): AgentEvent {
     return { type: 'message', role, text };
@@ -40,7 +98,7 @@ export function finishedEvent(
  */
 const MAX_NATIVE_LINE_BYTES = 1024 * 1024;
 
-export async function* readNativeRecords(events: AsyncIterable<StreamChunk>): AsyncGenerator<{ kind: 'record'; record: Record<string, unknown> } | { kind: 'event'; event: AgentEvent }> {
+export async function* readNativeRecords(events: AsyncIterable<StreamChunk>): AsyncGenerator<{ kind: 'record'; record: Record<string, unknown> } | { kind: 'event'; event: InternalAgentEvent }> {
     // stdout is newline-delimited JSON, stderr is free-form text. One shared
     // decoder would interleave their byte streams and corrupt UTF-8, so each
     // stream owns an independent decoder and is flushed on its own exit path.
@@ -51,7 +109,7 @@ export async function* readNativeRecords(events: AsyncIterable<StreamChunk>): As
     let stdoutOverflow = false;
     let stdoutEnded = false;
     let stderrEnded = false;
-    const dropOverflow = (): AgentEvent => {
+    const dropOverflow = (): InternalAgentEvent => {
         stdoutBuffer = '';
         stdoutBytes = 0;
         stdoutOverflow = false;

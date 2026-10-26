@@ -1,5 +1,5 @@
 import { turnUsageRecord } from '@wrenyard/agent-client/native';
-import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
+import type { AgentEvent, InternalAgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
     finishedEvent, jsonStringValue, messageEvent, readNativeRecords, reasoningRecord, recordOf, sessionEvent, sessionIdOf, stringOf, textOf, toolCallRecord, toolResultRecord,
 } from '@wrenyard/agent-client/native';
@@ -8,7 +8,7 @@ import {
     positiveInt,
 } from '@wrenyard/agent-client/statistics';
 
-export async function* decodeClaude(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent> {
+export async function* decodeClaude(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent | InternalAgentEvent> {
     yield* decodeClaudeFamily(events, 'claude');
 }
 
@@ -26,15 +26,17 @@ export async function* decodeClaude(events: AsyncIterable<StreamChunk>): AsyncGe
  * agent_turn_v1 contract is claimed only for a successful result with a
  * positive finite duration and complete usage.
  */
-export async function* decodeClaudeFamily(events: AsyncIterable<StreamChunk>, family: string): AsyncGenerator<AgentEvent> {
+export async function* decodeClaudeFamily(events: AsyncIterable<StreamChunk>, family: string): AsyncGenerator<AgentEvent | InternalAgentEvent> {
     let sessionId: string | undefined;
     let output = '';
     let finished = false;
     const sampler = new ResponseTpsSampler();
     for await (const item of readNativeRecords(events)) {
         if (item.kind === 'event') {
-            if (item.event.type === 'exit' && !finished)
-                yield finishedEvent(family, sessionId, output, item.event.exitCode !== 0 && item.event.exitCode !== null);
+            if (item.event.type === 'exit' && !finished) {
+                finished = true;
+                yield finishedEvent(family, sessionId, output, true, 'transport ended without a terminal result');
+            }
             yield item.event;
             continue;
         }
@@ -84,6 +86,7 @@ export async function* decodeClaudeFamily(events: AsyncIterable<StreamChunk>, fa
             if (sampler.attachable)
                 sampler.takeSamples(data);
             yield turnUsageRecord(data);
+            finished = true;
             yield finishedEvent(family, sessionId, output, failed);
         }
     }

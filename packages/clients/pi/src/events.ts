@@ -1,4 +1,4 @@
-import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
+import type { AgentEvent, InternalAgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
     finishedEvent,
     jsonStringValue,
@@ -126,9 +126,9 @@ function flushUsage(usage: {
 /**
  * Decode Pi JSONL records into shared agent events. Terminal success requires
  * `agent_end` (or `agent_settled`) without abort, a final assistant `message_end` with stopReason
- * `stop`, and a clean process exit.
+ * `stop`; process status does not determine semantic success.
  */
-export async function* decodePi(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent> {
+export async function* decodePi(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent | InternalAgentEvent> {
     let sessionId: string | undefined;
     let output = '';
     let finalMessageFailed = false;
@@ -145,10 +145,8 @@ export async function* decodePi(events: AsyncIterable<StreamChunk>): AsyncGenera
         inputIncomplete: false,
         outputIncomplete: false,
     };
-    const terminalFailure = (exitCode: number | null, signal: NodeJS.Signals | null): boolean => {
+    const terminalFailure = (): boolean => {
         if (finalMessageFailed || settledAborted || !settled)
-            return true;
-        if (exitCode !== 0 || signal !== null)
             return true;
         if (!finalAssistantStop)
             return true;
@@ -163,9 +161,9 @@ export async function* decodePi(events: AsyncIterable<StreamChunk>): AsyncGenera
                 const terminal = flushUsage(usage);
                 if (terminal)
                     yield terminal;
-                yield finishedEvent('pi', sessionId, output, terminalFailure(item.event.exitCode, item.event.signal));
+                yield finishedEvent('pi', sessionId, output, terminalFailure());
+                return;
             }
-            yield item.event;
             continue;
         }
         const record = item.record;
@@ -236,4 +234,5 @@ export async function* decodePi(events: AsyncIterable<StreamChunk>): AsyncGenera
             continue;
         }
     }
+    yield finishedEvent('pi', sessionId, output, true);
 }

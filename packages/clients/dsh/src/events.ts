@@ -1,4 +1,4 @@
-import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
+import type { AgentEvent, InternalAgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import { finishedEvent, jsonStringValue, messageEvent, readNativeRecords, recordOf, sessionIdOf, stringOf, toolCallRecord, toolResultRecord, turnUsageRecord } from '@wrenyard/agent-client/native';
 import { TOKENIZER_MINIMUM_WINDOW_MS, addUsageTokens, applyTrustedAgentTurnContract, countTPSTokens, nonnegativeInt, positiveInt } from '@wrenyard/agent-client/statistics';
 
@@ -18,17 +18,19 @@ const DSH_BRIDGE_PROTOCOL = 'wrenyard.dsh.stream.v1';
  * a failed or interrupted turn is never re-declared successful merely because
  * the process exited 0.
  */
-export async function* decodeDsh(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent> {
+export async function* decodeDsh(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent | InternalAgentEvent> {
     let sessionId: string | undefined;
     let output = '';
     let failed = false;
     let ended = false;
+    let failureError: unknown;
     for await (const item of readNativeRecords(events)) {
         if (item.kind === 'event') {
             if (item.event.type === 'error') failed = true;
-            if (item.event.type === 'exit')
-                yield finishedEvent('dsh', sessionId, output, failed || !ended || item.event.exitCode !== 0);
-            yield item.event;
+            if (item.event.type === 'exit') {
+                yield finishedEvent('dsh', sessionId, output, failed || !ended, failureError);
+                return;
+            }
             continue;
         }
         const record = item.record;
@@ -77,11 +79,14 @@ export async function* decodeDsh(events: AsyncIterable<StreamChunk>): AsyncGener
             ended = true;
             const status = stringOf(record, 'status');
             failed ||= status !== 'complete';
+            if (failed)
+                failureError = record.error ?? record.message;
             const usage = usageOf(record, failed);
             if (usage)
                 yield turnUsageRecord(usage);
         }
     }
+    yield finishedEvent('dsh', sessionId, output, failed || !ended, failureError);
 }
 
 /**

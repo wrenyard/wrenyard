@@ -1,9 +1,10 @@
 import { StringDecoder } from 'node:string_decoder';
 import { CodexStatistics } from './statistics.ts';
 import { startProcess, type ProcessSpec } from '@wrenyard/execution';
-import type { AgentEvent, AgentRequest, AgentSession, OperationOptions } from '@wrenyard/agent-client';
+import type { AgentEvent, AgentRequest, AgentSession, InternalAgentEvent, OperationOptions } from '@wrenyard/agent-client';
 import { finishedEvent, jsonStringValue, messageEvent, reasoningRecord, recordOf, stringOf, toolCallRecord, toolResultRecord, turnUsageRecord } from '@wrenyard/agent-client/native';
 import { applyTrustedAgentTurnContract, completeUsageTokens, nonnegativeInt, positiveInt } from '@wrenyard/agent-client/statistics';
+import { enrichFinishedEvent } from '@wrenyard/agent-client/native';
 import { refreshCodexAuth, type CodexAuth } from './readiness.ts';
 
 interface PendingCall {
@@ -18,21 +19,43 @@ export async function startCodexSession(spec: ProcessSpec, request: AgentRequest
     const refreshSignal = options?.signal
         ? AbortSignal.any([options.signal, refreshController.signal]) : refreshController.signal;
     let settled = false;
-    let resolveResult!: (value: { exitCode: number | null }) => void;
-    const result = new Promise<{ exitCode: number | null }>((resolve) => { resolveResult = resolve; });
-    const finish = (exitCode: number | null) => {
+    const finish = () => {
         if (settled) return;
         settled = true;
         refreshController.abort();
-        void execution.cancel().then(() => resolveResult({ exitCode }), () => resolveResult({ exitCode: 1 }));
+        void execution.cancel().catch(() => undefined);
     };
-    void execution.result.then(() => { if (!settled) finish(1); });
+    void execution.result.catch(() => undefined);
     return {
-        events: protocol(execution, request, auth, spec.executable, refreshSignal, finish),
-        result,
+        events: finalizeCodexEvents(protocol(execution, request, auth, spec.executable, refreshSignal, finish)),
         cancel: () => execution.cancel(),
         diagnostics: execution.diagnostics,
     };
+}
+
+async function* finalizeCodexEvents(source: AsyncIterable<AgentEvent | InternalAgentEvent>): AsyncGenerator<AgentEvent> {
+    let terminal: Extract<AgentEvent, { type: 'finished' }> | undefined;
+    let error: string | undefined;
+    let diagnostics = '';
+    for await (const event of source) {
+        if (event.type === 'finished') {
+            terminal ??= event;
+            continue;
+        }
+        if (event.type === 'error') {
+            error = event.message;
+            continue;
+        }
+        if (event.type === 'stderr') {
+            diagnostics = (diagnostics + event.text).slice(-16_384);
+            continue;
+        }
+        if (event.type === 'exit') continue;
+        if (!terminal) yield event;
+    }
+    const final = terminal ?? { type: 'finished', status: 'failed', isError: true, error: 'transport ended without a terminal result' } as const;
+    const enriched = final.status === 'failed' && final.error === undefined && error ? { ...final, error } : final;
+    yield enrichFinishedEvent(enriched, diagnostics);
 }
 
 async function* protocol(
@@ -41,8 +64,8 @@ async function* protocol(
     auth: CodexAuth,
     executable: string,
     refreshSignal: AbortSignal,
-    finish: (exitCode: number | null) => void,
-): AsyncGenerator<AgentEvent> {
+    finish: () => void,
+): AsyncGenerator<AgentEvent | InternalAgentEvent> {
     const pending = new Map<number, PendingCall>();
     let nextId = 1;
     const decoder = new StringDecoder('utf8');
@@ -52,19 +75,17 @@ async function* protocol(
     let threadId = request.resumeSessionId;
     let output = '';
     let finished = false;
-    let logicalExitCode = 1;
     let turnId: string | undefined;
     let accessToken = auth.login?.type === 'chatgptAuthTokens' ? auth.login.accessToken : '';
-    const complete = (failed: boolean): AgentEvent | undefined => {
+    const complete = (failed: boolean, error?: unknown): AgentEvent | undefined => {
         if (finished) return undefined;
         finished = true;
-        logicalExitCode = failed ? 1 : 0;
         for (const waiter of pending.values()) waiter.reject(new Error('Codex turn ended'));
         pending.clear();
-        finish(failed ? 1 : 0);
+        finish();
         execution.closeInput();
-        void execution.cancel();
-        return finishedEvent('codex', threadId, output, failed);
+        void execution.cancel().catch(() => undefined);
+        return finishedEvent('codex', threadId, output, failed, error);
     };
     const call = (method: string, params: unknown) => {
         const id = nextId++;
@@ -99,20 +120,23 @@ async function* protocol(
                 .catch(() => { if (!finished) void execution.cancel(); });
         }
         if (event.type === 'stderr' && event.data) {
-            yield { type: 'stderr', text: stderrDecoder.write(Buffer.from(event.data)) };
+            const text = stderrDecoder.write(Buffer.from(event.data));
+            if (text) yield { type: 'stderr', text };
             continue;
         }
         if (event.type === 'error') {
             if (finished) continue;
-            yield { type: 'error', message: event.message ?? 'codex app-server failed' };
+            const terminal = complete(true, event.message);
+            if (terminal) yield terminal;
             continue;
         }
         if (event.type === 'exit') {
+            const stderrTail = stderrDecoder.end();
+            if (stderrTail) yield { type: 'stderr', text: stderrTail };
             if (!finished) {
                 const terminal = complete(true);
                 if (terminal) yield terminal;
             }
-            yield { type: 'exit', exitCode: logicalExitCode, signal: null };
             return;
         }
         if (event.type !== 'stdout' || !event.data)
@@ -196,21 +220,19 @@ async function* protocol(
         }
         else if (method === 'turn/completed') {
             const turn = recordOf(params, 'turn') ?? params;
-            const failed = turn.status !== 'completed' || turn.error != null;
+            const failed = turn.status !== 'completed' || params.status === 'failed';
             const usage = statistics.finish(!failed) ?? turnUsage(params);
             if (usage)
                 yield usage;
-            if (typeof params.status === 'string' && params.status === 'failed' && typeof params.error !== 'undefined') {
-                yield finishedEvent('codex', threadId, '', true, params.error);
-            }
-            const terminal = complete(failed);
+            const terminal = complete(
+                failed,
+                failed ? (turn.error ?? params.error ?? undefined) : undefined,
+            );
             if (terminal) yield terminal;
         }
         else if (method === 'turn/failed') {
             const error = params.error;
-            if (error !== undefined && error !== null)
-                yield finishedEvent('codex', threadId, '', true, error);
-            const terminal = complete(true);
+            const terminal = complete(true, error);
             if (terminal) yield terminal;
         }
         else if (method === 'error') {
@@ -219,9 +241,7 @@ async function* protocol(
             // record so the real cause (e.g. the HTTP 400 unsupported-model
             // message) is preserved instead of an empty failure.
             const message = params.message ?? params.error;
-            if (message !== undefined && message !== null)
-                yield finishedEvent('codex', threadId, '', true, message);
-            const terminal = complete(true);
+            const terminal = complete(true, message);
             if (terminal) yield terminal;
         }
     }

@@ -16,16 +16,19 @@ import { ExecReplayBuffer } from './replay.ts';
 
 export type { McpServer } from '@wrenyard/agent-client';
 
-/**
- * Bounded wait for a client `result` after its event stream already ended. The
- * agent client's own session contract emits a terminal `exit` frame, so this
- * window only covers a transport that closed without one; it must not grow,
- * because disposal waits on the same drain loop.
- */
-const RESULT_SETTLE_GRACE_MS = 1_000;
-
 /** Bounded wait for each live drain loop to observe its terminal frame on close. */
 const CLOSE_DRAIN_GRACE_MS = 5_000;
+
+/** Resolve after a bounded wait, without changing the underlying work. */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(() => resolve(), timeoutMs);
+    void promise.then(
+      () => resolve(),
+      () => resolve(),
+    ).finally(() => clearTimeout(timer));
+  });
+}
 
 /**
  * Service-level defaults for bounded replay and completed-run retention.
@@ -77,9 +80,7 @@ interface ExecEntry {
   queuePosition?: number;
   onCancel?: () => void;
   finishedAt?: number;
-  exitCode?: number | null;
   error?: string;
-  exitCodeSeen: boolean;
   /** Set by `cancel()`/`close()`; the drain loop turns it into a cancelled run. */
   cancelRequested: boolean;
   session?: AgentSession;
@@ -87,10 +88,8 @@ interface ExecEntry {
 }
 
 interface ObservedFacts {
-  exitCode?: number | null;
-  signal?: NodeJS.Signals | null;
   error?: string;
-  runFailed?: boolean;
+  status?: 'done' | 'failed';
 }
 
 interface PreparedRun {
@@ -277,11 +276,8 @@ export class ExecService {
    * Cancelling an unknown execution throws; cancelling an already-terminal one
    * is a no-op, because the caller's intent is already satisfied.
    *
-   * The caller awaits the CLIENT's own settlement, not our drain loop: a client
-   * whose `result` only settles once `cancel()` is observed would deadlock if
-   * the drain loop were waiting on that same promise. Flagging the cancel
-   * before awaiting guarantees the drain loop records `cancelled` whichever
-   * terminal frame arrives first.
+   * Flagging the cancel before awaiting guarantees the drain loop records
+   * `cancelled` whichever terminal frame arrives first.
    */
   async cancel(id: ExecId): Promise<void> {
     const entry = this.#runs.get(id);
@@ -343,7 +339,6 @@ export class ExecService {
       consumer: Promise.resolve(),
       waiters: new Set(),
       status: 'running',
-      exitCodeSeen: false,
       cancelRequested: false,
       terminal: false,
     };
@@ -378,14 +373,16 @@ export class ExecService {
             const batch = this.events(entry.id, cursor);
             for (const envelope of batch) {
               cursor = envelope.seq;
-              yield agentEventOf(envelope);
+              const event = agentEventOf(envelope);
+              if (event) yield event;
             }
             const current = this.get(entry.id);
             if (!current || current.status !== 'running') {
               const remaining = this.events(entry.id, cursor);
               for (const envelope of remaining) {
                 cursor = envelope.seq;
-                yield agentEventOf(envelope);
+                const event = agentEventOf(envelope);
+                if (event) yield event;
               }
               return;
             }
@@ -393,7 +390,6 @@ export class ExecService {
           }
         }.bind(this),
       },
-      result: entry.consumer.then(() => session.result).then((result) => ({ exitCode: result.exitCode })),
       cancel: () => this.cancel(entry.id),
       diagnostics: session.diagnostics,
     };
@@ -404,20 +400,14 @@ export class ExecService {
    *
    * Every frame is appended to the replay buffer in arrival order and the
    * terminal facts it carries are folded into the entry. Once the stream ends
-   * the run is settled from what was observed; `result` is only consulted, for
-   * a bounded window, when the stream ended without an exit frame and without
-   * an error. That keeps a silently-failing transport from leaving the run
-   * `running` forever without ever awaiting a promise that `cancel()` owns.
+   * the run is settled from the semantic terminal event. A missing terminal
+   * after stream completion is a failure.
    */
   async #consume(entry: ExecEntry, session: AgentSession): Promise<void> {
     const observed: ObservedFacts = {};
     try {
       for await (const event of session.events) {
         this.#record(entry, event, observed);
-      }
-      if (!entry.exitCodeSeen && observed.error === undefined) {
-        const result = await withTimeout(session.result, RESULT_SETTLE_GRACE_MS);
-        if (result) observed.exitCode = result.exitCode;
       }
     } catch (error) {
       observed.error = error instanceof Error ? error.message : 'execution failed';
@@ -431,8 +421,8 @@ export class ExecService {
     // Wake replay readers after this synchronous append finishes.
     this.#wake(entry);
     if (event.type === 'finished') {
-      if (event.status === 'failed' || event.isError === true) {
-        observed.runFailed = true;
+      observed.status = event.status;
+      if (event.status === 'failed') {
         const nativeError = event.error;
         if (typeof nativeError === 'string' && nativeError !== '') {
           observed.error = nativeError;
@@ -450,23 +440,7 @@ export class ExecService {
       entry.replay.append(entry.id, event);
       return;
     }
-    if (event.type === 'stderr') {
-      entry.replay.append(entry.id, { type: 'stderr', text: event.text });
-      return;
-    }
-    if (event.type === 'error') {
-      observed.error = event.message;
-      entry.replay.append(entry.id, { type: 'error', message: event.message });
-      return;
-    }
-    observed.exitCode = event.exitCode;
-    observed.signal = event.signal;
-    entry.exitCodeSeen = true;
-    entry.replay.append(entry.id, {
-      type: 'exit',
-      exitCode: event.exitCode,
-      signal: event.signal,
-    });
+    // Transport-only events are internal to adapters and never enter the exec replay.
   }
 
   #wake(entry: ExecEntry): void {
@@ -480,17 +454,10 @@ export class ExecService {
     entry.finishedAt = Date.now();
     delete entry.queuePosition;
     entry.onCancel = undefined;
-    if (observed.exitCode !== undefined || entry.exitCodeSeen) {
-      entry.exitCode = observed.exitCode ?? entry.exitCode ?? null;
-    }
-
     if (entry.cancelRequested) {
       entry.status = 'cancelled';
       entry.error = 'cancelled';
-    } else if (observed.runFailed || observed.error !== undefined) {
-      entry.status = 'failed';
-      entry.error = this.#failureErrorText(observed, entry);
-    } else if (entry.exitCode === 0) {
+    } else if (observed.status === 'done') {
       entry.status = 'completed';
       entry.error = undefined;
     } else {
@@ -507,16 +474,10 @@ export class ExecService {
     let text: string;
     if (errorText !== undefined && errorText !== '') {
       text = errorText;
-    } else if (entry.exitCode !== undefined && entry.exitCode !== null) {
-      text = `execution exited with code ${entry.exitCode}`;
-    } else if (observed.runFailed) {
+    } else if (observed.status === 'failed') {
       text = 'Agent turn failed';
     } else {
-      text = 'execution ended before reporting an exit code';
-    }
-    const signal = observed.signal;
-    if (signal !== undefined && signal !== null && !text.includes(`(signal ${signal})`)) {
-      text = `${text} (signal ${signal})`;
+      text = 'execution ended without a finished event';
     }
     return text;
   }
@@ -558,43 +519,18 @@ function snapshotOf(entry: ExecEntry): ExecSnapshot {
     createdAt: entry.createdAt,
     ...(entry.queuePosition !== undefined ? { queuePosition: entry.queuePosition } : {}),
     ...(entry.finishedAt !== undefined ? { finishedAt: entry.finishedAt } : {}),
-    ...(entry.terminal ? { exitCode: entry.exitCode ?? null } : {}),
     ...(entry.error !== undefined ? { error: entry.error } : {}),
   };
 }
 
 /** Rebuild one agent event from a retained envelope for handle consumers. */
-function agentEventOf(envelope: ExecEventEnvelope): AgentEvent {
+function agentEventOf(envelope: ExecEventEnvelope): AgentEvent | undefined {
   const record = envelope.event;
-  if (record.type === 'stderr' && typeof record.text === 'string') {
-    return { type: 'stderr', text: record.text };
-  }
-  if (record.type === 'error' && typeof record.message === 'string') {
-    return { type: 'error', message: record.message };
-  }
-  if (record.type === 'exit') {
-    return {
-      type: 'exit',
-      exitCode: typeof record.exitCode === 'number' ? record.exitCode : null,
-      signal: (record.signal as NodeJS.Signals | null | undefined) ?? null,
-    };
-  }
   if (record.type === 'session' && typeof record.nativeSessionId === 'string') return record as AgentEvent;
   if (record.type === 'message' && record.role === 'assistant' && typeof record.text === 'string') return record as AgentEvent;
   if (record.type === 'reasoning' && typeof record.text === 'string') return record as AgentEvent;
   if (record.type === 'tool_call' && typeof record.callId === 'string' && typeof record.name === 'string' && typeof record.inputSummary === 'string') return record as AgentEvent;
   if (record.type === 'tool_result' && typeof record.callId === 'string' && (record.status === 'ok' || record.status === 'error') && typeof record.outputTail === 'string') return record as AgentEvent;
   if (record.type === 'usage' || record.type === 'finished') return record as AgentEvent;
-  return { type: 'error', message: 'invalid retained agent event' };
-}
-
-/** Resolve with the promise's value, or `undefined` once `ms` elapses. */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
-  return new Promise<T | undefined>((resolve) => {
-    const timer = setTimeout(() => resolve(undefined), ms);
-    void promise.then(
-      (value) => { clearTimeout(timer); resolve(value); },
-      () => { clearTimeout(timer); resolve(undefined); },
-    );
-  });
+  return undefined;
 }

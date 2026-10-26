@@ -1,18 +1,9 @@
 import { turnUsageRecord } from '@wrenyard/agent-client/native';
-import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
+import type { AgentEvent, InternalAgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
     errorValue, finishedEvent, jsonStringValue, messageEvent, readNativeRecords, reasoningRecord, recordOf, runFinishedRecord, sessionIdOf, stringOf, textOf, toolCallRecord, toolResultRecord,
 } from '@wrenyard/agent-client/native';
 import { ResponseTpsSampler, completeUsageTokens, hasNormalizedFailureField } from '@wrenyard/agent-client/statistics';
-
-/**
- * Machine-readable failure class for a CodeBuddy process that exited without its
- * terminal `result` record. It is a protocol/delivery failure of the client
- * route, kept distinct from the functional agent failure classes. The daemon
- * structured-output collector recognises the same identifier in
- * `packages/features/task/src/structured-output.ts`.
- */
-const MISSING_TERMINAL_RESULT_FAILURE_CLASS = 'protocol_missing_terminal_result';
 
 /**
  * Decode the CodeBuddy native transcript stream.
@@ -28,7 +19,7 @@ const MISSING_TERMINAL_RESULT_FAILURE_CLASS = 'protocol_missing_terminal_result'
 export async function* decodeCodeBuddy(
     events: AsyncIterable<StreamChunk>,
     normalizeModel: (model: string) => string = (model) => model,
-): AsyncGenerator<AgentEvent> {
+): AsyncGenerator<AgentEvent | InternalAgentEvent> {
     let sessionId: string | undefined;
     let output = '';
     let finished = false;
@@ -41,6 +32,7 @@ export async function* decodeCodeBuddy(
             // preserved in the failed terminal; native stderr still flows
             // through the unchanged stream path.
             if (item.event.type === 'exit' && !finished) {
+                finished = true;
                 const missing: string[] = [];
                 if (!sessionId)
                     missing.push('no native session id');
@@ -51,7 +43,6 @@ export async function* decodeCodeBuddy(
                         ...(output ? { output } : {}),
                         is_error: true,
                         error: `CodeBuddy exited without a terminal result${detail}`,
-                        failure_class: MISSING_TERMINAL_RESULT_FAILURE_CLASS,
                     });
             }
             yield item.event;

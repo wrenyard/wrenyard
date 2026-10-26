@@ -758,9 +758,11 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
               },
             )
             const preparedRun = prepared
-            void Promise.resolve(handle.result)
-              .catch(() => undefined)
-              .finally(() => {
+            void (async () => {
+              try {
+                for await (const _event of handle.events) { /* drain semantic events */ }
+              } catch { /* release prepared resources when the stream closes */ }
+            })().finally(() => {
                 void preparedRun.release()
               })
           } catch (error) {
