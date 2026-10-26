@@ -120,6 +120,10 @@ export function useWakeMutation() {
 const GROUP_PAGE_LIMIT = 200;
 /** Bounded catch-up burst: a long absence appends at most this many pages per tick. */
 const GROUP_CATCH_UP_PAGES = 5;
+/** Cold-load/resnapshot tail window; the contract caps a request at 500 entries. */
+const GROUP_SNAPSHOT_LIMIT = 500;
+/** Transcript entries retained per endpoint identity; older ones are trimmed. */
+const GROUP_CACHE_MESSAGES = 1000;
 /** The transcript poll; replies land through the daemon, never by local replay. */
 const GROUP_POLL_MS = 1000;
 
@@ -128,8 +132,10 @@ export interface GroupTranscript {
   messages: readonly GroupMessage[];
   /** Last poll failure, cleared by the next successful page. */
   error: string | null;
-  /** Whether at least one page has been read since the endpoint was committed. */
+  /** Whether the initial snapshot for the current endpoint identity was read. */
   ready: boolean;
+  /** True while an incremental poll is in flight after `ready` was reached. */
+  refreshing: boolean;
   /** Fetch the next page now, e.g. right after a send, without waiting for the timer. */
   refresh: () => void;
 }
@@ -143,12 +149,58 @@ export function fetchGroupEvents(
 }
 
 /**
- * Poll the daemon's persistent group transcript with a sequence cursor. Every
- * tick catches up through consecutive pages, appends entries in order and drops
- * anything at or below the last seen sequence, so a repeated or late page can
- * never duplicate a message. A serialized in-flight guard and a per-effect
- * cancellation token keep a slow request from overlapping the next tick or
- * arriving after a bot/endpoint switch or unmount.
+ * Read the newest transcript window in one request. The `afterSeq`,
+ * `beforeSeq` and `latest` parameter modes are mutually exclusive.
+ */
+export function fetchGroupEventsLatest(
+  limit: number = GROUP_SNAPSHOT_LIMIT,
+): Promise<AgentGroupEventsResult> {
+  return agentRequest('agent.group.events', { latest: true, limit });
+}
+
+interface GroupTranscriptCacheEntry {
+  messages: readonly GroupMessage[];
+  /** Sequence cursor for the next incremental `afterSeq` page. */
+  cursor: number;
+  /** Whether the first snapshot for this identity completed successfully. */
+  initialized: boolean;
+  error: string | null;
+}
+
+/**
+ * Transcript state lifted above GroupView so Activity resumes and
+ * group↔private remounts rehydrate instead of reloading. Keyed by the remote
+ * connection generation, which already changes whenever the committed
+ * endpoint/host does, so it fully identifies the transcript's endpoint; there
+ * is a single group transcript per endpoint, so no group id is needed. Stale
+ * keys are pruned on every lookup and results publish only while their entry
+ * is still the current one, so a late response from a stale generation can
+ * never surface on a new connection.
+ */
+const groupTranscriptCache = new Map<string, GroupTranscriptCacheEntry>();
+
+function groupTranscriptEntry(generation: number): GroupTranscriptCacheEntry {
+  const key = `${generation}`;
+  for (const stale of groupTranscriptCache.keys()) {
+    if (stale !== key) groupTranscriptCache.delete(stale);
+  }
+  let entry = groupTranscriptCache.get(key);
+  if (entry === undefined) {
+    entry = { messages: [], cursor: 0, initialized: false, error: null };
+    groupTranscriptCache.set(key, entry);
+  }
+  return entry;
+}
+
+/**
+ * Poll the daemon's persistent group transcript. The first load for an
+ * endpoint identity is a single `latest` tail snapshot; remounts synchronously
+ * rehydrate messages and the cursor from the module-level cache and resume
+ * with incremental `afterSeq` pages, so no history is ever replayed. A
+ * rollback of the daemon's latest seq, a gap before the first returned entry,
+ * or a backlog still incomplete after the bounded catch-up burst all trigger
+ * one atomic tail resnapshot instead of paging through lost history. Polling
+ * is single-flight and stops while hidden via the Activity effect lifecycle.
  */
 export function useGroupEvents(): GroupTranscript {
   const connection = useRemoteConnection();
@@ -156,14 +208,17 @@ export function useGroupEvents(): GroupTranscript {
   const [messages, setMessages] = useState<readonly GroupMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
-  const cursorRef = useRef(0);
+  const [refreshing, setRefreshing] = useState(false);
   const refreshRef = useRef<() => void>(() => {});
 
   useEffect(() => {
-    setMessages([]);
-    setError(null);
-    setReady(false);
-    cursorRef.current = 0;
+    const key = `${connection.generation}`;
+    const entry = groupTranscriptEntry(connection.generation);
+    // Rehydrate synchronously from the cache; never clear on setup.
+    setMessages(entry.messages);
+    setError(entry.error);
+    setReady(entry.initialized);
+    setRefreshing(false);
     if (!enabled) {
       refreshRef.current = () => {};
       return;
@@ -172,30 +227,74 @@ export function useGroupEvents(): GroupTranscript {
     let cancelled = false;
     let inFlight = false;
 
+    const publish = (): void => {
+      if (cancelled || groupTranscriptCache.get(key) !== entry) return;
+      setMessages(entry.messages);
+      setError(entry.error);
+      setReady(entry.initialized);
+    };
+
+    /** Atomic tail swap used for cold loads and for any lost-continuation case. */
+    const resnapshot = async (): Promise<void> => {
+      const snap = await fetchGroupEventsLatest();
+      if (cancelled) return;
+      entry.messages = snap.messages.slice(-GROUP_CACHE_MESSAGES);
+      entry.cursor = Math.max(snap.lastSeq, snap.latestSeq);
+      entry.initialized = true;
+      entry.error = null;
+      publish();
+    };
+
     const poll = async (): Promise<void> => {
       if (cancelled || inFlight) return;
       inFlight = true;
+      const initial = !entry.initialized;
+      if (!initial) setRefreshing(true);
       try {
-        for (let page = 0; page < GROUP_CATCH_UP_PAGES; page += 1) {
-          const before = cursorRef.current;
-          const result = await fetchGroupEvents(before);
-          if (cancelled) return;
-          cursorRef.current = Math.max(before, result.lastSeq);
-          setMessages((previous) => {
-            const last = previous.length === 0 ? 0 : previous[previous.length - 1]!.seq;
+        if (initial) {
+          await resnapshot();
+        } else {
+          let backlogRemaining = false;
+          for (let page = 0; page < GROUP_CATCH_UP_PAGES; page += 1) {
+            const before = entry.cursor;
+            const result = await fetchGroupEvents(before);
+            if (cancelled) return;
+            // Watermark rollback or a gap before the first returned entry
+            // means the continuation window was lost: resnapshot atomically.
+            const gap = result.messages.length > 0 && result.firstSeq > before + 1;
+            if (result.latestSeq < before || gap) {
+              await resnapshot();
+              return;
+            }
+            const last = entry.messages.length === 0 ? 0 : entry.messages[entry.messages.length - 1]!.seq;
             const additions = result.messages.filter((message) => message.seq > last);
-            return additions.length === 0 ? previous : [...previous, ...additions];
-          });
-          // Stop when the page was short or the cursor did not advance.
-          if (result.messages.length < GROUP_PAGE_LIMIT || result.lastSeq <= before) break;
+            if (additions.length > 0) {
+              entry.messages = [...entry.messages, ...additions].slice(-GROUP_CACHE_MESSAGES);
+            }
+            entry.cursor = Math.max(before, result.lastSeq);
+            entry.error = null;
+            backlogRemaining = result.hasMoreAfter;
+            publish();
+            if (!result.hasMoreAfter) break;
+          }
+          // A backlog still incomplete after the bounded burst resnapshots
+          // once rather than visibly replaying intermediate history.
+          if (!cancelled && backlogRemaining) {
+            await resnapshot();
+            return;
+          }
         }
         if (cancelled) return;
-        setReady(true);
-        setError(null);
+        entry.error = null;
+        publish();
       } catch (cause) {
-        if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+        if (!cancelled) {
+          entry.error = cause instanceof Error ? cause.message : String(cause);
+          publish();
+        }
       } finally {
         inFlight = false;
+        if (!cancelled) setRefreshing(false);
       }
     };
 
@@ -206,10 +305,11 @@ export function useGroupEvents(): GroupTranscript {
       cancelled = true;
       refreshRef.current = () => {};
       window.clearInterval(timer);
+      setRefreshing(false);
     };
   }, [enabled, connection.state, connection.generation]);
 
-  return { messages, error, ready, refresh: () => { refreshRef.current(); } };
+  return { messages, error, ready, refreshing, refresh: () => { refreshRef.current(); } };
 }
 
 /**
