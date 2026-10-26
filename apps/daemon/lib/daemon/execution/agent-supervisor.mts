@@ -284,7 +284,13 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     // The execution service owns the client instances used by start. Use that
     // same group for supervisor lifecycle finalization when supplied alone.
     this.execService = execService ?? new ExecService({ clients: clients ?? agentClients })
-    this.clients = clients ?? new Map([...agentClients].map(([id, client]) => [id, this.execService.getClient(id) ?? client]))
+    this.clients = new Map(
+      [...new Set([...agentClients.keys(), ...(clients?.keys() ?? [])])]
+        .flatMap((id) => {
+          const client = this.execService.getClient(id)
+          return client ? [[id, client] as const] : []
+        }),
+    )
     this.ownsExecService = execService === undefined
     this.operations = operations
     this.canStartExecution = canStartExecution
