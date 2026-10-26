@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { QuotaBar, quotaVerdict, QUOTA_POOL_STATE_LABEL, quotaPoolStateTone, type QuotaVerdict } from '@/renderer/components/usage/QuotaBar';
+import { QuotaBalanceRow } from '@/renderer/components/usage/QuotaBalanceRow';
+import { QuotaBar, quotaVerdict, type QuotaVerdict } from '@/renderer/components/usage/QuotaBar';
 import { type QuotaProviderSnapshot } from '@/shell-contract';
 import { cn } from 'cn';
 
@@ -70,8 +71,8 @@ function ProviderTips({ provider, now, inverse }: {
     <div className="flex flex-col gap-1.5" data-slot="quota-tips-provider">
       <span className={cn('truncate font-medium', failed && muted)}>
         {name}{provider.stale ? '（数据过期）' : ''}
+        {provider.plan ? <span className={muted}> {provider.plan}</span> : null}
       </span>
-      <span className={muted}>套餐：{provider.plan || '未知'}</span>
       {failed || empty ? (
         <span className={muted}>{PROVIDER_UNKNOWN_LABEL}</span>
       ) : (
@@ -91,15 +92,11 @@ function ProviderTips({ provider, now, inverse }: {
             />
           ))}
           {provider.balances.map((balance) => (
-            <span key={`${balance.id ?? balance.currency}:${balance.display}`} className="flex items-baseline gap-1">
-              <span className={muted}>{BALANCE_LABEL}</span>
-              <strong className="tabular-nums">{balance.display}</strong>
-              {balance.state !== undefined && (
-                <span className={cn(quotaPoolStateTone(balance.state) ?? muted)}>
-                  {QUOTA_POOL_STATE_LABEL[balance.state]}
-                </span>
-              )}
-            </span>
+            <QuotaBalanceRow
+              key={`${balance.id ?? balance.currency}:${balance.display}`}
+              label={BALANCE_LABEL}
+              amount={balance.display}
+            />
           ))}
         </>
       )}

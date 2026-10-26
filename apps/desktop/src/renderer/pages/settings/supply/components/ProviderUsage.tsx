@@ -4,14 +4,12 @@ import { Skeleton } from '@/renderer/components/ui/skeleton';
 import {
   isUsageUnknown,
   QuotaBar,
-  QUOTA_POOL_STATE_LABEL,
-  quotaPoolStateTone,
   unknownUsageNote,
 } from '@/renderer/components/usage/QuotaBar';
+import { QuotaBalanceRow } from '@/renderer/components/usage/QuotaBalanceRow';
 import { providerBrand } from '@/renderer/lib/model-brand';
 import { useDisplayCurrency, useQuotaQuery } from '@/renderer/lib/queries';
 import { reorderProviders } from '@/provider-order';
-import { cn } from 'cn';
 import { formatQuotaBalance, type ProviderCatalogSnapshot, type QuotaSnapshot } from '@/shell-contract';
 import { QUOTA_EVIDENCE_GRACE_MS } from '@wrenyard/auto-routing/constants';
 import { BALANCE_LABEL } from '../model/describe.js';
@@ -43,12 +41,12 @@ function readFailureNote(quota: NonNullable<ProviderCatalogSnapshot['quota']>, n
   return quota.message ? `读取失败 · ${quota.message}` : '读取失败';
 }
 
-function providerStatus(entry: ProviderCatalogSnapshot, now: number): string {
+function providerStatus(entry: ProviderCatalogSnapshot, now: number): string | null {
   const quota = entry.quota;
   if (quota === undefined) return '此供应商暂不提供额度查询';
   if (quota.status === 'error' || quota.status === 'unavailable') return readFailureNote(quota, now);
   if (quota.status === 'pending') return '读取中';
-  return '已连接';
+  return null;
 }
 
 export function ProviderUsage() {
@@ -100,9 +98,8 @@ function ProviderUsageCard({ entry, now, currency }: { entry: ProviderCatalogSna
       <div className="flex items-center gap-2">
         <BrandIcon brand={providerBrand(entry.id)} />
         <span className="truncate font-medium">{entry.label || entry.id}</span>
-        <span className="truncate text-xs text-muted-foreground">{providerStatus(entry, now)}</span>
+        <span className="truncate text-xs text-muted-foreground">{providerStatus(entry, now) ?? quota?.plan ?? null}</span>
       </div>
-      <span className="text-xs text-muted-foreground">套餐：{quota?.plan || '未知'}</span>
       {quota !== undefined && isUsageUnknown(quota) && (
         <span className="text-xs text-muted-foreground">{unknownUsageNote(quota.message)}</span>
       )}
@@ -131,18 +128,11 @@ function ProviderUsageCard({ entry, now, currency }: { entry: ProviderCatalogSna
             );
           })}
           {quota.balances.map((balance) => (
-            <span
+            <QuotaBalanceRow
               key={`${balance.id ?? balance.currency}:${balance.display}`}
-              className="flex items-baseline gap-1 text-sm"
-            >
-              <span className="text-muted-foreground">{BALANCE_LABEL}</span>
-              <strong className="tabular-nums">{formatQuotaBalance(balance, currency)}</strong>
-              {balance.state !== undefined && (
-                <span className={cn(quotaPoolStateTone(balance.state) ?? 'text-muted-foreground')}>
-                  {QUOTA_POOL_STATE_LABEL[balance.state]}
-                </span>
-              )}
-            </span>
+              label={BALANCE_LABEL}
+              amount={formatQuotaBalance(balance, currency)}
+            />
           ))}
         </div>
       )}

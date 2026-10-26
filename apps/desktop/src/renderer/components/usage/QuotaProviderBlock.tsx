@@ -1,3 +1,4 @@
+import { QuotaBalanceRow } from '@/renderer/components/usage/QuotaBalanceRow';
 import { QuotaBar } from '@/renderer/components/usage/QuotaBar';
 import { Button } from '@/renderer/components/ui/button';
 import { useDisplayCurrency, useQuotaRefresh } from '@/renderer/lib/queries';
@@ -66,13 +67,11 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
             />
           ))}
           {provider.balances.map((balance) => (
-            <div
+            <QuotaBalanceRow
               key={`${balance.id ?? balance.currency}:${balance.display}`}
-              className="flex h-6 items-center gap-2 text-sm"
-            >
-              <span className="min-w-0 flex-1 truncate text-muted-foreground">{BALANCE_LABEL}</span>
-              <span className="shrink-0 text-right tabular-nums">{formatQuotaBalance(balance, currency)}</span>
-            </div>
+              label={BALANCE_LABEL}
+              amount={formatQuotaBalance(balance, currency)}
+            />
           ))}
           {(provider.message || !hasStructured) && (
             <span className="text-xs text-muted-foreground">{provider.message ?? NO_DATA_NOTE}</span>
