@@ -575,7 +575,7 @@ async function runTodoTool(
   switch (args.op) {
     case 'list': {
       if (Object.hasOwn(args, 'author')) return failed('author is not a supported todo argument')
-      const tag = optionalString(args, 'tag')
+      const tag = args.tag === '' ? undefined : optionalString(args, 'tag')
       const todos = await deps.todos.listTodos(tag === undefined ? undefined : { tag })
       return done(todos.map(todo => ({
         id: todo.id,
@@ -626,7 +626,7 @@ async function runTodoTool(
     case 'update': {
       if (Object.hasOwn(args, 'author')) return failed('author is not a supported todo argument')
       const id = requireString(args, 'id', 'update requires id')
-      const title = optionalTodoText(args, 'title')
+      const title = optionalTodoText(args, 'title') || undefined
       const request = optionalTodoText(args, 'request')
       const acceptance = optionalTodoText(args, 'acceptance')
       const oldTitle = optionalTodoText(args, 'old_title')
@@ -641,7 +641,7 @@ async function runTodoTool(
         ...(request === undefined ? {} : { request, old_request: oldRequest }),
         ...(acceptance === undefined ? {} : { acceptance, old_acceptance: oldAcceptance }),
         ...(status === undefined ? {} : { status: status as TodoStatus }),
-        ...(Object.hasOwn(args, 'project') ? { project: optionalTodoText(args, 'project') } : {}),
+        ...(Object.hasOwn(args, 'project') ? { project: optionalTodoText(args, 'project') || undefined } : {}),
         ...(dependsOn === undefined ? {} : { depends_on: dependsOn }),
         ...(attachments === undefined ? {} : { attachments }),
       }
