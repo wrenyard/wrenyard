@@ -30,7 +30,10 @@ export type SessionReasoningEffort = ReasoningEffort
 export interface SessionSendParams {
   sessionId: string
   text: string
-  model: { provider: string; model: string; reasoningEffort: SessionReasoningEffort; fast?: boolean }
+  model:
+    | { provider: string; model: string; reasoningEffort: SessionReasoningEffort; fast?: boolean }
+    /** Auto selects the shared automatic route resolution at send time. */
+    | { auto: true }
   attachments?: AttachmentInput[]
   /** Optional provenance of a bot-originated send; absent on ordinary sends. */
   sender?: { botId: string }

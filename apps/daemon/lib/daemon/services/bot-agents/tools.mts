@@ -17,7 +17,6 @@ import {
   type AuxiliaryRoute,
   type Session,
   type ToolSpec,
-  type TurnModel,
   type WorkspaceMemoryPort,
 } from '@wrenyard/session'
 import { errorTooltip } from '@wrenyard/session/session-status'
@@ -30,6 +29,7 @@ import {
   type BotAgentIdentity,
 } from './config.mts'
 import { newRoutineId, readRoutines, removeRoutine, writeRoutine, type RoutineDefinition } from './routine-files.mts'
+import { resolveSessionModel } from '../session-model.mts'
 
 /** One ranked model route a bot may run a session on. */
 export interface AgentModelRoute {
@@ -520,49 +520,6 @@ async function stopSession(
   if (latest === undefined) return { stopped: false }
   await sessions.interrupt(sessionId, latest)
   return { stopped: true }
-}
-
-/**
- * The model one send runs on. A session keeps its current model and effort
- * while that model is usable. A session without one, or whose model is now
- * excluded, exhausted or blocked, gets the first route of the system's
- * automatic selection, exactly as if a person switched the model before
- * sending; with no route the send fails. A running turn never switches model.
- */
-async function resolveSessionModel(
-  sessions: Session,
-  sessionId: string,
-  ctx: AgentToolContext,
-): Promise<AgentModelRoute> {
-  const current = currentSessionModel(sessions, sessionId)
-  if (current !== undefined && ctx.isModelUsable(current.provider, current.model)) {
-    return {
-      provider: current.provider,
-      model: current.model,
-      reasoningEffort: current.reasoningEffort ?? 'high',
-    }
-  }
-
-  const route = (await ctx.selectModels())[0]
-  if (route === undefined) throw new Error('no model available from automatic routing')
-  return route
-}
-
-/** The model a session's newest started turn ran on, as `turn.started` recorded it. */
-function currentSessionModel(sessions: Session, sessionId: string): TurnModel | undefined {
-  const events = sessions.readLedger(sessionId)
-  const started = [...events].reverse().find(event => event.type === 'turn.started')
-  if (started?.type !== 'turn.started') return undefined
-  let model = `${started.model.provider}/${started.model.model}`
-  for (const event of events) {
-    if (event.turn === started.turn && event.type === 'span.finished' && event.kind === 'reasoning' && event.requestModel !== undefined) model = event.requestModel
-  }
-  const [provider, ...parts] = model.split('/')
-  return {
-    ...started.model,
-    provider: provider!,
-    model: parts.join('/'),
-  }
 }
 
 // ─── todo tool ─────────────────────────────────────────────────────────────

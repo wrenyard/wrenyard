@@ -222,6 +222,8 @@ export interface Session {
         reasoningEffort: ReasoningEffort;
         /** Explicit Fast preference: true on, false off, absent no preference. */
         fast?: boolean;
+        /** Auto-selection provenance recorded on the turn. */
+        autoSelected?: boolean;
       };
       /** Optional user attachments imported before the turn starts. */
       attachments?: AttachmentInput[];

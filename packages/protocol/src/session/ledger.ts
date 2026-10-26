@@ -88,6 +88,12 @@ export interface TurnModel {
    * same turn; absent means the model was hand-picked and is never substituted.
    */
   automatic?: boolean;
+  /**
+   * True when the turn's model was resolved by session Auto selection.
+   * Provenance only — unlike `automatic`, it never permits in-turn route
+   * substitution.
+   */
+  autoSelected?: boolean;
 }
 
 export interface TaskBrief {

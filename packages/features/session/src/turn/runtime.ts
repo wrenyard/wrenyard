@@ -36,6 +36,8 @@ export interface TurnRuntime {
     fast?: boolean;
     /** True when automatic routing chose this model; absent for a hand-picked one. */
     automatic?: boolean;
+    /** Auto-selection provenance recorded on the turn. */
+    autoSelected?: boolean;
   };
   publicId: string;
   contextWindow?: number;

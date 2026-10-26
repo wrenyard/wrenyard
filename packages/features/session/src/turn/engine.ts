@@ -242,6 +242,8 @@ class Engine implements Session, SessionCallHost {
         reasoningEffort: ReasoningEffort;
         /** Explicit Fast preference: true on, false off, absent no preference. */
         fast?: boolean;
+        /** Auto-selection provenance recorded on the turn. */
+        autoSelected?: boolean;
       };
       attachments?: AttachmentInput[];
       /** Optional provenance of a bot-originated send; absent on ordinary sends. */
@@ -355,6 +357,8 @@ class Engine implements Session, SessionCallHost {
         model: string;
         reasoningEffort: ReasoningEffort;
         fast?: boolean;
+        /** Auto-selection provenance recorded on the turn. */
+        autoSelected?: boolean;
       };
       attachments?: AttachmentInput[];
       /** Optional provenance of a bot-originated send; absent on ordinary sends. */

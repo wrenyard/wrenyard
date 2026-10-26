@@ -8,6 +8,7 @@ import type {
   SessionEventsResult,
 } from '../../protocol/methods/session.mts'
 import type { RpcRouter } from '../rpc-router.mts'
+import type { AgentModelRoute } from '../../daemon/services/bot-agents/kernel.mts'
 
 /** Minimum spacing between two normal long-poll returns. */
 const LIVE_MIN_INTERVAL_MS = 150
@@ -183,6 +184,7 @@ async function pollEvents(
 
 export interface SessionRpcHandlerOptions {
   session: Session
+  resolveAutoModel: (sessionId: string) => Promise<AgentModelRoute>
 }
 
 /**
@@ -217,9 +219,18 @@ export function registerSessionHandlers(router: RpcRouter, options: SessionRpcHa
   router.register('session.create', (_params, _message, context) =>
     call(context, 'session.create', () => session.createSession()))
   router.register('session.send', (params, _message, context) =>
-    call(context, 'session.send', () => session.send(params.sessionId, {
+    call(context, 'session.send', async () => session.send(params.sessionId, {
       text: params.text,
-      model: params.model,
+      // The Auto form resolves to the shared automatic route; the turn records
+      // the concrete route plus Auto-selection provenance.
+      model: 'auto' in params.model
+        ? await options.resolveAutoModel(params.sessionId).then(route => ({
+          provider: route.provider,
+          model: route.model,
+          reasoningEffort: route.reasoningEffort,
+          autoSelected: true,
+        }))
+        : params.model,
       ...(params.attachments === undefined ? {} : { attachments: params.attachments }),
       ...(params.sender === undefined ? {} : { sender: params.sender }),
     })))

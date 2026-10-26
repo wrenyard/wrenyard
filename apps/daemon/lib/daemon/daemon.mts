@@ -49,6 +49,7 @@ import { createDaemonSessionHost } from './services/session-host.mts'
 import { createScheduler, type Scheduler } from './services/scheduler.mts'
 import { migrateDeviceBots } from './services/bot-agents/device-migration.mts'
 import { createBotAgentKernel, type AgentModelRoute, type BotAgentKernel } from './services/bot-agents/kernel.mts'
+import { resolveSessionModel } from './services/session-model.mts'
 import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent.mts'
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
 import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/agent-supervisor.mts'
@@ -271,6 +272,8 @@ interface WorkspaceScopedResources {
   unsubscribeTodoChanges: () => void
   /** Bot agent kernel for this workspace; replaced whole on a hot switch. */
   botAgents: BotAgentKernel
+  /** Resolve the concrete route a session.send Auto form runs on. */
+  resolveAutoModel: (sessionId: string) => Promise<AgentModelRoute>
   /** Runs the task-output compile step for one existing run of this workspace. */
   taskOutputCompile: TaskRunOutputCompiler
 }
@@ -1565,6 +1568,12 @@ async function createForemanDaemonResources(
     // The bot agent kernel assembles LLM bots from per-bot JSON configs. It owns
     // per-bot contexts (a private session host rooted in its own state dir),
     // wake queues, watches and rounds, and fires through the scheduler above.
+    // A route is usable unless it is excluded or its shared state is open
+    // (quota exhausted or blocked by backoff).
+    const isModelUsable = (provider: string, model: string): boolean => {
+      const id = `${provider}/${model}`
+      return !isRouteExcluded(id) && gateway.routeStatus(id)?.phase !== 'open'
+    }
     const botAgents = createBotAgentKernel({
       workspaceRoot,
       workspaceBotsDir: join(workspaceRoot, 'bots'),
@@ -1576,12 +1585,7 @@ async function createForemanDaemonResources(
       sessions: session,
       todos: workspaceTodoService,
       selectModels,
-      // A route is usable unless it is excluded or its shared state is open
-      // (quota exhausted or blocked by backoff).
-      isModelUsable: (provider, model) => {
-        const id = `${provider}/${model}`
-        return !isRouteExcluded(id) && gateway.routeStatus(id)?.phase !== 'open'
-      },
+      isModelUsable,
       log: (level, message) => writeDaemonLog(level, message),
     })
     const unsubscribeTodoChanges = workspaceTodoService.subscribeTodoChanges(changes => {
@@ -1598,6 +1602,7 @@ async function createForemanDaemonResources(
       scheduler,
       unsubscribeTodoChanges,
       botAgents,
+      resolveAutoModel: (sessionId) => resolveSessionModel(session, sessionId, { selectModels, isModelUsable }),
       taskOutputCompile,
     }
   }
@@ -1621,7 +1626,7 @@ async function createForemanDaemonResources(
    */
   const registerWorkspaceRoutes = (bindings: WorkspaceScopedResources): void => {
     registerCoreHandlers(rpcRouter, coreOptions)
-    registerSessionHandlers(rpcRouter, { session: bindings.session })
+    registerSessionHandlers(rpcRouter, { session: bindings.session, resolveAutoModel: bindings.resolveAutoModel })
     registerRoutineHandlers(rpcRouter, { scheduler: bindings.scheduler })
     registerAgentHandlers(rpcRouter, { kernel: bindings.botAgents })
   }
