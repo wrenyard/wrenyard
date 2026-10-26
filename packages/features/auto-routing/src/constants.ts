@@ -56,14 +56,11 @@ export const FULL_CYCLE_RESET_WEIGHT = 0.5;
 export const QUOTA_INSUFFICIENT_REMAINING = 0.1;
 /** A rolling window (no reset facts, so no pace) is abundant from this share. */
 export const ROLLING_ABUNDANT_REMAINING = 0.8;
-/**
- * Pay-as-you-go low-balance thresholds by ISO-4217 currency. A balance at or
- * below its threshold is insufficient; an unknown currency has no threshold,
- * so only an exact zero exhausts it.
- */
-export const BALANCE_LOW_THRESHOLDS: Readonly<Record<string, number>> = Object.freeze({
-  CNY: 10,
-  USD: 1.5,
-});
+/** Display and conversion metadata for supported balance units. */
+export const BALANCE_UNITS = Object.freeze({
+  CNY: { precision: 2, isCurrency: true },
+  USD: { precision: 2, isCurrency: true },
+  Credits: { precision: 0, isCurrency: false },
+} as const);
 /** How long a last measured state survives a failed or stale read. */
 export const QUOTA_EVIDENCE_GRACE_MS = 30 * 60_000;

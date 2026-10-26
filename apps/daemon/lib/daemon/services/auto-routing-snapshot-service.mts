@@ -660,16 +660,14 @@ function chatGptCreditsConstraint(
 /**
  * One measured state classification for the Credits constraint: availability
  * comes from the parser's flag-derived `availability` field, never from the
- * numeric amount alone. Fresh low positive Credits remain an available funding
- * source while ranking as insufficient; zero or an explicit upstream denial
- * is empty. The shared policy supplies the state and freshness validation.
+ * numeric amount alone. The shared policy supplies state and freshness validation.
  */
 function chatGptCreditsState(nowMs: number, constraint: RequiredQuotaConstraint): 'available' | 'empty' | 'unknown' {
   const assessment = assessRequiredQuota(nowMs, [constraint]);
   if (assessment.state === 'exhausted') return 'empty';
-  if (assessment.state === 'sufficient' || assessment.state === 'abundant'
-    || (constraint.balance?.availability === 'available' && assessment.evidence === 'measured'
-      && assessment.constraints.every((item) => item.rejectCode === null))) return 'available';
+  if (constraint.balance?.availability === 'available' && assessment.state === 'insufficient'
+    && assessment.evidence === 'measured'
+    && assessment.constraints.every((item) => item.rejectCode === null)) return 'available';
   return 'unknown';
 }
 

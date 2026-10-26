@@ -11,7 +11,6 @@ import {
 } from './types.ts';
 import { isFiniteNumber } from './numeric.ts';
 import {
-  BALANCE_LOW_THRESHOLDS,
   FULL_CYCLE_HEADROOM_WEIGHT,
   FULL_CYCLE_RESET_WEIGHT,
   QUOTA_EVIDENCE_GRACE_MS,
@@ -60,14 +59,6 @@ function rejected(rejectCode: ConstraintRejectCode): MeasuredAssessment {
   return { state: 'insufficient', headroom: null, rejectCode };
 }
 
-function balanceThreshold(currency: string | null | undefined): number | null {
-  if (typeof currency !== 'string') return null;
-  for (const [code, threshold] of Object.entries(BALANCE_LOW_THRESHOLDS)) {
-    if (code === currency) return threshold;
-  }
-  return null;
-}
-
 function measuredBalance(
   nowMs: number,
   balance: BalanceEvidence | null | undefined,
@@ -79,66 +70,21 @@ function measuredBalance(
   const observedAtMs = balance.observedAtMs;
   if (!isFiniteNumber(observedAtMs)) return rejected('observation_time_not_finite');
   if (observedAtMs > nowMs) return rejected('future_observation');
-  // An explicit parser-attested availability (ChatGPT Credits) is
-  // authoritative: 'available' permits fresh Credits balance bands;
-  // 'unavailable' is a confirmed exhaustion never
-  // relaxed by age, even beside a positive amount; 'unknown' is insufficient
-  // and never falls through to the amount/unlimited branches below.
-  if (balance.availability !== undefined) {
-    if (balance.availability === 'unavailable') {
-      return { state: 'exhausted', headroom: 0, rejectCode: null };
-    }
-    if (balance.availability === 'unknown') {
-      return { state: 'insufficient', headroom: null, rejectCode: null };
-    }
-    const credits = balance.unit === 'Credits' && balance.unlimited !== true
-      && typeof balance.amount === 'string' && /^[+-]?\d+(?:\.\d+)?$/.test(balance.amount)
-      ? Number(balance.amount) : NaN;
-    if (isFiniteNumber(credits) && credits <= 0) {
-      return { state: 'exhausted', headroom: 0, rejectCode: null };
-    }
-    const flagValidForMs = balance.validForMs;
-    if (!isFiniteNumber(flagValidForMs) || flagValidForMs <= 0) return rejected('invalid_freshness_window');
-    if (nowMs - observedAtMs > flagValidForMs) return rejected('stale_observation');
-    if (balance.unit === 'Credits' && balance.unlimited === true) {
-      return { state: 'abundant', headroom: null, rejectCode: null };
-    }
-    if (isFiniteNumber(credits)) {
-      const state = credits < 1_000 ? 'insufficient' : credits > 10_000 ? 'abundant' : 'sufficient';
-      return { state, headroom: null, rejectCode: null };
-    }
-    return { state: 'sufficient', headroom: null, rejectCode: null };
-  }
-  // An explicit provider-declared unlimited balance is usable while fresh; it
-  // is never abundant and never fabricated as a large number.
-  if (balance.unlimited === true) {
-    const unlimitedValidForMs = balance.validForMs;
-    if (!isFiniteNumber(unlimitedValidForMs) || unlimitedValidForMs <= 0) return rejected('invalid_freshness_window');
-    if (nowMs - observedAtMs > unlimitedValidForMs) return rejected('stale_observation');
-    return { state: 'sufficient', headroom: null, rejectCode: null };
+  // Explicit upstream unavailability is confirmed exhaustion and is never
+  // relaxed by age, even beside a positive amount.
+  if (balance.availability === 'unavailable') {
+    return { state: 'exhausted', headroom: 0, rejectCode: null };
   }
   const amount = balance.amount;
-  if (typeof amount !== 'string' || !/^\d+(?:\.\d+)?$/.test(amount)) {
-    // A reported-but-absent amount is unknown, never fabricated as zero.
-    if (amount === undefined) {
-      return { state: 'insufficient', headroom: null, rejectCode: null };
-    }
-    return rejected('invalid_balance_amount');
-  }
-  const value = Number(amount);
-  // A strictly observed zero balance is exhausted before any freshness rule:
-  // staleness only ever relaxes a non-exhausted observation.
+  const value = typeof amount === 'string' && /^[+-]?\d+(?:\.\d+)?$/.test(amount)
+    ? Number(amount) : NaN;
+  // A strictly observed non-positive balance is exhausted before any freshness
+  // rule: staleness only ever relaxes a non-exhausted observation.
   if (value <= 0) return { state: 'exhausted', headroom: 0, rejectCode: null };
   const validForMs = balance.validForMs;
   if (!isFiniteNumber(validForMs) || validForMs <= 0) return rejected('invalid_freshness_window');
   if (nowMs - observedAtMs > validForMs) return rejected('stale_observation');
-  // A pay-as-you-go balance is never abundant: at or below its currency's low
-  // threshold it is insufficient, and an unknown currency has no threshold.
-  const threshold = balanceThreshold(balance.currency);
-  if (threshold !== null && value <= threshold) {
-    return { state: 'insufficient', headroom: null, rejectCode: null };
-  }
-  return { state: 'sufficient', headroom: null, rejectCode: null };
+  return { state: 'insufficient', headroom: null, rejectCode: null };
 }
 
 function rollingBands(remainingRatio: number): MeasuredAssessment {
