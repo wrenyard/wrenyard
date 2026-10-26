@@ -15,7 +15,7 @@ import { realpath, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { hostname } from 'node:os'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { dirname, extname, isAbsolute, join, relative as relativePath, resolve, sep } from 'node:path'
 import { closeDb, getDb, initDb, query as dbQuery, setSlowQueryLogger } from '../db/connection.mts'
 import { ensureIncrementalAutoVacuum } from '../db/auto-vacuum-convert.mts'
 import { dropTaskRunTelemetryRetiredColumns } from '../db/schema.mts'
@@ -1667,33 +1667,9 @@ async function createForemanDaemonResources(
   // failure message per client. Shared so client.list reflects live state.
   const clientJobs = new Map<string, { action: 'install' | 'upgrade' }>()
   const clientLastErrors = new Map<string, string>()
-  let cachedNpmPrefix: string | null | undefined
-  let npmPrefixLoad: Promise<string | null> | undefined
-  const getNpmPrefix = (): Promise<string | null> => {
-    if (cachedNpmPrefix !== undefined) return Promise.resolve(cachedNpmPrefix)
-    if (npmPrefixLoad) return npmPrefixLoad
-    npmPrefixLoad = (async () => {
-      try {
-        const child = process.platform === 'win32'
-          ? spawn('cmd.exe', ['/d', '/s', '/c', 'npm prefix -g'], { windowsHide: true })
-          : spawn('npm', ['prefix', '-g'])
-        const output = await readSpawnOutput(child, 10_000)
-        cachedNpmPrefix = output.trim() || null
-      } catch {
-        cachedNpmPrefix = null
-      }
-      return cachedNpmPrefix
-    })()
-    return npmPrefixLoad
-  }
-  const isUnderNpmPrefix = (executablePath: string, prefix: string): boolean => {
-    const normalized = prefix.endsWith(sep) ? prefix : prefix + sep
-    return executablePath === prefix || executablePath.startsWith(normalized)
-  }
   const readSpawnOutput = (child: ChildProcess, timeoutMs: number): Promise<string> => {
     return new Promise<string>((resolve, reject) => {
       let out = ''
-      let err = ''
       let done = false
       const timer = setTimeout(() => {
         if (done) return
@@ -1702,28 +1678,162 @@ async function createForemanDaemonResources(
         reject(new Error('command timed out'))
       }, timeoutMs)
       child.stdout?.on('data', (chunk) => { out += chunk.toString() })
-      child.stderr?.on('data', (chunk) => { err += chunk.toString() })
+      child.stderr?.on('data', () => {})
       child.on('error', (error) => {
         if (done) return
         done = true
         clearTimeout(timer)
         reject(error)
       })
-      child.on('close', () => {
+      child.on('close', (code) => {
         if (done) return
         done = true
         clearTimeout(timer)
-        resolve(out + (out && err ? '\n' : '') + err)
+        if (code !== 0 || out.length > 4096) {
+          reject(new Error('command failed or produced invalid output'))
+          return
+        }
+        resolve(out)
       })
     })
   }
+  const getNpmRoot = async (): Promise<string | null> => {
+    try {
+      const child = process.platform === 'win32'
+        ? spawn('cmd.exe', ['/d', '/s', '/c', 'npm root --global'], { windowsHide: true })
+        : spawn('npm', ['root', '--global'], { windowsHide: true })
+      const output = (await readSpawnOutput(child, 10_000)).trim()
+      return isAbsolute(output) ? await realpath(output) : null
+    } catch { return null }
+  }
+  const inside = (candidate: string, parent: string): boolean => {
+    const rel = relativePath(parent, candidate)
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  }
+  const expectedBinName = (id: string): string => id === 'opencode' ? 'opencode' : id
+  const declaredBin = (id: string, bin: string | Record<string, string> | undefined): string | undefined => {
+    if (typeof bin === 'string') return bin
+    if (!bin || typeof bin !== 'object' || Array.isArray(bin)) return undefined
+    const expected = bin[expectedBinName(id)]
+    return typeof expected === 'string' ? expected : undefined
+  }
+  const launcherTargetMatches = async (actual: string, declared: string): Promise<boolean> => {
+    if (process.platform !== 'win32') return false
+    const maxBytes = 64 * 1024
+    const target = relativePath(dirname(actual), declared).split(sep).join('/')
+    const segments = target.split('/')
+    if (!target || isAbsolute(target) || /^[A-Za-z]:/.test(target) || segments.length < 3 || segments[0] !== 'node_modules' ||
+        segments.some(segment => !segment || segment === '.' || segment === '..' || !/^[A-Za-z0-9@_.-]+$/.test(segment))) return false
+    const extension = extname(actual).toLowerCase()
+    const kind = extension === '.cmd' ? 'cmd' : extension === '.ps1' ? 'ps1' :
+      extension === '.sh' || extension === '' ? 'sh' : undefined
+    if (!kind) return false
+    try {
+      const info = await stat(actual)
+      if (!info.isFile() || info.size > maxBytes) return false
+      let content = await readFile(actual, 'utf8')
+      if (Buffer.byteLength(content, 'utf8') > maxBytes) return false
+      content = content.replace(/\r\n/g, '\n')
+      if (content.endsWith('\n')) content = content.slice(0, -1)
+
+      const cmdHead = '@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\nSETLOCAL\nCALL :find_dp0\n'
+      const cmdTarget = `"%dp0%\\${target.split('/').join('\\')}"`
+      const cmdNodeBody = '\nIF EXIST "%dp0%\\node.exe" (\n  SET "_prog=%dp0%\\node.exe"\n) ELSE (\n  SET "_prog=node"\n  SET PATHEXT=%PATHEXT:;.JS;=;%\n)\n\n'
+      const cmdNodeSuffixes = [
+        `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "${'%dp0%\\'}${target.split('/').join('\\')}" %*`,
+        `endLocal & goto #_undefined_# 2>NUL & "%_prog%"  "${'%dp0%\\'}${target.split('/').join('\\')}" %*`,
+      ]
+      const cmdDirect = `${cmdHead}${cmdTarget}   %*`
+      const cmdNode = cmdNodeSuffixes.some(suffix => content === `${cmdHead}${cmdNodeBody}${suffix}`)
+
+      const shellHead = '#!/bin/sh\n' +
+        'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")\n\n' +
+        'case `uname` in\n' +
+        '    *CYGWIN*|*MINGW*|*MSYS*)\n' +
+        '        if command -v cygpath > /dev/null 2>&1; then\n' +
+        '            basedir=`cygpath -w "$basedir"`\n' +
+        '        fi\n' +
+        '    ;;\n' +
+        'esac\n\n'
+      const shellTarget = `"$basedir/${target}"`
+      const shellNode = `${shellHead}if [ -x "$basedir/node" ]; then\n  exec "$basedir/node"  ${shellTarget} "$@"\nelse \n  exec node  ${shellTarget} "$@"\nfi`
+      const shellDirect = `${shellHead}exec "$basedir/${target}"   "$@"`
+
+      const psHead = '#!/usr/bin/env pwsh\n' +
+        '$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n\n' +
+        '$exe=""\n' +
+        'if ($PSVersionTable.PSVersion -lt "6.0" -or $IsWindows) {\n' +
+        '  # Fix case when both the Windows and Linux builds of Node\n' +
+        '  # are installed in the same directory\n' +
+        '  $exe=".exe"\n' +
+        '}\n'
+      const psTarget = `"$basedir/${target}"`
+      const psNode = `${psHead}$ret=0\nif (Test-Path "$basedir/node$exe") {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & "$basedir/node$exe"  ${psTarget} $args\n  } else {\n    & "$basedir/node$exe"  ${psTarget} $args\n  }\n  $ret=$LASTEXITCODE\n} else {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & "node$exe"  ${psTarget} $args\n  } else {\n    & "node$exe"  ${psTarget} $args\n  }\n  $ret=$LASTEXITCODE\n}\nexit $ret`
+      const psDirect = `${psHead}# Support pipeline input\nif ($MyInvocation.ExpectingInput) {\n  $input | & ${psTarget}   $args\n} else {\n  & ${psTarget}   $args\n}\nexit $LASTEXITCODE`
+      const recognized = kind === 'cmd' ? cmdNode || content === cmdDirect :
+        kind === 'sh' ? content === shellNode || content === shellDirect : content === psNode || content === psDirect
+      if (!recognized) return false
+      const resolvedTarget = await realpath(resolve(dirname(actual), ...segments))
+      return resolvedTarget === await realpath(declared)
+    } catch { return false }
+  }
+  const inspectOwnership = async (id: string, executable: string | undefined, npmRoot: string | null): Promise<'npm' | 'homebrew' | 'manual'> => {
+    if (!executable) return 'manual'
+    let actual: string
+    try { actual = await realpath(executable) } catch { return 'manual' }
+    const packageName = clientNpmPackages[id]
+    if (npmRoot && packageName) {
+      try {
+        const pkgRoot = await realpath(resolve(npmRoot, packageName))
+        const manifest = JSON.parse(await readFile(join(pkgRoot, 'package.json'), 'utf8')) as { name?: string; bin?: string | Record<string, string> }
+        const bin = declaredBin(id, manifest.bin)
+        if (inside(pkgRoot, npmRoot) && manifest.name === packageName && bin) {
+          const declared = await realpath(resolve(pkgRoot, bin))
+          if (inside(declared, pkgRoot) && (actual === declared || await launcherTargetMatches(actual, declared))) return 'npm'
+        }
+      } catch { /* Incomplete package metadata cannot establish ownership. */ }
+    }
+    const components = actual.split(sep).filter(Boolean)
+    const cellar = components.lastIndexOf('Cellar')
+    if (cellar >= 0 && components.length > cellar + 3) {
+      const versionRoot = sep + components.slice(0, cellar + 3).join(sep)
+      try {
+        const receiptPath = join(versionRoot, 'INSTALL_RECEIPT.json')
+        const receiptStat = await stat(receiptPath)
+        if (!receiptStat.isFile() || receiptStat.size > 64 * 1024) return 'manual'
+        const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>
+        if (receipt && typeof receipt === 'object' && !Array.isArray(receipt)) {
+          const formula = components[cellar + 1]
+          const source = receipt.source
+          if (!formula || !source || typeof source !== 'object' || Array.isArray(source)) return 'manual'
+          const sourceRecord = source as Record<string, unknown>
+          if (typeof sourceRecord.tap !== 'string' || sourceRecord.tap.length < 1 || sourceRecord.tap.length > 256) return 'manual'
+          const versions = sourceRecord.versions
+          if (!versions || typeof versions !== 'object' || Array.isArray(versions)) return 'manual'
+          const versionRecord = versions as Record<string, unknown>
+          const version = components[cellar + 2]!
+          const matchesVersion = version === versionRecord.stable || version === versionRecord.version ||
+            typeof versionRecord.stable === 'string' && new RegExp(`^${versionRecord.stable.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}_\\d+$`).test(version)
+          if (!matchesVersion) return 'manual'
+          const sourcePath = sourceRecord.path
+          if (typeof sourcePath === 'string' && sourcePath.length <= 4096) {
+            const receiptBase = sourcePath.replace(/\\/g, '/').split('/').pop()
+            if (receiptBase?.endsWith('.rb') && receiptBase !== `${formula}.rb`) return 'manual'
+            if (!receiptBase?.endsWith('.rb') && !receiptBase?.endsWith('.jws.json')) return 'manual'
+          } else return 'manual'
+          return 'homebrew'
+        }
+      } catch { /* Missing or invalid receipt means manual ownership. */ }
+    }
+    return 'manual'
+  }
   // Builds one client.list entry, shared by listClients and act so the two never
-  // diverge. The source is derived from the known npm package and whether the
-  // detected executable lives under the npm global prefix.
+  // diverge. Source requires positive package/bin ownership or a valid formula receipt.
   const buildClientEntry = async (
     id: string,
     client: AgentClient,
     snapshot: { sampledAtMs: number; clientsById: Record<string, { enabled: boolean; installed: boolean }> },
+    npmRoot: string | null,
   ): Promise<ClientListEntry> => {
     const enabled = snapshot.clientsById[id]?.enabled ?? true
     let installed = false
@@ -1761,15 +1871,8 @@ async function createForemanDaemonResources(
       }
     }
     const npmPackage = clientNpmPackages[id]
-    let source: 'npm' | 'manual' = 'manual'
-    if (npmPackage !== undefined) {
-      if (!installed) {
-        source = 'npm'
-      } else if (path !== undefined) {
-        const prefix = await getNpmPrefix()
-        if (prefix !== null && isUnderNpmPrefix(path, prefix)) source = 'npm'
-      }
-    }
+    const source = installed ? await inspectOwnership(id, path, npmRoot) : (npmPackage === undefined ? 'manual' : 'npm')
+    if (installed && source !== 'npm') clientLastErrors.delete(id)
     const entry: ClientListEntry = {
       id,
       name: clientDisplayNames[id] ?? id,
@@ -1789,13 +1892,14 @@ async function createForemanDaemonResources(
   const clientService = {
     listClients: async (params?: ClientListParams): Promise<ClientListEntry[]> => {
       const snapshot = await loadClientReadiness()
+      const npmRoot = await getNpmRoot()
       const clients = createAgentClients()
       const entries: ClientListEntry[] = []
       for (const [id, client] of clients) {
-        entries.push(await buildClientEntry(id, client, snapshot))
+        entries.push(await buildClientEntry(id, client, snapshot, npmRoot))
       }
       if (params?.checkUpdates === true) {
-        const npmEntries = entries.filter((entry) => entry.installed && entry.npmPackage !== undefined)
+        const npmEntries = entries.filter((entry) => entry.installed && entry.source === 'npm' && entry.npmPackage !== undefined)
         const latestResults = await Promise.allSettled(
           npmEntries.map(async (entry) => {
             const pkg = entry.npmPackage!
@@ -1815,7 +1919,7 @@ async function createForemanDaemonResources(
           }
         }
         for (const entry of entries) {
-          if (entry.npmPackage !== undefined && latestByPkg[entry.npmPackage] !== undefined) {
+          if (entry.installed && entry.source === 'npm' && entry.npmPackage !== undefined && latestByPkg[entry.npmPackage] !== undefined) {
             const latest = latestByPkg[entry.npmPackage]
             entry.latestVersion = latest
             entry.updateAvailable = entry.version !== undefined && (
@@ -1857,15 +1961,14 @@ async function createForemanDaemonResources(
       const installation = status.installation
       const installed = installation.state === 'installed'
       const executablePath = installation.state === 'installed' ? installation.executable : undefined
-      const npmPrefix = await getNpmPrefix()
+      const source = await inspectOwnership(id, executablePath, await getNpmRoot())
       if (action === 'install' && installed) {
         refuse('already_installed', 'Client is already installed.')
       }
       if (action === 'upgrade' && !installed) {
         refuse('not_installed', 'Client is not installed; install it before upgrading.')
       }
-      if (action === 'upgrade' && executablePath !== undefined
-        && (npmPrefix === null || !isUnderNpmPrefix(executablePath, npmPrefix))) {
+      if (action === 'upgrade' && source !== 'npm') {
         refuse('unsupported_source', 'Client was not installed through npm; manage it manually.')
       }
       const finalLoad = readExecutionLoad(runtime.db)
@@ -1916,7 +2019,7 @@ async function createForemanDaemonResources(
         clientJobs.delete(id)
       }
       const snapshot = await loadClientReadiness()
-      return await buildClientEntry(id, client, snapshot)
+      return await buildClientEntry(id, client, snapshot, await getNpmRoot())
     },
     host: (): ClientListHost => ({ hostname: hostname(), platform: process.platform }),
   }

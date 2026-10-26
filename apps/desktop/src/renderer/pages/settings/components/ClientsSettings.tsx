@@ -60,6 +60,28 @@ export function ClientsSettings() {
       const result = await clientList({ checkUpdates });
       setClients(result.clients);
       setHost(result.host);
+      const byId = new Map(result.clients.map((client) => [client.id, client]));
+      setPending((current) => Object.fromEntries(
+        Object.entries(current).filter(([id, pendingAction]) => {
+          const client = byId.get(id);
+          if (client === undefined) return false;
+          if (pendingAction.action === 'install') {
+            return client.installed !== true && client.source === 'npm' && client.npmPackage !== undefined;
+          }
+          return client.installed === true && client.source === 'npm' &&
+            (client.updateAvailable === true ||
+              (client.updateAvailable === undefined && client.latestVersion === undefined));
+        }),
+      ));
+      setRowErrors((current) => Object.fromEntries(
+        Object.entries(current).filter(([id]) => {
+          const client = byId.get(id);
+          return client !== undefined && (
+            (client.installed === true && client.source === 'npm') ||
+            (client.installed !== true && client.source === 'npm' && client.npmPackage !== undefined)
+          );
+        }),
+      ));
       setError('');
     } catch (failure) {
       setError(errorMessage(failure));
@@ -111,7 +133,7 @@ export function ClientsSettings() {
   };
 
   const sourceLabel = (entry: ClientListEntry): string =>
-    entry.source === 'npm' ? 'npm' : '手动';
+    entry.source === 'npm' ? 'npm' : entry.source === 'homebrew' ? 'Homebrew' : '手动';
 
   const canInstall = (entry: ClientListEntry): boolean =>
     !entry.installed && entry.source === 'npm' && entry.npmPackage !== undefined;
@@ -120,6 +142,14 @@ export function ClientsSettings() {
     entry.installed && entry.source === 'npm' && entry.updateAvailable === true;
 
   const renderActions = (entry: ClientListEntry) => {
+    if (entry.installed && entry.source !== 'npm') {
+      return (
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {entry.source === 'homebrew' ? '由 Homebrew 管理，请使用 Homebrew 升级。' : '请手动安装与升级'}
+        </span>
+      );
+    }
+
     const confirm = pending[entry.id];
     if (confirm !== undefined) {
       const isUpgrade = confirm.action === 'upgrade';
@@ -166,13 +196,13 @@ export function ClientsSettings() {
       );
     }
 
-    if (entry.source === 'manual' || entry.npmPackage === undefined) {
+    if (entry.npmPackage === undefined || (entry.installed && entry.source !== 'npm')) {
       return <span className="shrink-0 text-xs text-muted-foreground">请手动安装与升级</span>;
     }
 
     return (
       <div className="flex shrink-0 items-center gap-2">
-        {entry.updateAvailable === true && (
+        {entry.installed && entry.source === 'npm' && entry.updateAvailable === true && (
           <span className="text-xs text-muted-foreground">
             可升级{entry.latestVersion !== undefined ? ` · ${entry.latestVersion}` : ''}
           </span>
@@ -197,7 +227,7 @@ export function ClientsSettings() {
             升级
           </Button>
         )}
-        {entry.lastError !== undefined && (
+        {entry.lastError !== undefined && (entry.installed ? entry.source === 'npm' : entry.npmPackage !== undefined) && (
           <Button
             variant="outline"
             size="sm"

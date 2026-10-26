@@ -33,8 +33,8 @@ export interface ClientListEntry {
   readiness: ClientReadiness
   /** Human-readable reason for a non-ready state; never a credential leak. */
   reason?: string
-  /** Where the client was installed from: an npm-managed package or manual. */
-  source?: 'npm' | 'manual'
+  /** Where the client was installed from: npm, Homebrew, or manual management. */
+  source?: 'npm' | 'homebrew' | 'manual'
   /** The npm package that installs this client, when one is known. */
   npmPackage?: string
   /** Latest published npm version, when checkUpdates was requested. */
@@ -70,8 +70,8 @@ const clientListEntrySchema = {
     reason: { type: 'string', description: 'The human-readable reason for a non-ready state.' },
     source: {
       type: 'string',
-      enum: ['npm', 'manual'],
-      description: 'Where the client was installed from.',
+      enum: ['npm', 'homebrew', 'manual'],
+      description: 'The installation source or management method for the detected client.',
     },
     npmPackage: { type: 'string', description: 'The npm package that installs this client.' },
     latestVersion: { type: 'string', description: 'The latest published npm version.' },

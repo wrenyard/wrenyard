@@ -29,8 +29,8 @@ const clientListEntrySchema = {
     reason: { type: 'string', description: 'The human-readable reason for a non-ready state.' },
     source: {
       type: 'string',
-      enum: ['npm', 'manual'],
-      description: 'Where the client was installed from.',
+      enum: ['npm', 'homebrew', 'manual'],
+      description: 'The installation source or management method for the detected client.',
     },
     npmPackage: { type: 'string', description: 'The npm package that installs this client.' },
     latestVersion: { type: 'string', description: 'The latest published npm version.' },
