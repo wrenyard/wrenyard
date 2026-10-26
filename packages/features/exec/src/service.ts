@@ -183,7 +183,7 @@ export class ExecService {
         if (operationPreparation?.env) env = { ...env, ...operationPreparation.env };
       }
       if (client.prepare) {
-        const preparation = await client.prepare(launchRequest, { ...clientOptions, signal });
+        const preparation = await client.prepare(launchRequest, { ...clientOptions, env, signal });
         if (preparation?.prompt !== undefined) launchRequest = { ...launchRequest, prompt: preparation.prompt };
         if (preparation?.mcpServers) launchRequest = { ...launchRequest, mcpServers: preparation.mcpServers };
         if (preparation?.env) env = { ...env, ...preparation.env };
