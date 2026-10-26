@@ -136,11 +136,10 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
         }
         if (type === 'error') {
             sawError = true;
-            const error = openCodeErrorRecord(record);
-            const errorText = openCodeErrorText(error);
+            const errorText = openCodeErrorText(record);
             if (errorText)
                 yield { type: 'error', message: errorText };
-            yield finishedEvent('opencode', sessionId, output, true, error);
+            yield finishedEvent('opencode', sessionId, output, true);
         }
     }
 }
@@ -353,31 +352,17 @@ function openCodeEventText(record: Record<string, unknown>): string {
  * and earlier shapes flatten it; a JSON `responseBody` carries the provider's
  * own error identity and message.
  */
-function openCodeErrorText(structured: Record<string, unknown>): string {
-    const status = structured.status;
-    const errorType = stringOf(structured, 'type');
-    const message = stringOf(structured, 'message');
-    const identity = [typeof status === 'number' ? `HTTP ${status}` : '', errorType].filter(Boolean).join(' ');
-    if (!identity)
-        return message;
-    return message ? `${identity}: ${message}` : identity;
-}
-
-/** Extracts only native error identity fields that are actually present. */
-function openCodeErrorRecord(record: Record<string, unknown>): Record<string, unknown> {
+function openCodeErrorText(record: Record<string, unknown>): string {
     const error = recordOf(record, 'error');
     const data = error ? recordOf(error, 'data') ?? error : undefined;
     const status = nonnegativeInt(data?.statusCode) ?? nonnegativeInt(data?.status) ?? nonnegativeInt(record.statusCode);
     const body = openCodeErrorBody(data, error, record);
     const errorType = stringOf(body, 'type') || stringOf(data, 'type') || stringOf(error, 'errorType') || stringOf(record, 'errorType');
     const message = stringOf(body, 'message') || stringOf(data, 'message') || stringOf(error, 'message') || stringOf(record, 'message');
-    const resetsAt = stringOf(body, 'resets_at') || stringOf(body, 'reset_at') || stringOf(data, 'resets_at') || stringOf(data, 'reset_at') || stringOf(error, 'resets_at') || stringOf(error, 'reset_at') || stringOf(record, 'resets_at') || stringOf(record, 'reset_at');
-    return {
-        ...(status === undefined ? {} : { status }),
-        ...(errorType ? { type: errorType } : {}),
-        ...(message ? { message } : {}),
-        ...(resetsAt ? { resets_at: resetsAt } : {}),
-    };
+    const identity = [status === undefined ? '' : `HTTP ${status}`, errorType].filter(Boolean).join(' ');
+    if (!identity)
+        return message;
+    return message ? `${identity}: ${message}` : identity;
 }
 
 /** Parses a JSON `responseBody` from the native payload, when one is present. */
