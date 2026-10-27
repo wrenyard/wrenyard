@@ -6,6 +6,12 @@ export {
   type ExecutionSession,
   type ExecutionEvent,
   type StartProcessOptions,
+  markOwnedRunPhase,
+  cleanupOwnedRunHome,
+  materializeFiles,
+  cleanupFiles,
+  unixProcessGroupIsGone,
+  type OwnedFile,
 } from './session.ts';
 export {
   killProcessTree,
@@ -14,4 +20,14 @@ export {
   resolveWindowsHideOption,
 } from './process.ts';
 export { rpcSequence, NativeOperationError, type RpcRequest, type RpcStep } from './client-protocol.ts';
+export {
+  startAcpTransport,
+  type AcpTransport,
+  type AcpTransportSpec,
+  type AcpTransportOptions,
+  type AcpMcpServer,
+  type AcpNewSessionRequest,
+  type AcpResumeSessionRequest,
+  type AcpPromptResult,
+} from './acp.ts';
 export { readKeychain, readSqliteValue, type CredentialRequest, type KeychainCredential, type SqliteCredential } from './credentials.ts';

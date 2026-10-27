@@ -6,6 +6,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@agentclientprotocol/sdk": "1.8.0",
     "@wrenyard/agent-client": "workspace:*",
     "@wrenyard/execution": "workspace:*",
     "@wrenyard/providers": "workspace:*"

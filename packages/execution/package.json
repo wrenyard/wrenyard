@@ -6,6 +6,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@agentclientprotocol/sdk": "1.8.0",
     "cross-spawn": "7.0.6",
     "better-sqlite3": "13.0.3"
   },

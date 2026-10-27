@@ -2,35 +2,35 @@ import { mkdir, readdir, rm, stat, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findExecutable, type AgentRequest } from '@wrenyard/agent-client';
 import { resolveMcpServers, type ResolvedMcpServer } from '@wrenyard/agent-client/mcp';
-import { assertLaunch, clientStateDirForEnv, createOwnedClientRunHome, preserveClientRunHomeSessionSnapshot, stringEnv } from '@wrenyard/agent-client/native';
-import type { ProcessSpec } from '@wrenyard/execution';
+import { assertLaunch, clientStateDirForEnv, createOwnedClientRunHome, preserveClientRunHomeSessionSnapshot, stringEnv, type OwnedClientRunHome } from '@wrenyard/agent-client/native';
+import type { AcpTransportSpec } from '@wrenyard/execution';
 import { KIMI_KEY_ENV, readManagedKimiCodingKey } from './credential.ts';
-import { captureKimiRunHome, type KimiRunCapture } from './events.ts';
 
 /** Kimi Coding upstream entry point served by the native client. */
 const KIMI_BASE_URL = 'https://api.kimi.com/coding/v1';
 
 /**
  * Resume design: every run owns a fresh run home. Before the run home is
- * cleaned up, the owned-home preserve hook captures the wire facts the
- * decoder still needs, discovers the session id under `sessions/<wd>/<id>`,
- * and snapshots the home into the shared `clients/kimi/sessions/<id>` resume
- * record. A resume links that preserved session directory into the new run
- * home's `sessions/<wd>/` slot and launches with `-S <id>`. The same chain
- * never runs concurrently, and the user's `~/.kimi-code` is never touched.
+ * cleaned up, the owned-home preserve hook discovers the session id under
+ * `sessions/<wd>/<id>` and snapshots the home into the shared
+ * `clients/kimi/sessions/<id>` resume record. A resume links that preserved
+ * session directory into the new run home's `sessions/<wd>/` slot and resumes
+ * it over ACP. The same chain never runs concurrently, and the user's
+ * `~/.kimi-code` is never touched.
  */
 
-/** A launch whose decoder needs launch-time facts (wire id, run home, wire offset). */
 export interface KimiLaunch {
-    readonly spec: ProcessSpec;
-    /** Exact upstream wire id the run must use; a mismatch fails the run. */
+    readonly spec: AcpTransportSpec;
+    /** Exact upstream model id the run requested. */
     readonly expectedModel: string;
-    /** The Wrenyard-owned KIMI_CODE_HOME this run reads its wire from. */
+    /** The Wrenyard-owned KIMI_CODE_HOME this run uses. */
     readonly runHome: string;
-    /** Byte offset into the resumed wire file where this run's records start. */
-    readonly skipWireBytes: number;
-    /** Wire facts and session id captured before the run home is deleted. */
-    readonly captured: KimiRunCapture;
+    /** Run home ownership record; the adapter finalizes it on settle. */
+    readonly ownedHome: OwnedClientRunHome;
+    /** MCP servers converted to the ACP session/new surface. */
+    readonly mcpServers: readonly ResolvedMcpServer[];
+    /** Session id discovered by the preserve hook before home deletion. */
+    readonly captured: { sessionId?: string };
 }
 
 function tomlString(value: string): string {
@@ -95,13 +95,27 @@ function kimiMcpDocument(servers: readonly ResolvedMcpServer[]): string {
     return JSON.stringify({ mcpServers }, null, 2) + '\n';
 }
 
+/** Session id taken from the run home's single session directory. */
+async function discoverSessionId(runHome: string): Promise<string | undefined> {
+    try {
+        for (const wd of await readdir(join(runHome, 'sessions'))) {
+            for (const session of await readdir(join(runHome, 'sessions', wd))) {
+                const info = await stat(join(runHome, 'sessions', wd, session)).catch(() => undefined);
+                if (info?.isDirectory())
+                    return session;
+            }
+        }
+    } catch {
+        return undefined;
+    }
+    return undefined;
+}
+
 /**
- * Link the preserved session directory into a fresh run home and report how
- * many bytes of its appended wire file already belong to earlier turns. The
- * preserved resume record keeps the run home's `sessions/<wd>/<id>` layout,
- * so the link lands at the exact path the CLI wrote before.
+ * Link the preserved session directory into a fresh run home so `kimi acp`
+ * finds it under `sessions/<wd>/<id>` when session/resume names it.
  */
-async function linkKimiSession(sessionsStateDir: string, sessionId: string, runHome: string): Promise<number> {
+async function linkKimiSession(sessionsStateDir: string, sessionId: string, runHome: string): Promise<void> {
     const preservedHome = join(sessionsStateDir, sessionId);
     let wdEntries: string[];
     try {
@@ -119,8 +133,7 @@ async function linkKimiSession(sessionsStateDir: string, sessionId: string, runH
         const target = join(runHome, 'sessions', wd);
         await mkdir(target, { recursive: true, mode: 0o700 });
         await symlink(source, join(target, sessionId), process.platform === 'win32' ? 'junction' : 'dir');
-        const wire = await stat(join(source, 'agents', 'main', 'wire.jsonl')).catch(() => undefined);
-        return wire?.isFile() === true && wire.size > 0 ? wire.size : 0;
+        return;
     }
     throw new Error(`native Kimi session ${sessionId} has no preserved session directory`);
 }
@@ -132,7 +145,7 @@ export async function launchKimi(request: AgentRequest, env: NodeJS.ProcessEnv):
     const status = await findExecutable(['kimi'], { env });
     if (status.installation.state !== 'installed')
         throw new Error('kimi is not installed');
-    // The upstream wire id is owned by the kimi-coding registrations and
+    // The upstream model id is owned by the kimi-coding registrations and
     // arrives already resolved (Fast swaps K3.1 Pro to its highspeed wire id).
     const expectedModel = request.model.trim();
     const canonicalModel = request.canonicalModel?.trim() || expectedModel;
@@ -141,34 +154,31 @@ export async function launchKimi(request: AgentRequest, env: NodeJS.ProcessEnv):
         throw new Error('kimi: the managed Kimi Coding credential is missing');
     const ownedHome = await createOwnedClientRunHome(env, 'kimi');
     try {
-        const captured: KimiRunCapture = {};
+        const captured: { sessionId?: string } = {};
         const sessionsStateDir = clientStateDirForEnv(env, 'kimi', 'sessions');
-        let skipWireBytes = 0;
         // The preserve hook runs while the run home still exists, on every
-        // terminal path (success, failure, cancel): read the wire tail and the
-        // session id the decoder can no longer reach after deletion. For a
-        // resumed run, keep the session directory itself in the existing
-        // sessions record so the run-home symlink remains valid for next time.
+        // terminal path (success, failure, cancel): record the session id so
+        // the finished event can name it, and snapshot the home into the
+        // sessions record so a later run can resume it.
         ownedHome.preserveSession = async (homePath: string) => {
-            const capture = await captureKimiRunHome(homePath, skipWireBytes);
-            captured.facts ??= capture.facts;
-            captured.sessionId ??= capture.sessionId;
-            if (capture.sessionId !== undefined && request.resumeSessionId === undefined)
-                await preserveClientRunHomeSessionSnapshot(env, ownedHome, homePath, capture.sessionId);
+            const sessionId = await discoverSessionId(homePath);
+            captured.sessionId ??= sessionId;
+            if (sessionId !== undefined && request.resumeSessionId === undefined)
+                await preserveClientRunHomeSessionSnapshot(env, ownedHome, homePath, sessionId);
         };
-        const args = ['-p', request.prompt, '--output-format', 'stream-json', '-m', expectedModel];
-        if (request.resumeSessionId) {
-            skipWireBytes = await linkKimiSession(sessionsStateDir, request.resumeSessionId, ownedHome.path);
-            args.push('-S', request.resumeSessionId);
-        }
+        // `kimi acp` serves the Agent Client Protocol over stdio; the adapter
+        // drives initialize/session/prompt through the transport.
+        const args = ['acp'];
+        if (request.resumeSessionId)
+            await linkKimiSession(sessionsStateDir, request.resumeSessionId, ownedHome.path);
         const mcpServers = resolveMcpServers(request.mcpServers);
-        const files: ProcessSpec['files'] = [
-            { path: join(ownedHome.path, 'config.toml'), data: kimiConfigToml(expectedModel, expectedModel, canonicalModel), cleanup: 'completion' },
+        const files = [
+            { path: join(ownedHome.path, 'config.toml'), data: kimiConfigToml(expectedModel, expectedModel, canonicalModel), cleanup: 'completion' as const },
             ...(mcpServers.length > 0
                 ? [{ path: join(ownedHome.path, 'mcp.json'), data: kimiMcpDocument(mcpServers), cleanup: 'completion' as const }]
                 : []),
         ];
-        const spec: ProcessSpec = {
+        const spec: AcpTransportSpec = {
             executable: status.installation.executable,
             args,
             cwd: request.cwd,
@@ -180,10 +190,14 @@ export async function launchKimi(request: AgentRequest, env: NodeJS.ProcessEnv):
                 KIMI_MODEL_THINKING_EFFORT: request.clientReasoningEffort ?? request.reasoningEffort,
                 [KIMI_KEY_ENV]: apiKey,
             }),
+            // The transport materializes these into the run home before the
+            // spawn, exactly as startProcess does for ProcessSpec.files, so
+            // the managed provider/model/api_key_env binding actually reaches
+            // `kimi acp`.
             files,
             ownedRunHome: ownedHome,
         };
-        return { spec, expectedModel, runHome: ownedHome.path, skipWireBytes, captured };
+        return { spec, expectedModel, runHome: ownedHome.path, ownedHome, mcpServers, captured };
     } catch (error) {
         await rm(ownedHome.path, { recursive: true, force: true }).catch(() => undefined);
         throw error;

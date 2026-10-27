@@ -486,7 +486,7 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
  * directory in the home's ancestry is re-checked so a symlink below the state
  * root can never redirect the write.
  */
-async function markOwnedRunPhase(home: ProcessSpec['ownedRunHome'], patch: Record<string, unknown>): Promise<void> {
+export async function markOwnedRunPhase(home: ProcessSpec['ownedRunHome'], patch: Record<string, unknown>): Promise<void> {
   if (!home) return;
   const expected = resolve(home.path);
   if (relative(expected, resolve(home.metadataPath)) !== '.wrenyard-run.json') throw new Error('owned run marker path mismatch');
@@ -510,7 +510,7 @@ async function markOwnedRunPhase(home: ProcessSpec['ownedRunHome'], patch: Recor
 }
 
 /** Remove only the exact Wrenyard-created run directory after output tails settle. */
-async function cleanupOwnedRunHome(home: ProcessSpec['ownedRunHome'], success: boolean, rollback = false): Promise<void> {
+export async function cleanupOwnedRunHome(home: ProcessSpec['ownedRunHome'], success: boolean, rollback = false): Promise<void> {
   if (!home) return;
   const expected = resolve(home.path);
   if (relative(expected, resolve(home.metadataPath)) !== '.wrenyard-run.json') return;
@@ -545,7 +545,7 @@ async function cleanupOwnedRunHome(home: ProcessSpec['ownedRunHome'], success: b
 }
 
 /** Owned resource record: what this invocation created, and what it overwrote. */
-interface OwnedFile {
+export interface OwnedFile {
   readonly path: string;
   /** Snapshot of preexisting contents that cleanup must restore instead of deleting. */
   readonly previous?: Buffer;
@@ -558,7 +558,7 @@ interface OwnedFile {
  * versus what it overwrote, so cleanup never removes a preexisting resource.
  * A failed write restores/removes only the partial state of this invocation.
  */
-async function materializeFiles(files: readonly ProcessFile[]): Promise<OwnedFile[]> {
+export async function materializeFiles(files: readonly ProcessFile[]): Promise<OwnedFile[]> {
   const owned: OwnedFile[] = [];
   const paths = new Set<string>();
   for (const { path } of files) {
@@ -587,7 +587,7 @@ async function materializeFiles(files: readonly ProcessFile[]): Promise<OwnedFil
 }
 
 /** Remove only resources this session may release; never a parent directory. */
-async function cleanupFiles(owned: readonly OwnedFile[], success: boolean, rollback = false): Promise<void> {
+export async function cleanupFiles(owned: readonly OwnedFile[], success: boolean, rollback = false): Promise<void> {
   for (const file of owned) {
     // Unspecified file policy stays persistent; 'success' keeps failures intact
     // for inspection while all other failure/cancel paths release the resource.
@@ -632,7 +632,7 @@ function errorMessageOf(error: unknown): string {
  * remains — counts as proof; EPERM and every other/unknown error mean a member
  * may still exist and must not be treated as stopped.
  */
-function unixProcessGroupIsGone(pgid: number): boolean {
+export function unixProcessGroupIsGone(pgid: number): boolean {
   try {
     process.kill(-pgid, 0);
     return false;
