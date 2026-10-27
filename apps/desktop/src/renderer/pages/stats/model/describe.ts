@@ -7,6 +7,9 @@ export const PAGE_TITLE = '工房台账';
 
 export const STATS_UNAVAILABLE_TITLE = '台账暂不可用';
 export const STATS_RETRY_LABEL = '重试';
+/** Refresh-failure retention copy: prior snapshot stays visible, marked stale. */
+export const STATS_STALE_TITLE = '数据显示的是上次成功的快照';
+export const STATS_STALE_RETRY_LABEL = '立即刷新';
 
 /** Long period names used in card footnotes and summaries. */
 export const PERIOD_LABEL: Record<StatsPeriod, string> = {

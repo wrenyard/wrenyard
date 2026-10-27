@@ -12,7 +12,7 @@ import { back, forward, toggleSecondarySidebar, useNavigation, useSecondarySideb
 import { registerTitleBarSlot } from '@/renderer/lib/titlebar';
 
 /** Slots are reserved for every shell page; only the active page's is shown. */
-const TITLE_BAR_PAGES: readonly ShellPage[] = ['session', 'stats', 'tasks', 'todo', 'settings'];
+const TITLE_BAR_PAGES: readonly ShellPage[] = ['session', 'stats', 'tasks', 'todo', 'agents', 'settings'];
 
 // Whole-app exceptions (chrome spec 2): the drag/no-drag regions live only in
 // this file. Every interactive child re-enables pointer events.

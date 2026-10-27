@@ -8,6 +8,7 @@ import {
   PageHeader,
   PageTitle,
 } from '@/renderer/components/page';
+import { Alert, AlertDescription, AlertTitle } from '@/renderer/components/ui/alert';
 import { QueryError } from '@/renderer/components/query-error';
 import { Button } from '@/renderer/components/ui/button';
 import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
@@ -24,6 +25,8 @@ import {
   PAGE_TITLE,
   PERIOD_OPTIONS,
   STATS_RETRY_LABEL,
+  STATS_STALE_RETRY_LABEL,
+  STATS_STALE_TITLE,
   STATS_UNAVAILABLE_TITLE,
 } from './model/describe.js';
 import { metricCards, profileRows, selectWindow, taskRows, taskRunRows } from './model/stats.js';
@@ -45,6 +48,10 @@ export function StatsPage() {
   const names = useMemo(() => buildTaskNameTables(definitions.data ?? null), [definitions.data]);
   const snapshot = stats.data;
   const snapshotUnavailable = snapshot !== undefined && snapshot.status === 'unavailable';
+  // A retained same-endpoint snapshot served while a refresh failed. Genuine
+  // query rejections with prior data keep `stats.data` via keepPreviousData
+  // and surface the same freshness indicator.
+  const staleSnapshot = snapshot?.status === 'available' && (snapshot.stale === true || stats.isError);
   const window = snapshot && snapshot.status === 'available' ? selectWindow(snapshot, period) : undefined;
   const range = window
     ? `${formatSnapshotStamp(window.startAt)} 至 ${formatSnapshotStamp(window.endAt)}`
@@ -83,7 +90,10 @@ export function StatsPage() {
           </PageActions>
         </PageHeader>
         <PageContent>
-          {stats.isError ? (
+          {stats.isError && !snapshot ? (
+            // Full-page error only when there is no usable same-endpoint data
+            // to retain; a rejection with prior data falls through and keeps
+            // rendering the snapshot with the stale indicator.
             <QueryError query={stats} title={STATS_UNAVAILABLE_TITLE} />
           ) : snapshotUnavailable ? (
             <Empty>
@@ -98,6 +108,19 @@ export function StatsPage() {
             </Empty>
           ) : (
             <>
+              {staleSnapshot && (
+                <Alert variant="default" className="mb-4">
+                  <AlertTitle>{STATS_STALE_TITLE}</AlertTitle>
+                  <AlertDescription className="flex items-center gap-3">
+                    <span className="text-muted-foreground">
+                      {snapshot?.fetchedAt ? formatSnapshotStamp(new Date(snapshot.fetchedAt).toISOString()) : ''}
+                    </span>
+                    <Button variant="outline" size="sm" onClick={() => { void stats.refetch(); }}>
+                      {STATS_STALE_RETRY_LABEL}
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
               <MetricCards cards={metricCards(snapshot, window)} loading={stats.isPending} />
               {snapshot && snapshot.status === 'available' && (
                 <>

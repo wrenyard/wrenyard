@@ -930,6 +930,25 @@ export interface StatsSnapshot {
   daily: StatsDailySnapshot[];
   windows: StatsWindowSnapshot[];
   recentTaskRuns: TaskRunSnapshot[];
+  /**
+   * Epoch ms when this snapshot was produced on the daemon side. Present on
+   * every `available` payload once the desktop bridge stamps it; absent only
+   * on legacy hand-built fixtures.
+   */
+  fetchedAt?: number;
+  /**
+   * Refresh-retention metadata: set when a live read failed and the last
+   * successful same-endpoint snapshot is served instead. `kind` is the
+   * classified failure (`timeout`/`disconnected`/`sql`/`payload`/`unknown`).
+   */
+  stale?: boolean;
+  lastError?: { kind: string; elapsedMs: number; correlation: string };
+  /**
+   * Consecutive failed same-endpoint reads behind this payload. Present on
+   * retained-stale and unavailable snapshots so the renderer can keep
+   * backing off; absent/zero on a genuine fresh success.
+   */
+  consecutiveFailures?: number;
 }
 
 /**

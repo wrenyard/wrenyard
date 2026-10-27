@@ -27,7 +27,8 @@ import { ActivityStatusProjector } from './main/activity-status.js';
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RemoteConnectionTestInput, type RemoteConnectionTestResult, type RemoteConnectionSnapshot, type RemoteHostListResult, type RemoteHostMutationResult, type RemoteHostView, type AgentMethod, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskDefinitionListResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome, type OperationComponentAction, type OperationComponentId, type OperationComponentSnapshot } from './shell-contract.js';
+import type { StatsSnapshotResult } from './stats-snapshot.js';
+import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RemoteConnectionTestInput, type RemoteConnectionTestResult, type RemoteConnectionSnapshot, type RemoteHostListResult, type RemoteHostMutationResult, type RemoteHostView, type AgentMethod, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskDefinitionListResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome, type OperationComponentAction, type OperationComponentId, type OperationComponentSnapshot, type StatsSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { MiniCardManager } from './mini-cards.js';
 import { Notifier } from './main/notifications/notifier.js';
@@ -442,6 +443,7 @@ const canConnectDaemon = (): boolean =>
 function requireDaemonRunning(): void {
   if (!canConnectDaemon()) throw new Error('daemon 不可用');
 }
+
 /** Keep subscriptions while connected, including a late-replying daemon; only a healthy state reconnects them. */
 function reconcileDaemonConnection(state: DaemonLifecycleSnapshot['state']): void {
   const live = state === 'running' || state === 'unresponsive';
@@ -864,6 +866,69 @@ async function bootstrap(): Promise<void> {
   const activeEndpointPath = resolveActiveEndpointPath(ipcPath);
   activeEndpointBridge = new ActiveEndpointBridge(activeEndpointPath, ipcPath);
   await activeEndpointBridge.start();
+
+  /**
+   * Stats read state, scoped to the active endpoint generation. `lastGood`
+   * retains the most recent successful snapshot only while the endpoint
+   * identity is unchanged — a connection switch bumps the generation and
+   * drops it, so a remote host never sees the local daemon's numbers (and
+   * vice versa). `inFlight` single-flights the summary read across all
+   * main-bridge consumers.
+   */
+  let statsGeneration = -1;
+  let statsLastGood: { snapshot: StatsSnapshot; fetchedAt: number } | null = null;
+  let statsInFlight: Promise<StatsSnapshotResult> | null = null;
+  // Consecutive same-endpoint read failures; resolved stale/unavailable
+  // payloads are query successes, so the renderer needs this count to drive
+  // bounded backoff.
+  let statsConsecutiveFailures = 0;
+
+  const readStatsForShell = (): Promise<StatsSnapshotResult> => {
+    const generation = connectionContext?.currentGeneration() ?? 0;
+    if (generation !== statsGeneration) {
+      // Endpoint switched (or first read): drop every previous-generation value.
+      statsGeneration = generation;
+      statsLastGood = null;
+      statsInFlight = null;
+      statsConsecutiveFailures = 0;
+    }
+    if (statsInFlight) return statsInFlight;
+    const inFlight = readStatsSnapshot(activeEndpointPath)
+      .then((result): StatsSnapshotResult => {
+        if (!(connectionContext?.isCurrent(generation) ?? true)) {
+          // A late reply from the previous endpoint is discarded, not applied.
+          return { status: 'failure', error: { kind: 'disconnected', elapsedMs: 0, correlation: `stats-stale-gen-${generation}` } };
+        }
+        if (result.status === 'success') {
+          statsLastGood = { snapshot: result.snapshot, fetchedAt: result.fetchedAt };
+          statsConsecutiveFailures = 0;
+        } else {
+          // Log-safe classification only: kind, elapsed and correlation —
+          // never the endpoint path, chat content or credentials.
+          console.warn(`[wrenyard-desktop] stats read failed (${result.error.kind}, ${result.error.elapsedMs}ms, ${result.error.correlation})`);
+          statsConsecutiveFailures += 1;
+          if (statsLastGood) {
+            return {
+              status: 'success',
+              snapshot: {
+                ...statsLastGood.snapshot,
+                stale: true,
+                fetchedAt: statsLastGood.fetchedAt,
+                lastError: result.error,
+                consecutiveFailures: statsConsecutiveFailures,
+              },
+              fetchedAt: statsLastGood.fetchedAt,
+            };
+          }
+        }
+        return result;
+      })
+      .finally(() => {
+        if (statsInFlight === inFlight) statsInFlight = null;
+      });
+    statsInFlight = inFlight;
+    return inFlight;
+  };
   const pageLoader = createPageLoader({ appPath: app.getAppPath(), packaged: app.isPackaged, env: process.env });
   workspaceConfiguration = await inspectProductWorkspace();
   console.info('[wrenyard-desktop] workspace ready');
@@ -1988,7 +2053,19 @@ async function bootstrap(): Promise<void> {
     onCreated: (controller) => { shellWindow = controller; },
     getAppearance: () => appearanceController!.resolve(),
     getSettings,
-    getStats: () => { requireDaemonRunning(); return readStatsSnapshot(activeEndpointPath); },
+    getStats: async () => {
+      requireDaemonRunning();
+      const result = await readStatsForShell();
+      // The renderer always receives a snapshot shape: success carries the
+      // data (possibly the retained same-endpoint snapshot marked `stale`),
+      // failure collapses to the stable unavailable projection — never an IPC
+      // rejection — so refresh failures are indistinguishable from first-paint
+      // unavailability only when no same-endpoint data exists to retain.
+      if (result.status === 'success') {
+        return { ...result.snapshot, fetchedAt: result.fetchedAt };
+      }
+      return { status: 'unavailable', today: null, daily: [], windows: [], recentTaskRuns: [], lastError: result.error, consecutiveFailures: statsConsecutiveFailures } satisfies StatsSnapshot;
+    },
     request: (method, params) => daemonClient.request(method, params),
     getQuota: (forceRefresh = false) => quotaController!.getSnapshot(forceRefresh),
     saveProviderOrder: async (providerIds: string[]) => {

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { cn } from 'cn';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
@@ -23,8 +23,11 @@ import {
   MessageScroller,
   MessageScrollerButton,
   MessageScrollerContent,
+  MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
+  useMessageScroller,
+  useMessageScrollerScrollable,
 } from '@/renderer/components/ui/message-scroller';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { useRemoteConnection } from '@/renderer/lib/desktop';
@@ -33,7 +36,7 @@ import { preferencesQuery } from '@/renderer/lib/queries';
 import type { AgentBot, AgentBotLocation, AgentStatus, GroupMessage } from '@/shell-contract';
 import { fold } from '../session/model/fold.js';
 import { MessageTimeline, buildMessageTimeline } from '../session/components/conversation/MessageTimeline.js';
-import type { GroupTranscript } from './queries.js';
+import type { GroupTranscript, GroupTranscriptAnchor } from './queries.js';
 import {
   useAgentEvents,
   useAgentsQuery,
@@ -410,6 +413,8 @@ function GroupTranscriptView(props: {
   noBots: boolean;
   /** Bots woken by a send in this window that are still working. */
   working: ReadonlyArray<{ id: string; name: string }>;
+  /** Filled with the tail jump so a send can reveal the posted entry. */
+  scrollToEndRef?: React.RefObject<(() => void) | null>;
 }) {
   const { messages, error, ready } = props.transcript;
 
@@ -468,34 +473,307 @@ function GroupTranscriptView(props: {
     <div className="flex min-h-0 flex-1 flex-col">
       {header}
       <MessageScrollerProvider autoScroll>
-        <MessageScroller className="min-h-0 flex-1">
-          <MessageScrollerViewport className="scroll-fade-y">
-            <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-5 px-4 py-4">
-              {messages.slice(-200).map((message) => (
-                <GroupMessageView key={message.seq} message={message} />
-              ))}
-              {props.working.map((bot) => (
-                <div
-                  key={bot.id}
-                  role="status"
-                  aria-label={`${bot.name} 正在输入…`}
-                  className="flex items-center gap-2 text-xs text-muted-foreground"
-                >
-                  <span className="font-medium">{bot.name}</span>
-                  <span>正在输入…</span>
-                  <span className="flex items-center gap-1" aria-hidden>
-                    <span className="motion-typing-dot size-2 rounded-full bg-muted-foreground" style={{ animationDelay: '0ms' }} />
-                    <span className="motion-typing-dot size-2 rounded-full bg-muted-foreground" style={{ animationDelay: '160ms' }} />
-                    <span className="motion-typing-dot size-2 rounded-full bg-muted-foreground" style={{ animationDelay: '320ms' }} />
-                  </span>
-                </div>
-              ))}
-            </MessageScrollerContent>
-          </MessageScrollerViewport>
-          <MessageScrollerButton />
-        </MessageScroller>
+        <GroupTranscriptScroller
+          transcript={props.transcript}
+          working={props.working}
+          scrollToEndRef={props.scrollToEndRef}
+        />
       </MessageScrollerProvider>
     </div>
+  );
+}
+
+/**
+ * The scrolling transcript window: a bounded seq window that never evicts the
+ * persisted reading anchor, restores it on mount, loads older pages at the
+ * top edge, and counts new tail arrivals while the user is away from bottom.
+ */
+function GroupTranscriptScroller(props: {
+  transcript: GroupTranscript;
+  working: ReadonlyArray<{ id: string; name: string }>;
+  scrollToEndRef?: React.RefObject<(() => void) | null>;
+}) {
+  const transcript = props.transcript;
+  const { messages } = transcript;
+  const { scrollToEnd, scrollToMessage } = useMessageScroller();
+  const scrollable = useMessageScrollerScrollable();
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+
+  const WINDOW_CAP = 400;
+  const [windowStartSeq, setWindowStartSeq] = useState<number | null>(null);
+  const [newBelow, setNewBelow] = useState(0);
+  // Baseline for the unread-tail count: the last seq already seen at the
+  // reading position; arrivals above it count once, never per batch.
+  const newBelowBaseRef = useRef(0);
+  const lastSeqRef = useRef(0);
+  const anchorReadRef = useRef(false);
+  const scrollFrameRef = useRef<number | null>(null);
+  const startEdgeRef = useRef(false);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
+  // First ready messages initialize the window's head at the tail of the
+  // initial tail-size slice; prepended history extends it downward. A tail
+  // resnapshot invalidates the window, which resets to the new tail.
+  const snapshotGenRef = useRef(transcript.snapshotGen);
+  useEffect(() => {
+    const resnapshotted = snapshotGenRef.current !== transcript.snapshotGen;
+    snapshotGenRef.current = transcript.snapshotGen;
+    setWindowStartSeq((previous) => {
+      if (messages.length === 0) return null;
+      if (previous === null || resnapshotted) {
+        return messages[Math.max(0, messages.length - 200)]!.seq;
+      }
+      return Math.min(previous, messages[0]!.seq);
+    });
+  }, [messages, transcript.snapshotGen]);
+
+  // Count tail arrivals while the user is away from the true bottom edge.
+  // scrollable.end means "can scroll toward the end", so the true bottom is
+  // !scrollable.end; the count is derived from real message seqs below the
+  // last-seen baseline, never incremented per rendered batch.
+  useEffect(() => {
+    const last = messages.length === 0 ? 0 : messages[messages.length - 1]!.seq;
+    if (last > lastSeqRef.current) {
+      if (lastSeqRef.current === 0) {
+        // First seeded tail: baseline starts at it, so only real later
+        // arrivals can ever count.
+        newBelowBaseRef.current = last;
+      } else if (scrollable.end) {
+        setNewBelow(messages.filter((message) => message.seq > newBelowBaseRef.current).length);
+      } else {
+        // An arrival while pinned at the true bottom is consumed on
+        // publication; the baseline must follow the tail in the same pass
+        // because no edge transition will re-anchor it later.
+        newBelowBaseRef.current = last;
+      }
+      lastSeqRef.current = last;
+    }
+  }, [messages, scrollable.end]);
+
+  // Returning to the true bottom clears the unread-tail pill and re-anchors
+  // the baseline at the live tail so later arrivals count from zero.
+  useEffect(() => {
+    if (!scrollable.end) {
+      setNewBelow(0);
+      newBelowBaseRef.current = lastSeqRef.current;
+    }
+  }, [scrollable.end]);
+
+  // Older intent is a real state transition, shared by the top edge and the
+  // 加载更早 button: while cached rows sit below the DOM window head the
+  // intent reveals one page immediately by moving windowStartSeq down; only
+  // when the rendered head is the retained head does it request a fetch.
+  // Reading through messagesRef keeps the decision on the newest retained
+  // range even when the intent fires between renders.
+  const requestOlder = useCallback((): void => {
+    const retained = messagesRef.current;
+    const retainedHead = retained[0]?.seq;
+    if (retainedHead === undefined || windowStartSeq === null || windowStartSeq <= retainedHead) {
+      transcript.loadOlder();
+      return;
+    }
+    const shifted = retained.filter((message) => message.seq < windowStartSeq);
+    setWindowStartSeq(shifted[Math.max(0, shifted.length - WINDOW_CAP)]!.seq);
+  }, [transcript, windowStartSeq]);
+
+  // True-top older intent, single-fired per edge arrival: the edge is
+  // reached only when the viewport can no longer scroll toward the start.
+  useEffect(() => {
+    const atTop = !scrollable.start;
+    if (atTop && !startEdgeRef.current) {
+      requestOlder();
+    }
+    startEdgeRef.current = atTop;
+  }, [scrollable.start, requestOlder]);
+
+  // A head prepend — fetched older rows landing below the current window
+  // head — reveals one page in the same pass so the newly cached rows
+  // render instead of staying invisible above the DOM window.
+  const lastRetainedHeadRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const retainedHead = messages[0]?.seq;
+    const prepended = retainedHead !== undefined
+      && retainedHead !== lastRetainedHeadRef.current
+      && windowStartSeq !== null && retainedHead < windowStartSeq;
+    lastRetainedHeadRef.current = retainedHead;
+    if (!prepended) return;
+    const shifted = messages.filter((message) => message.seq < windowStartSeq);
+    setWindowStartSeq(shifted[Math.max(0, shifted.length - WINDOW_CAP)]!.seq);
+  }, [messages, windowStartSeq]);
+
+  // Restore the persisted anchor once: a message anchor jumps instantly to
+  // its entry, then the saved intra-message pixel offset is applied before
+  // the viewport turns visible so the restore never shows intermediate
+  // frames; anything else keeps the provider's default end position.
+  const [anchorRestorePending, setAnchorRestorePending] = useState<boolean>(() => {
+    const anchor = props.transcript.getAnchor();
+    return anchor.mode === 'message';
+  });
+  useLayoutEffect(() => {
+    if (anchorReadRef.current) return;
+    const anchor = transcript.getAnchor();
+    if (anchor.mode === 'message' && messages.some((message) => message.seq === anchor.seq)) {
+      anchorReadRef.current = true;
+      scrollToMessage(String(anchor.seq), { align: 'start', behavior: 'auto' });
+      // scrollToMessage may defer to the next frame while items register;
+      // either way the offset is committed while the viewport is invisible.
+      const applyOffset = (): void => {
+        const viewport = viewportRef.current;
+        if (viewport === null) {
+          setAnchorRestorePending(false);
+          return;
+        }
+        const item = viewport.querySelector<HTMLElement>(`[data-message-id="${anchor.seq}"]`);
+        if (item === null) {
+          setAnchorRestorePending(false);
+          return;
+        }
+        const itemTop = item.getBoundingClientRect().top
+          - viewport.getBoundingClientRect().top
+          + viewport.scrollTop;
+        // offsetPx = itemTop - scrollTop at persist time, so restore subtracts.
+        viewport.scrollTop = itemTop - anchor.offsetPx;
+        setAnchorRestorePending(false);
+      };
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(applyOffset);
+      });
+    } else if (messages.length > 0 || anchor.mode !== 'message') {
+      // No usable anchor: bottom mode stays at the default end position.
+      anchorReadRef.current = true;
+      setAnchorRestorePending(false);
+    }
+  }, [messages, transcript, scrollToMessage]);
+
+  // Explicit latest-intent: close any live gap, then land on the tail. The
+  // scroll and indicator clear run only on a real published snapshot; a
+  // failed intent leaves the reading position and the pill untouched.
+  const jumpToLatest = useCallback((): void => {
+    void transcript.jumpToLatest().then((success) => {
+      if (success !== true) return;
+      setNewBelow(0);
+      newBelowBaseRef.current = lastSeqRef.current;
+      scrollToEnd({ behavior: 'auto' });
+    });
+  }, [transcript, scrollToEnd]);
+
+  // Expose the tail jump for the send path in GroupView.
+  useEffect(() => {
+    if (props.scrollToEndRef === undefined) return;
+    props.scrollToEndRef.current = jumpToLatest;
+    return () => {
+      if (props.scrollToEndRef !== undefined) props.scrollToEndRef.current = null;
+    };
+  }, [props.scrollToEndRef, jumpToLatest]);
+
+  const persistAnchor = (): void => {
+    const viewport = viewportRef.current;
+    if (viewport === null) return;
+    if (viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 4) {
+      transcript.setAnchor({ mode: 'bottom' });
+      return;
+    }
+    const viewportTop = viewport.getBoundingClientRect().top;
+    for (const child of Array.from(viewport.querySelectorAll<HTMLElement>('[data-message-id]'))) {
+      const rect = child.getBoundingClientRect();
+      if (rect.bottom > viewportTop + 1) {
+        const seq = Number(child.dataset.messageId);
+        if (Number.isFinite(seq)) {
+          const anchor: GroupTranscriptAnchor = {
+            mode: 'message',
+            seq,
+            offsetPx: Math.round(rect.top - viewportTop),
+          };
+          transcript.setAnchor(anchor);
+        }
+        return;
+      }
+    }
+  };
+
+  const onScroll = (): void => {
+    if (scrollFrameRef.current !== null) return;
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      persistAnchor();
+    });
+  };
+
+  const anchor = transcript.getAnchor();
+  const anchorSeq = anchor.mode === 'message' ? anchor.seq : null;
+  // The rendered slice is owned solely by windowStartSeq counting forward;
+  // the retained range is already bounded by the cache limit, so no second
+  // tail cap re-clips it.
+  const headSeq = windowStartSeq ?? messages[0]?.seq ?? 0;
+  let windowMessages = messages.filter((message) => message.seq >= headSeq);
+  if (anchorSeq !== null && windowMessages.every((message) => message.seq !== anchorSeq)) {
+    const anchorMessage = messages.find((message) => message.seq === anchorSeq);
+    if (anchorMessage !== undefined) {
+      windowMessages = [anchorMessage, ...windowMessages.filter((message) => message.seq > anchorSeq)];
+    }
+  }
+
+  return (
+    <MessageScroller className="min-h-0 flex-1">
+      {transcript.hasMoreBefore && (
+        <div className="flex justify-center pt-2">
+          <Button variant="ghost" size="xs" disabled={transcript.loadingOlder} onClick={requestOlder}>
+            {transcript.loadingOlder ? '加载中…' : '加载更早'}
+          </Button>
+        </div>
+      )}
+      <MessageScrollerViewport
+        ref={viewportRef}
+        data-pending-scroll={anchorRestorePending ? '' : undefined}
+        className="scroll-fade-y"
+        preserveScrollOnPrepend={true}
+        onScroll={onScroll}
+      >
+        <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-5 px-4 py-4">
+          {windowMessages.map((message) => (
+            <MessageScrollerItem key={message.seq} messageId={String(message.seq)}>
+              <GroupMessageView message={message} />
+            </MessageScrollerItem>
+          ))}
+          {props.working.map((bot) => (
+            <div
+              key={bot.id}
+              role="status"
+              aria-label={`${bot.name} 正在输入…`}
+              className="flex items-center gap-2 text-xs text-muted-foreground"
+            >
+              <span className="font-medium">{bot.name}</span>
+              <span>正在输入…</span>
+              <span className="flex items-center gap-1" aria-hidden>
+                <span className="motion-typing-dot size-2 rounded-full bg-muted-foreground" style={{ animationDelay: '0ms' }} />
+                <span className="motion-typing-dot size-2 rounded-full bg-muted-foreground" style={{ animationDelay: '160ms' }} />
+                <span className="motion-typing-dot size-2 rounded-full bg-muted-foreground" style={{ animationDelay: '320ms' }} />
+              </span>
+            </div>
+          ))}
+        </MessageScrollerContent>
+      </MessageScrollerViewport>
+      {newBelow > 0 || transcript.liveGap ? (
+        <Button
+          variant="secondary"
+          size="sm"
+          className="absolute inset-s-1/2 bottom-16 -translate-x-1/2 rounded-full shadow-md"
+          onClick={jumpToLatest}
+        >
+          {newBelow > 0 ? `新消息 ${newBelow}` : '新消息'}
+        </Button>
+      ) : null}
+      <MessageScrollerButton
+        onClick={(event) => {
+          // Prevent the primitive's default scroll-to-end: the DOM scroll
+          // fires inside jumpToLatest only after the canonical latest
+          // publication succeeds, so a failed intent never moves the view.
+          event.preventDefault();
+          jumpToLatest();
+        }}
+      />
+    </MessageScroller>
   );
 }
 
@@ -697,6 +975,8 @@ function GroupComposer(props: {
   insertRef: React.RefObject<((bot: AgentBot) => void) | null>;
   /** Records the bots woken by the send and its transcript seq. */
   onAwakened: (ids: readonly string[], seq: number) => void;
+  /** Scroll to the tail once the post-send refresh has landed. */
+  onRefreshed: () => void;
 }) {
   const connection = useRemoteConnection();
   const connected = connection.state === 'local' || connection.state === 'remote';
@@ -720,8 +1000,12 @@ function GroupComposer(props: {
         // Only a confirmed daemon post clears the draft; a failure keeps it.
         props.onDraftChange('');
         props.onAwakened(result.awakened, result.message.seq);
-        // Read the canonical transcript now instead of waiting for the tick.
-        props.transcript.refresh();
+        // Read the canonical transcript now instead of waiting for the tick;
+        // a liveGap-aware refresh resnapshots, so scroll only after it
+        // resolves with real success — a failed read must not scroll.
+        void props.transcript.refresh().then((success) => {
+          if (success === true) props.onRefreshed();
+        });
       },
     });
   };
@@ -776,6 +1060,8 @@ function GroupView(props: {
   // Bots seen running or queued since their send; an idle poll only clears one
   // that actually started, never a wake the daemon has not admitted yet.
   const seenActive = useRef(new Set<string>());
+  // Filled by GroupTranscriptView so a send can jump straight to the tail.
+  const scrollToEndRef = useRef<(() => void) | null>(null);
 
   const onAwakened = (ids: readonly string[], seq: number): void => {
     setWorking((previous) => {
@@ -829,6 +1115,7 @@ function GroupView(props: {
         transcript={transcript}
         noBots={!props.agents.isPending && !props.agents.isError && props.bots.length === 0}
         working={workingBots}
+        scrollToEndRef={scrollToEndRef}
       />
       <div className="shrink-0 border-t bg-background px-4 py-3">
         <GroupComposer
@@ -839,6 +1126,7 @@ function GroupView(props: {
           onDraftChange={props.onDraftChange}
           insertRef={props.insertRef}
           onAwakened={onAwakened}
+          onRefreshed={() => { scrollToEndRef.current?.(); }}
         />
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { WrenyardIpcClient } from '@wrenyard/control';
+import { WrenyardIpcClient, WrenyardRpcError, WrenyardRpcTimeoutError } from '@wrenyard/control';
 import type {
   StatsDailySnapshot,
   StatsOutcomesSnapshot,
@@ -18,10 +18,55 @@ const MAX_TASK_RUN_ROWS = 50;
 
 export type StatsRequest = (method: 'stats.summary', params: Record<string, unknown>) => Promise<unknown>;
 
-export async function readStatsSnapshot(ipcPath: string): Promise<StatsSnapshot> {
+/**
+ * Classified stats-read failure. `kind` is safe to surface to the renderer and
+ * to log: `timeout` (transport deadline), `disconnected` (socket lost or never
+ * connected), `sql` (daemon-reported storage/INTERNAL error), `payload`
+ * (well-formed reply that failed projection validation), `unknown` for
+ * anything else. `correlation` is a log-safe marker containing no endpoint
+ * path, chat content or credentials.
+ */
+export type StatsReadErrorKind = 'timeout' | 'disconnected' | 'sql' | 'payload' | 'unknown';
+
+export interface StatsReadError {
+  kind: StatsReadErrorKind;
+  elapsedMs: number;
+  correlation: string;
+}
+
+/**
+ * Discriminated read result: a success carries the snapshot and the time it
+ * was produced; a failure carries the classified error. Never throws — a
+ * rejected request is converted into a classified failure here so every caller
+ * can decide between first-paint unavailable and stale-data retention.
+ */
+export type StatsSnapshotResult =
+  | { status: 'success'; snapshot: StatsSnapshot; fetchedAt: number }
+  | { status: 'failure'; error: StatsReadError };
+
+const SQL_ERROR_PATTERN = /\bsqlite\b|\bsql\b|database is (?:locked|corrupt|readonly)|better-sqlite3/i;
+
+function classifyStatsError(error: unknown, elapsedMs: number): StatsReadError {
+  const correlation = `stats-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const failure = (kind: StatsReadErrorKind): StatsReadError => ({ kind, elapsedMs, correlation });
+  if (error instanceof WrenyardRpcTimeoutError) return failure('timeout');
+  if (error instanceof WrenyardRpcError) {
+    // A daemon-side JSON-RPC error: storage faults surface as INTERNAL_ERROR
+    // (-32603) with a sqlite-flavoured message or error data.
+    const text = `${error.message} ${typeof error.data === 'string' ? error.data : ''}`;
+    return failure(SQL_ERROR_PATTERN.test(text) ? 'sql' : 'unknown');
+  }
+  const message = error instanceof Error ? `${error.name} ${error.message}` : String(error);
+  if (/timeout|timed out/i.test(message)) return failure('timeout');
+  if (/closed|econnrefused|enotconn|socket|ipc connection|ENOENT|EPIPE/i.test(message)) return failure('disconnected');
+  if (SQL_ERROR_PATTERN.test(message)) return failure('sql');
+  return failure('unknown');
+}
+
+export async function readStatsSnapshot(ipcPath: string): Promise<StatsSnapshotResult> {
   const client = new WrenyardIpcClient({ path: ipcPath, requestTimeoutMs: REQUEST_TIMEOUT_MS });
   try {
-    return await buildStatsSnapshot((method, params) => client.request(method, params));
+    return await buildStatsSnapshotResult((method, params) => client.request(method, params));
   } finally {
     await client.close();
   }
@@ -31,16 +76,30 @@ export async function readStatsSnapshot(ipcPath: string): Promise<StatsSnapshot>
  * Build the Desktop ledger projection from the authoritative `stats.summary`
  * method only. Period windows are the single source for rankings, so there is
  * no `stats.today` fallback and no separate top-level profile/task ranking.
+ * Kept for existing callers that only need the projection; failures collapse
+ * to the same stable unavailable snapshot as before.
  */
 export async function buildStatsSnapshot(request: StatsRequest): Promise<StatsSnapshot> {
-  try {
-    const summary = parseSummary(await request('stats.summary', { days: MAX_DAILY_ROWS, limit: MAX_WINDOW_ROWS }));
-    if (summary) return summary;
-  } catch {
-    // The renderer gets a stable unavailable projection, never raw IPC errors.
-  }
+  const result = await buildStatsSnapshotResult(request);
+  return result.status === 'success' ? result.snapshot : unavailableStatsSnapshot();
+}
 
-  return unavailableStatsSnapshot();
+/**
+ * Same projection as {@link buildStatsSnapshot} but never throws and preserves
+ * the failure classification. A request rejection is classified by kind; a
+ * reply that resolves but fails payload validation becomes `payload`.
+ */
+export async function buildStatsSnapshotResult(request: StatsRequest): Promise<StatsSnapshotResult> {
+  const started = Date.now();
+  let reply: unknown;
+  try {
+    reply = await request('stats.summary', { days: MAX_DAILY_ROWS, limit: MAX_WINDOW_ROWS });
+  } catch (error) {
+    return { status: 'failure', error: classifyStatsError(error, Date.now() - started) };
+  }
+  const summary = parseSummary(reply);
+  if (summary) return { status: 'success', snapshot: summary, fetchedAt: Date.now() };
+  return { status: 'failure', error: { kind: 'payload', elapsedMs: Date.now() - started, correlation: `stats-${Date.now().toString(36)}-payload` } };
 }
 
 export function unavailableStatsSnapshot(): StatsSnapshot {
