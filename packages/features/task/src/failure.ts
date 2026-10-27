@@ -279,7 +279,8 @@ export function agentFailedError(
   detail?: string | null,
   failureClass?: AgentFailureClass | string | null,
   upstreamError?: AgentFailedErrorUpstream | null,
-): Error & { failure_category: string; error_message: string } {
+  capturedOutput?: string | null,
+): Error & { failure_category: string; error_message: string; captured_output?: string } {
   const category = mapAgentFailureClass(failureClass) ?? 'agent_failed'
   const classToken = taskVisibleFailureClassToken(failureClass, upstreamError)
   const reason = upstreamFailureReasonFirstLine(upstreamError, detail)
@@ -295,6 +296,7 @@ export function agentFailedError(
     new Error(message),
     {
       failure_category: category,
+      captured_output: capturedOutput ?? undefined,
       error_message: JSON.stringify({
         type: category,
         execution_id: executionId,
@@ -303,6 +305,7 @@ export function agentFailedError(
         ...(classToken !== undefined ? { class: classToken } : {}),
         ...(reason !== undefined ? { reason } : {}),
         ...(detail ? { detail: detail.slice(0, 2000) } : {}),
+        ...(capturedOutput ? { captured_output: capturedOutput.slice(0, 4000) } : {}),
       }),
     },
   )

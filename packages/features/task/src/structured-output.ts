@@ -252,6 +252,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
       terminal.error ?? terminal.output,
       terminal.failureClass,
       terminal.upstreamError,
+      terminal.output,
     )
   }
 
