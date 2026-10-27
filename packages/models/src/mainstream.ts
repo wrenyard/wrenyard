@@ -15,6 +15,7 @@ export const MAINSTREAM_MODEL_IDS = [
   'kimi-k2.8',
   'gpt-6-astra',
   'gpt-6.1-sol',
+  'gpt-6.1-terra',
   'gpt-6-sol',
   'gpt-6-luna',
   'glm-5.3',

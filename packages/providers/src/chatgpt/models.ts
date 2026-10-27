@@ -24,6 +24,7 @@ export const definition = defineProvider({
     // Client eligibility is not pinned here; it comes from the installed Codex
     // client's own model discovery for the signed-in account.
     { canonical: 'gpt-6.1-sol', overrides: { reasoningEfforts: REASONING_FULL, supportsFast: true } },
+    { canonical: 'gpt-6.1-terra', overrides: { reasoningEfforts: REASONING_FULL, supportsFast: true } },
     { canonical: 'gpt-6-luna', overrides: { reasoningEfforts: REASONING_FULL, supportsFast: true } },
   ],
   // The official service tier is the only Fast surface: priority means Fast on
@@ -50,6 +51,7 @@ export const definition = defineProvider({
   reasoningEffortMappings: {
     'gpt-6-astra': { codex: effortLadder(REASONING_FULL) },
     'gpt-6.1-sol': { codex: effortLadder(REASONING_FULL) },
+    'gpt-6.1-terra': { codex: effortLadder(REASONING_FULL) },
     'gpt-6-luna': { codex: effortLadder(REASONING_FULL) },
   },
   convertReasoningEffort: (_modelId, effort, protocol) => {

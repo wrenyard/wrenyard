@@ -36,6 +36,14 @@ export const openaiModels = [
     pricing: [0.1, 2, 10],
     speed: 63,
   }, { lab: 'openai', family: 'gpt-6' }),
+  defineModel('gpt-6.1-terra', 'GPT 6.1 Terra', {
+    intelligence: 'high',
+    capabilities: ['text', 'image'],
+    contextWindow: 1_050_000,
+    maxOutputTokens: 128_000,
+    pricing: [0.05, 1, 5],
+    speed: 63,
+  }, { lab: 'openai', family: 'gpt-6' }),
   defineModel('gpt-5.6-sol', 'GPT 5.6 Sol', {
     intelligence: 'high',
     capabilities: ['text', 'image'],
