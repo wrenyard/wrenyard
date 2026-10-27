@@ -87,7 +87,16 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
                 wrenyard: {
                     npm: request.protocol === 'anthropic_messages' ? '@ai-sdk/anthropic' : '@ai-sdk/openai-compatible',
                     name: 'Wrenyard',
-                    models: { [model]: { id: model, variants: { [variant]: { reasoningEffort: variant } } } },
+                    models: {
+                        [model]: {
+                            id: model,
+                            // Declared input modalities of the resolved model;
+                            // text-only when the plan carries no capabilities,
+                            // 'image' is never advertised unconditionally.
+                            modalities: { input: request.capabilities ?? ['text'] },
+                            variants: { [variant]: { reasoningEffort: variant } },
+                        },
+                    },
                     options: {
                         baseURL: gateway,
                         apiKey: '{env:WRENYARD_GATEWAY_TOKEN}',

@@ -75,6 +75,8 @@ export interface AgentRequest {
     readonly clientReasoningEnvironment?: Readonly<Record<string, string>>;
     /** MCP servers to inject, keyed by the name exposed to the client. */
     readonly mcpServers?: Readonly<Record<string, McpServer>>;
+    /** Declared input modalities of the resolved model, when known. */
+    readonly capabilities?: readonly ('text' | 'image')[];
 }
 export interface UpstreamError {
     readonly status?: number;

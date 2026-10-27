@@ -260,6 +260,9 @@ export interface DispatchPlan {
   // Fast mode requested for this plan. `true` and an explicit `false` are both
   // preserved; absence means no Fast preference at all.
   fast?: boolean;
+  // Declared input modalities of the resolved model, copied verbatim from its
+  // ModelDefinition.capabilities; absent when the definition declares none.
+  capabilities?: readonly ModelCapability[];
 }
 
 // Public dynamic run-target syntax (provider/model:client). These helpers are the

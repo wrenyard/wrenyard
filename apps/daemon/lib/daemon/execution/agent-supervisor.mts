@@ -842,6 +842,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         ...(plan.fast === undefined ? {} : { fast: plan.fast }),
         ...(plan.clientReasoningEffort === undefined ? {} : { clientReasoningEffort: plan.clientReasoningEffort }),
         ...(plan.clientReasoningEnvironment === undefined ? {} : { clientReasoningEnvironment: plan.clientReasoningEnvironment }),
+        ...(plan.capabilities === undefined ? {} : { capabilities: plan.capabilities }),
       };
       const operationIds = toOperationIds(opts.features)
       const execRequest: ExecRequest = {

@@ -811,6 +811,7 @@ export class Catalog {
         ...effortFields,
         ...(mappedModel === undefined ? {} : { upstreamModel: mappedModel }),
         ...(fast === undefined ? {} : { fast }),
+        ...(modelDef.capabilities === undefined ? {} : { capabilities: modelDef.capabilities }),
       };
       if (client.supportsNativeWebSearch === true && client.nativeProvider === providerID) {
         plan.supportsWebSearch = true;
@@ -841,6 +842,7 @@ export class Catalog {
       protocol,
       ...effortFields,
       ...(fast === undefined ? {} : { fast }),
+      ...(modelDef.capabilities === undefined ? {} : { capabilities: modelDef.capabilities }),
     };
   }
 
