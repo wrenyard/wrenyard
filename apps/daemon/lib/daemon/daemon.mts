@@ -491,6 +491,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
     stopStatsDayCacheBackgroundSealer()
     stopStatsProjectionBackfill()
     this.shutdownForce ||= force
+    writeDaemonLog('info', `shutdown requested: reason=${JSON.stringify(reason)} force=${this.shutdownForce}`)
     this.shutdownRequestedFlag = true
     this.resolveShutdownRequested()
   }
