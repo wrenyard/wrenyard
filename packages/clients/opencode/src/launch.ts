@@ -132,7 +132,22 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
             model: selector,
             provider: {
                 opencode: {
-                    models: { [model]: variant ? { variants: { [variant]: { reasoningEffort: variant } } } : {} },
+                    models: {
+                        [model]: variant
+                            ? {
+                                  // Declared input modalities of the resolved model;
+                                  // text-only when the plan carries no capabilities,
+                                  // 'image' is never advertised unconditionally.
+                                  modalities: { input: request.capabilities ?? ['text'] },
+                                  variants: { [variant]: { reasoningEffort: variant } },
+                              }
+                            : {
+                                  // Declared input modalities of the resolved model;
+                                  // text-only when the plan carries no capabilities,
+                                  // 'image' is never advertised unconditionally.
+                                  modalities: { input: request.capabilities ?? ['text'] },
+                              },
+                    },
                 },
             },
             // Every client launches unrestricted; see the gateway-mode base for
