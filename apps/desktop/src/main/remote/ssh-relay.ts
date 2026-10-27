@@ -108,6 +108,13 @@ export class SshRelayError extends Error {
 const DEFAULT_CONNECT_TIMEOUT_SEC = 10;
 const DEFAULT_MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 const DEFAULT_IDLE_TIMEOUT_MS = 0;
+/**
+ * Bound on simultaneously open ssh tunnels. The default OpenSSH
+ * `MaxStartups 10:30:100` starts dropping unauthenticated connections past 10,
+ * and the initial UI read burst opens far more than that, so tunnels beyond
+ * this cap wait for a slot instead of spawning an ssh child that sshd drops.
+ */
+const MAX_CONCURRENT_TUNNELS = 4;
 
 /** A named pipe is the only non-TCP IPC endpoint on Windows. */
 function isWindowsPipePath(path: string): boolean {
@@ -228,6 +235,10 @@ export class SshRelay {
   /** The live `-F` candidate, or null once the default config applies. */
   private candidateConfigFile: string | null;
   private readonly tunnels = new Set<Tunnel>();
+  /** Accepted local sockets waiting for a tunnel slot below the cap. */
+  private readonly socketQueue: Socket[] = [];
+  /** Single-flight guard for the last-tunnel-lost health probe. */
+  private healthProbeInFlight = false;
   private stopped = false;
 
   constructor(options: SshRelayOptions) {
@@ -288,6 +299,7 @@ export class SshRelay {
     this.stopped = true;
     for (const tunnel of [...this.tunnels]) this.closeTunnel(tunnel);
     this.tunnels.clear();
+    for (const socket of this.socketQueue.splice(0)) socket.destroy();
     const server = this.server;
     this.server = null;
     if (server) {
@@ -357,6 +369,36 @@ export class SshRelay {
 
   private handleConnection(socket: Socket): void {
     if (this.stopped) { socket.destroy(); return; }
+    // Beyond the tunnel cap the socket waits (paused, so its data is buffered
+    // by the OS) until a live tunnel frees a slot; spawning another ssh child
+    // here would just be dropped by the remote MaxStartups throttle.
+    if (this.tunnels.size >= MAX_CONCURRENT_TUNNELS) {
+      socket.pause();
+      const drop = (): void => {
+        const index = this.socketQueue.indexOf(socket);
+        if (index >= 0) this.socketQueue.splice(index, 1);
+      };
+      socket.once('close', drop);
+      socket.once('error', drop);
+      this.socketQueue.push(socket);
+      return;
+    }
+    this.attachSocket(socket);
+  }
+
+  /** Dequeue the next waiting socket into a freed tunnel slot, if any. */
+  private promoteQueuedSocket(): void {
+    if (this.stopped) return;
+    while (this.socketQueue.length > 0 && this.tunnels.size < MAX_CONCURRENT_TUNNELS) {
+      const socket = this.socketQueue.shift()!;
+      if (socket.destroyed) continue;
+      socket.resume();
+      this.attachSocket(socket);
+      return;
+    }
+  }
+
+  private attachSocket(socket: Socket): void {
     let tunnel: Tunnel;
     try {
       tunnel = this.openTunnel();
@@ -407,10 +449,13 @@ export class SshRelay {
       // or ssh exited 0 after its stdin reached EOF) must never be reported as
       // a lost tunnel, and a teardown this relay initiated is never a loss.
       const unexpected = !this.stopped && !tunnel.closing && !socket.destroyed;
-      if (unexpected && code !== 0) {
-        this.options.onTunnelLost?.(`ssh 退出（code ${code ?? 'none'}）`);
-      }
       abort();
+      if (!unexpected || code === 0) return;
+      // While other tunnels are alive this is a transient per-tunnel loss
+      // (for example an sshd MaxStartups drop), not a lost remote: only when
+      // the last tunnel died do we probe whether the remote is really gone.
+      if (this.tunnels.size > 0) return;
+      this.probeRemoteOrLost(`ssh 退出（code ${code ?? 'none'}）`);
     });
 
     if (this.options.idleTimeoutMs && this.options.idleTimeoutMs > 0) {
@@ -460,5 +505,30 @@ export class SshRelay {
     this.tunnels.delete(tunnel);
     if (!tunnel.child.killed) tunnel.child.kill();
     if (tunnel.socket && !tunnel.socket.destroyed) tunnel.socket.destroy();
+    this.promoteQueuedSocket();
+  }
+
+  /**
+   * Last-tunnel-lost health probe. A single unexpected ssh exit can mean the
+   * whole remote is gone, but it can also be a transient per-connection drop;
+   * only a failed probe (single-flight, same binary/args/host as a tunnel)
+   * is reported upwards as a lost remote.
+   */
+  private probeRemoteOrLost(reason: string): void {
+    if (this.stopped || this.healthProbeInFlight) return;
+    this.healthProbeInFlight = true;
+    void this.verify()
+      .then(() => {
+        // Probe succeeded but a fresh tunnel may have died while it ran;
+        // re-check before concluding the remote is still healthy.
+        if (this.stopped || this.tunnels.size > 0 || this.socketQueue.length > 0) return;
+        this.probeRemoteOrLost(reason);
+      })
+      .catch(() => {
+        if (!this.stopped) this.options.onTunnelLost?.(reason);
+      })
+      .finally(() => {
+        this.healthProbeInFlight = false;
+      });
   }
 }
