@@ -1,6 +1,7 @@
 import { cachedStatement } from '../connection.mts'
 import type { ForemanDatabase } from '../types.mts'
 import { notifyAppendCommitted } from '../../events/append-notify.mts'
+import { markStatsProjectionDirty } from '../../events/stats-query.mts'
 import { compactJsonRecord, toJsonText } from './json.mts'
 
 export interface TaskLifecycleEventWrite {
@@ -73,6 +74,15 @@ export class ExecutionEventStore {
     // Wake event.list waiters only for genuinely inserted rows; the wake is
     // deferred until the surrounding transaction (if any) has committed.
     notifyAppendCommitted(this.db)
+    // A turn_usage row can flip its run's whole-run client-report flags, so
+    // the run is dirty-marked in the same transaction for the bounded
+    // fallback reconcile. Dispatch and gateway completions never change the
+    // flags; their projection rows are applied by the watermark drain.
+    // Duplicate (execution_id, seq) replays exited above, so this is
+    // idempotent.
+    if (write.type === 'turn_usage') {
+      markStatsProjectionDirty({ taskRunId: write.taskId ?? null })
+    }
     this.applyTelemetry(write)
   }
 

@@ -1291,4 +1291,52 @@ const SCHEMA_STATEMENTS = [
   cancelled_count INTEGER NOT NULL,
   built_at TEXT NOT NULL
 )`,
+  // Incremental projection of the summary-relevant events (dispatch,
+  // turn_usage, gateway.request.completed): one pre-computed row per event so
+  // the stats read path never re-runs the JSON-extracting window scan. Rows
+  // are written by a bounded watermark drain keyed on events.id, so inserts
+  // stay idempotent under replay and unrelated events never force a rescan.
+  `CREATE TABLE IF NOT EXISTS stats_event_projection (
+  event_id INTEGER PRIMARY KEY,
+  day_key TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  type TEXT NOT NULL,
+  task_run_id TEXT,
+  template TEXT,
+  provider TEXT,
+  model TEXT,
+  model_id TEXT,
+  u_input INTEGER NOT NULL DEFAULT 0,
+  u_cached INTEGER NOT NULL DEFAULT 0,
+  u_output INTEGER NOT NULL DEFAULT 0,
+  fb_input INTEGER NOT NULL DEFAULT 0,
+  fb_cached INTEGER NOT NULL DEFAULT 0,
+  fb_output INTEGER NOT NULL DEFAULT 0,
+  cand_fb_input INTEGER NOT NULL DEFAULT 0,
+  cand_fb_cached INTEGER NOT NULL DEFAULT 0,
+  cand_fb_output INTEGER NOT NULL DEFAULT 0
+)`,
+  // Terminal task intervals projected at markTerminal so duration/outcome
+  // attribution reads a narrow table instead of scanning tasks. Still-active
+  // rows stay live (status-indexed) because their effective end is now().
+  `CREATE TABLE IF NOT EXISTS stats_task_interval (
+  task_id TEXT PRIMARY KEY,
+  template TEXT,
+  definition_source TEXT,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  effective_end TEXT NOT NULL
+)`,
+  // Runs whose whole-run client-report flags (has_in/has_cached/has_out)
+  // changed; drained by a bounded per-run recompute of gateway fallback
+  // attribution so late client usage reconciles idempotently.
+  `CREATE TABLE IF NOT EXISTS stats_dirty_runs (
+  task_run_id TEXT PRIMARY KEY
+)`,
+  // Projection bookkeeping: format version (mismatch resets and rebuilds),
+  // last applied events.id watermark, and the backfilling flag.
+  `CREATE TABLE IF NOT EXISTS stats_projection_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+)`,
 ] as const

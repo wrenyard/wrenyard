@@ -192,6 +192,20 @@ export interface TaskRunLedgerRow {
   usage: TaskUsage
 }
 
+/**
+ * Additive freshness indicator for a stats.summary snapshot. `fresh` is a
+ * fully-consistent projection; `stale` is the last consistent snapshot served
+ * while bounded catchup or dirty-run correction is still incomplete;
+ * `backfilling` is a partial snapshot emitted only when no consistent snapshot
+ * exists. `asOf` is the projection watermark (created_at of the last applied
+ * event) the served snapshot is consistent up to.
+ */
+export interface StatsSummaryFreshness {
+  state: 'fresh' | 'stale' | 'backfilling'
+  backfilling?: boolean
+  asOf?: string
+}
+
 export interface StatsSummaryResult {
   source: 'sqlite'
   today: StatsTodayItem
@@ -202,6 +216,8 @@ export interface StatsSummaryResult {
   byTaskDuration?: Array<{ taskName: string; durationMs: number }>
   windows?: StatsWindowSummary[]
   recentRuns?: TaskRunLedgerRow[]
+  /** Additive; omitted by older daemons. */
+  freshness?: StatsSummaryFreshness
 }
 
 export const MAX_STATS_SUMMARY_DAYS = 366

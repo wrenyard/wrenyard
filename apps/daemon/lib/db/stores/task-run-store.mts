@@ -1,4 +1,5 @@
 import type { ForemanDatabase, RunResult } from '../types.mts'
+import { markStatsProjectionDirty } from '../../events/stats-query.mts'
 import { toJsonText } from './json.mts'
 
 export type TaskRunStoreStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted'
@@ -113,7 +114,7 @@ export class TaskRunStore {
   }
 
   markTerminal(write: TerminalTaskRunWrite): boolean {
-    return this.run(
+    const applied = this.run(
       `UPDATE tasks
       SET status = ?, output = ?, summary = ?, error = ?,
         failure_category = ?, suggestion = ?, error_message = ?,
@@ -132,6 +133,34 @@ export class TaskRunStore {
       write.endedAt,
       write.taskRunId,
     ).changes > 0
+    if (applied) this.projectTerminalInterval(write)
+    return applied
+  }
+
+  /**
+   * Project the terminal task interval (outcome attributed to the ended_at
+   * day, duration overlap over created_at→ended_at) into stats_task_interval
+   * in the same write boundary. Only runs whose UPDATE matched reach this
+   * point, so repeat terminal calls are idempotent via INSERT OR REPLACE;
+   * late-arriving client usage may still dirty the run afterwards.
+   */
+  private projectTerminalInterval(write: TerminalTaskRunWrite): void {
+    const row = this.get<{ template: string | null; definition_source: string | null; created_at: string; ended_at: string | null; status: string }>(
+      `SELECT template, definition_source, created_at, ended_at, status FROM tasks WHERE id = ?`,
+      write.taskRunId,
+    )
+    if (!row?.ended_at) return
+    this.run(
+      `INSERT OR REPLACE INTO stats_task_interval (task_id, template, definition_source, status, created_at, effective_end)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      write.taskRunId,
+      row.template,
+      row.definition_source,
+      row.status,
+      row.created_at,
+      row.ended_at,
+    )
+    markStatsProjectionDirty({ taskTransition: { taskRunId: write.taskRunId, status: row.status } })
   }
 
   attachExecution(taskRunId: string, executionId: string, updatedAt: string): boolean {
@@ -167,13 +196,29 @@ export class TaskRunStore {
   }
 
   markAllInterrupted(endedAt: string): number {
-    return this.run(
+    // Bulk terminal transition (daemon stop): project each newly interrupted
+    // run's interval before flipping statuses so the projection write reads
+    // the same task rows; only rows still queued/running here are affected.
+    const candidates = this.db.prepare<unknown[], { id: string; template: string | null; definition_source: string | null; created_at: string }>(
+      `SELECT id, template, definition_source, created_at FROM tasks WHERE status IN ('queued', 'running')`,
+    ).all()
+    const applied = this.run(
       `UPDATE tasks
       SET status = 'interrupted', ended_at = ?, updated_at = ?
       WHERE status IN ('queued', 'running')`,
       endedAt,
       endedAt,
     ).changes
+    if (applied > 0) {
+      const insert = this.db.prepare<unknown[]>(
+        `INSERT OR REPLACE INTO stats_task_interval (task_id, template, definition_source, status, created_at, effective_end)
+         VALUES (?, ?, ?, 'interrupted', ?, ?)`,
+      )
+      for (const row of candidates) {
+        insert.run(row.id, row.template, row.definition_source, row.created_at, endedAt)
+      }
+    }
+    return applied
   }
 
   readStatus(taskRunId: string): TaskRunStoreStatus | null {

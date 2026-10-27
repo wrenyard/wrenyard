@@ -110,28 +110,43 @@ function queueHydration(ids: Iterable<string>): void {
   });
 }
 
-function resolvePendingRuns(requestGeneration: number, runIds?: readonly string[]): Promise<void> {
+async function resolvePendingRuns(requestGeneration: number, runIds?: readonly string[]): Promise<void> {
   const candidates = runIds ?? [...pendingRuns.keys()];
   const requested = [...new Set(candidates)].filter((id) =>
     (pendingRuns.get(id) ?? 0) > 0 && !terminalRuns.has(id),
   );
-  if (requested.length === 0) return Promise.resolve();
-  return shell.getStats().then((stats) => {
+  if (requested.length === 0) return;
+  // Bounded per-run status lookup instead of the whole stats.summary fetch: a
+  // missing/failed run (TASK_NOT_FOUND or transport) stays pending exactly
+  // like an absent recentTaskRuns entry did, and one failed call never
+  // aborts the batch.
+  for (const taskRunId of requested) {
     if (requestGeneration !== generation) return;
-    const requestedSet = new Set(requested);
-    for (const run of (stats?.recentTaskRuns ?? []) as RecentTaskRun[]) {
-      if (!requestedSet.has(run.taskRunId) || terminalRuns.has(run.taskRunId)) continue;
-      if (run.status !== 'running' || run.executionMode !== 'gateway' || !run.executionId) continue;
-      if (terminalExecutions.has(run.executionId)) continue;
-      const count = pendingRuns.get(run.taskRunId) ?? 0;
-      if (count === 0) continue;
-      const prior = taskRunToExecution.get(run.taskRunId);
-      if (prior === run.executionId) continue;
-      if (prior) removeExecution({ taskRunId: run.taskRunId, executionId: prior }, pendingRuns.get(run.taskRunId) ?? 0);
-      taskRunToExecution.set(run.taskRunId, run.executionId);
-      addExecution({ taskRunId: run.taskRunId, executionId: run.executionId }, count);
+    let run: RecentTaskRun | undefined;
+    try {
+      const status = await shell.task('task.run.status', { task_run_id: taskRunId });
+      if (!status) continue;
+      run = {
+        taskRunId,
+        executionId: status.executionId,
+        executionMode: status.executionMode,
+        status: status.status,
+      };
+    } catch {
+      continue;
     }
-  }).catch(() => undefined);
+    if (requestGeneration !== generation) return;
+    if (terminalRuns.has(taskRunId)) continue;
+    if (run.status !== 'running' || run.executionMode !== 'gateway' || !run.executionId) continue;
+    if (terminalExecutions.has(run.executionId)) continue;
+    const count = pendingRuns.get(taskRunId) ?? 0;
+    if (count === 0) continue;
+    const prior = taskRunToExecution.get(taskRunId);
+    if (prior === run.executionId) continue;
+    if (prior) removeExecution({ taskRunId, executionId: prior }, pendingRuns.get(taskRunId) ?? 0);
+    taskRunToExecution.set(taskRunId, run.executionId);
+    addExecution({ taskRunId, executionId: run.executionId }, count);
+  }
 }
 
 function queueIdentityResolution(): void {

@@ -19,6 +19,7 @@ export type {
   StatsWindowSummary,
   TaskRunLedgerRow,
   StatsSummaryResult,
+  StatsSummaryFreshness,
 } from '@wrenyard/protocol/stats'
 
 export const statsTodayParamsSchema = {

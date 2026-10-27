@@ -12,6 +12,7 @@ import type {
   TaskRankingItem,
   DailyBucket,
   StatsSummaryResult,
+  StatsSummaryFreshness,
   StatsPeriod,
   StatsWindowSummary,
   StatsWindowProfileRow,
@@ -22,35 +23,24 @@ import type { TaskResolvedDispatch, TaskUsage } from '../protocol/task-run-metad
 
 export type JsonRecord = Record<string, unknown>
 
-interface StatsEventRow {
+/**
+ * One pre-aggregated stats_event_rollup cell: the summed contribution of all
+ * projected events of one type on one local day under one template/model
+ * identity. `event_count` counts dispatch rows only; `input_tokens` is the
+ * turn_usage u_input+u_cached sum or the effective gateway fb_input+fb_cached
+ * sum (already gated by whole-run client-report flags and re-attributed by
+ * the dirty-run reconcile); identity columns store '' for unattributed rows.
+ */
+interface StatsEventRollupRow {
+  day_key: string
   type: string
-  /** Execution the event belongs to; NULL when unattributed. */
-  execution_id: string | null
-  /** Canonical task run id resolved through executions/task_id. */
-  task_run_id: string | null
-  /** Guarded json_extract sums for turn_usage rows; always 0 for dispatch. */
-  u_input: number
-  u_cached: number
-  u_output: number
-  /**
-   * Gateway fallback contribution for gateway.request.completed rows: each
-   * successful completion carries its own measured usage at its own
-   * created_at. `usage.input` is the full gateway-measured input (it already
-   * includes any cached portion), so `u_fb_input` is the uncached remainder
-   * `max(input - cachedInput, 0)`; `u_fb_cached` is the measured
-   * `usage.cachedInput`; `u_fb_output` is `usage.output`.
-   */
-  u_fb_input: number
-  u_fb_cached: number
-  u_fb_output: number
-  created_at: string
-  profile: string | null
-  resolved_profile: string | null
-  template: string | null
-  /** Persisted canonical dispatch identity from task_run_attempt_dispatch. */
-  provider: string | null
-  model: string | null
-  model_id: string | null
+  template: string
+  provider: string
+  model: string
+  model_id: string
+  event_count: number
+  input_tokens: number
+  output_tokens: number
 }
 
 interface StatsTaskIntervalRow {
@@ -280,20 +270,858 @@ interface SummaryCacheEntry {
   stamp: string
   cachedAtMs: number
   result: StatsSummaryResult
+  /**
+   * Projection watermark ISO the snapshot was consistent up to; surfaced as
+   * `freshness.asOf` when the entry is served stale during catchup.
+   */
+  asOf?: string
 }
 
 const summaryCache = new WeakMap<ForemanDatabase, Map<string, SummaryCacheEntry>>()
 
-/** One indexed-max probe per table the summary reads; NULL-safe on empty tables. total_changes() counts every insert/update/delete on the connection, covering in-place updates that leave row maxima unchanged. */
+// ---------------------------------------------------------------------------
+// Incremental stats projections
+//
+// stats.summary historically re-ran a 31-local-day MATERIALIZED event scan on
+// every cache miss, so its in-memory stamp included total_changes() and any
+// unrelated write forced a full recompute. The persisted projection tables
+// (stats_event_projection, stats_task_interval, stats_dirty_runs,
+// stats_projection_meta) hold the same per-row semantics pre-computed under a
+// monotone events.id watermark. Relevant event inserts and task status
+// transitions mark bounded dirty work in their own transaction; reads drain it
+// in capped batches, so unrelated writes never rescale the work and the read
+// path never materializes history.
+// ---------------------------------------------------------------------------
+
+/** Format version stored in stats_projection_meta; a mismatch resets and rebuilds the projection. */
+const STATS_PROJECTION_FORMAT = '2'
+
+/** Max events applied to the projection per drain batch; keeps read/startup bounded. */
+const STATS_PROJECTION_BATCH_EVENTS = 512
+/** Max dirty runs reconciled per drain batch. */
+const STATS_PROJECTION_BATCH_RUNS = 64
+/** Max dirty task intervals upserted per drain batch. */
+const STATS_PROJECTION_BATCH_TASKS = 256
+
+const SQL_PROJ_META_GET = `SELECT value FROM stats_projection_meta WHERE key = ?`
+const SQL_PROJ_META_SET = `INSERT OR REPLACE INTO stats_projection_meta (key, value) VALUES (?, ?)`
+
+/**
+ * Pre-aggregated per-day rollup of projected events, keyed by local day,
+ * event type, and the template/model identity the projection resolved. Rows
+ * are folded in inside the same committed drain transaction that advances the
+ * event watermark (and re-attributed in the dirty-run reconcile), so the
+ * summary read composes day-granularity aggregates instead of scanning and
+ * mapping every projected event row on each miss. Created lazily here because
+ * the projection lifecycle owns it; a format reset wipes and rebuilds it.
+ */
+const SQL_EVENT_ROLLUP_DDL = `CREATE TABLE IF NOT EXISTS stats_event_rollup (
+  day_key TEXT NOT NULL,
+  type TEXT NOT NULL,
+  template TEXT NOT NULL DEFAULT '',
+  provider TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  model_id TEXT NOT NULL DEFAULT '',
+  event_count INTEGER NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day_key, type, template, provider, model, model_id)
+)`
+
+/**
+ * Sealed days invalidated by a committed projection correction (a late event
+ * drained into an already-sealed day_key, or a dirty-run fallback
+ * re-attribution that moved fb_* on a sealed day). Rows are marked inside the
+ * same committed drain transaction that changed the rollup, and re-sealed
+ * from the committed rollup in bounded batches; the summary stamp reads the
+ * pending count so a dirtied sealed day can never be served as fresh.
+ */
+const SQL_DIRTY_DAYS_DDL = `CREATE TABLE IF NOT EXISTS stats_dirty_days (
+  day_key TEXT PRIMARY KEY
+)`
+
+/**
+ * Missing (never-sealed) days whose first seal is deferred because their
+ * contributing projection rows are not fully drained yet. Deferring keeps the
+ * day out of stats_day_cache so markSealedDayDirty still activates for later
+ * corrections, and the row is sealed from the committed projection by the
+ * next bounded drain pass instead of publishing a partial first seal.
+ */
+const SQL_DEFERRED_DAYS_DDL = `CREATE TABLE IF NOT EXISTS stats_deferred_days (
+  day_key TEXT PRIMARY KEY
+)`
+
+let eventRollupEnsured = false
+
+function ensureEventRollup(): void {
+  if (eventRollupEnsured) return
+  dbRun(SQL_EVENT_ROLLUP_DDL)
+  dbRun(SQL_DIRTY_DAYS_DDL)
+  dbRun(SQL_DEFERRED_DAYS_DDL)
+  eventRollupEnsured = true
+}
+
+/**
+ * Mark a sealed day dirty inside the caller's committed transaction. No-op
+ * when the day is not yet sealed, so missing-key sealing semantics are
+ * unchanged. Advances the sealed_day_version stamp term atomically so the
+ * summary cache invalidates even before the re-seal commits.
+ */
+function markSealedDayDirty(dayKey: string): void {
+  const sealed = dbGet<{ day_key: string }>(`SELECT day_key FROM stats_day_cache WHERE day_key = ?`, dayKey)
+  if (!sealed) return
+  dbRun(`INSERT OR IGNORE INTO stats_dirty_days (day_key) VALUES (?)`, dayKey)
+  writeProjectionMeta('sealed_day_version', String(Number(readProjectionMeta('sealed_day_version') ?? '0') + 1))
+}
+
+/** Fold one event's aggregate contribution into its day/type/identity rollup cell. */
+function rollupEventContribution(row: {
+  dayKey: string
+  type: string
+  template: string | null
+  provider: string | null
+  model: string | null
+  modelId: string | null
+  count: number
+  inputTokens: number
+  outputTokens: number
+}): void {
+  dbRun(
+    `INSERT INTO stats_event_rollup (day_key, type, template, provider, model, model_id, event_count, input_tokens, output_tokens)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (day_key, type, template, provider, model, model_id) DO UPDATE SET
+       event_count = event_count + excluded.event_count,
+       input_tokens = input_tokens + excluded.input_tokens,
+       output_tokens = output_tokens + excluded.output_tokens`,
+    row.dayKey,
+    row.type,
+    row.template ?? '',
+    row.provider ?? '',
+    row.model ?? '',
+    row.modelId ?? '',
+    row.count,
+    row.inputTokens,
+    row.outputTokens,
+  )
+}
+
+function readProjectionMeta(key: string): string | undefined {
+  return dbGet<{ value: string }>(SQL_PROJ_META_GET, key)?.value
+}
+
+function writeProjectionMeta(key: string, value: string): void {
+  dbRun(SQL_PROJ_META_SET, key, value)
+}
+
+/** True while the cold backfill is still applying the historical event range. */
+export function statsProjectionBackfilling(): boolean {
+  return readProjectionMeta('backfilling') === '1'
+}
+
+function projectionWatermark(): number {
+  const value = Number(readProjectionMeta('event_watermark') ?? '0')
+  return Number.isFinite(value) && value >= 0 ? value : 0
+}
+
+/** Wipe all projection tables and reset the watermark; used on format mismatch. */
+function resetStatsProjection(): void {
+  dbTx(() => {
+    dbRun(`DELETE FROM stats_event_projection`)
+    dbRun(`DELETE FROM stats_task_interval`)
+    dbRun(`DELETE FROM stats_dirty_runs`)
+    dbRun(`DELETE FROM stats_event_rollup`)
+    dbRun(`DELETE FROM stats_dirty_days`)
+    dbRun(`DELETE FROM stats_deferred_days`)
+    writeProjectionMeta('format', STATS_PROJECTION_FORMAT)
+    writeProjectionMeta('event_watermark', '0')
+    writeProjectionMeta('backfilling', '1')
+  })
+}
+
+/** Ensure the projection format matches this build; returns whether the projection can serve reads. */
+function ensureStatsProjection(): void {
+  ensureEventRollup()
+  if (readProjectionMeta('format') !== STATS_PROJECTION_FORMAT) resetStatsProjection()
+}
+
+/**
+ * Local-day key of an ISO timestamp, shared with the writer sites that mark
+ * dirty projection work in their own transaction. Kept exported (and not
+ * duplicated) so the day attribution the writers record is bit-identical to
+ * what the read path computes.
+ */
+export function statsProjectionDayKey(iso: string): string {
+  return localDayKeyOf(iso)
+}
+
+/**
+ * Mark bounded dirty projection work inside an existing write transaction.
+ * Called only after a genuinely new row landed (events INSERT changes===1, or
+ * a tasks transition whose UPDATE matched), so duplicate replays never enqueue
+ * work. `taskRunId` is the canonical run a turn_usage/gateway event belongs to
+ * when resolvable; marking it forces the bounded per-run fallback recompute.
+ */
+export function markStatsProjectionDirty(options: {
+  taskRunId?: string | null
+  taskTransition?: { taskRunId: string; status: string }
+}): void {
+  if (options.taskRunId) {
+    dbRun(`INSERT OR IGNORE INTO stats_dirty_runs (task_run_id) VALUES (?)`, options.taskRunId)
+  }
+  if (options.taskTransition) {
+    dbRun(`INSERT OR IGNORE INTO stats_dirty_runs (task_run_id) VALUES (?)`, options.taskTransition.taskRunId)
+  }
+}
+
+const SQL_PROJ_PENDING_EVENTS = `SELECT e.id, e.type, e.created_at, e.execution_id, e.task_id, e.data
+  FROM events e
+  WHERE e.id > ? AND e.type IN ('dispatch','turn_usage','gateway.request.completed')
+  ORDER BY e.id ASC
+  LIMIT ?`
+
+interface ProjectionEventRow {
+  id: number
+  type: string
+  created_at: string
+  execution_id: string | null
+  task_id: string | null
+  data: string | null
+}
+
+/**
+ * Apply up to `batch` pending summary-relevant events to the projection.
+ * Per-row semantics mirror the retired live scan: turn_usage partitions use
+ * the cached-total/split union and an explicit zero counts as reported;
+ * gateway completions contribute only status-200 measured partitions, and
+ * whether each partition lands is resolved per-run at read time via the
+ * dirty-run reconcile (stored as fb_* candidates gated by the run's current
+ * has_* flags). Template/model identity is resolved per event row exactly as
+ * the old CTE did.
+ * Returns the number of event rows applied.
+ */
+function drainStatsProjectionEvents(batch: number): number {
+  const watermark = projectionWatermark()
+  const rows = dbQuery<ProjectionEventRow>(SQL_PROJ_PENDING_EVENTS, watermark, batch)
+  if (rows.length === 0) return 0
+
+  const executionIds = [...new Set(rows.map((r) => r.execution_id).filter((v): v is string => !!v))]
+  const nestedExecIds = new Set<string>()
+  const gatewayExecData = new Map<number, { status: number | undefined; executionId: string | undefined; usage: JsonRecord | undefined }>()
+  for (const row of rows) {
+    if (row.type !== 'gateway.request.completed') continue
+    const parsed = parseJsonValue(row.data)
+    const record = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as JsonRecord : {}
+    if (record.schema_version !== 'foreman.event.v1') { gatewayExecData.set(row.id, { status: undefined, executionId: undefined, usage: undefined }); continue }
+    const inner = record.data && typeof record.data === 'object' && !Array.isArray(record.data) ? record.data as JsonRecord : {}
+    const executionId = nonBlankString(inner.executionId)
+    if (executionId) nestedExecIds.add(executionId)
+    const usage = inner.usage && typeof inner.usage === 'object' && !Array.isArray(inner.usage) ? inner.usage as JsonRecord : undefined
+    gatewayExecData.set(row.id, {
+      status: isMeasuredNumber(inner.status) ? inner.status as number : undefined,
+      executionId,
+      usage,
+    })
+  }
+
+  const allExecIds = [...new Set([...executionIds, ...nestedExecIds])]
+  const taskByExec = new Map<string, string>()
+  if (allExecIds.length > 0) {
+    const placeholders = allExecIds.map(() => '?').join(', ')
+    for (const row of dbQuery<{ id: string; task_id: string | null }>(
+      `SELECT id, task_id FROM executions WHERE id IN (${placeholders})`, ...allExecIds,
+    )) {
+      if (row.task_id) taskByExec.set(row.id, row.task_id)
+    }
+  }
+
+  const taskIds = [...new Set([
+    ...rows.map((r) => r.task_id).filter((v): v is string => !!v),
+    ...[...taskByExec.values()],
+  ])]
+  const templateByTask = new Map<string, string | null>()
+  if (taskIds.length > 0) {
+    const placeholders = taskIds.map(() => '?').join(', ')
+    for (const row of dbQuery<{ id: string; template: string | null }>(
+      `SELECT id, template FROM tasks WHERE id IN (${placeholders})`, ...taskIds,
+    )) {
+      templateByTask.set(row.id, row.template)
+    }
+  }
+
+  const dispatchIds = [...new Set(rows.map((r) =>
+    r.type === 'gateway.request.completed'
+      ? (gatewayExecData.get(r.id)?.executionId ?? r.execution_id)
+      : r.execution_id,
+  ).filter((v): v is string => !!v))]
+  const identityByExec = new Map<string, { provider: string | null; model: string | null; model_id: string | null }>()
+  if (dispatchIds.length > 0) {
+    const placeholders = dispatchIds.map(() => '?').join(', ')
+    for (const row of dbQuery<{ execution_id: string; provider: string | null; model: string | null; model_id: string | null }>(
+      `SELECT execution_id, provider, model, model_id FROM task_run_attempt_dispatch WHERE execution_id IN (${placeholders})`,
+      ...dispatchIds,
+    )) {
+      identityByExec.set(row.execution_id, row)
+    }
+  }
+
+  dbTx(() => {
+    const insert = getDb().prepare<unknown[]>(
+      `INSERT OR REPLACE INTO stats_event_projection (
+         event_id, day_key, created_at, type, task_run_id, template,
+         provider, model, model_id,
+         u_input, u_cached, u_output, fb_input, fb_cached, fb_output,
+         cand_fb_input, cand_fb_cached, cand_fb_output
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    for (const row of rows) {
+      let uInput = 0
+      let uCached = 0
+      let uOutput = 0
+      let candInput = 0
+      let candCached = 0
+      let candOutput = 0
+      let taskRunId = row.task_id
+      if (row.type === 'turn_usage') {
+        const parsed = parseJsonValue(row.data)
+        const record = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as JsonRecord : undefined
+        if (record) {
+          uInput = nonNegativeNumber(record.input_tokens)
+          uCached = normalizedCachedTokens(record)
+          uOutput = nonNegativeNumber(record.output_tokens)
+        }
+      } else if (row.type === 'gateway.request.completed') {
+        const gw = gatewayExecData.get(row.id)
+        const nestedId = gw?.executionId
+        if (nestedId) taskRunId = taskByExec.get(nestedId) ?? taskRunId
+        if (gw?.status === 200 && gw.usage) {
+          const gwIn = nonNegativeNumber(gw.usage.input)
+          const gwCached = isMeasuredNumber(gw.usage.cachedInput) ? gw.usage.cachedInput as number : 0
+          candInput = Math.max(gwIn - gwCached, 0)
+          candCached = isMeasuredNumber(gw.usage.cachedInput) ? gw.usage.cachedInput as number : 0
+          candOutput = nonNegativeNumber(gw.usage.output)
+        }
+      }
+      if (!taskRunId && row.execution_id) taskRunId = taskByExec.get(row.execution_id) ?? null
+      const template = taskRunId ? templateByTask.get(taskRunId) ?? null : null
+      const dispatchExecId = row.type === 'gateway.request.completed'
+        ? (gatewayExecData.get(row.id)?.executionId ?? row.execution_id)
+        : row.execution_id
+      const identity = dispatchExecId ? identityByExec.get(dispatchExecId) : undefined
+      // Effective fb_* starts at the raw candidate gated by the run's stored
+      // flags (unknown run = never reported = full fallback); the dirty-run
+      // drain rewrites it whenever the flags change.
+      const stored = taskRunId ? readStoredRunFlags(taskRunId) : undefined
+      const fbInput = stored?.input ? 0 : candInput
+      const fbCached = stored?.cached ? 0 : candCached
+      const fbOutput = stored?.output ? 0 : candOutput
+      const dayKey = localDayKeyOf(row.created_at)
+      insert.run(
+        row.id,
+        dayKey,
+        row.created_at,
+        row.type,
+        taskRunId ?? null,
+        template,
+        identity?.provider ?? null,
+        identity?.model ?? null,
+        identity?.model_id ?? null,
+        uInput,
+        uCached,
+        uOutput,
+        fbInput,
+        fbCached,
+        fbOutput,
+        candInput,
+        candCached,
+        candOutput,
+      )
+      // Fold this event's effective contribution into the day rollup in the
+      // same commit that advances the watermark, so the summary read composes
+      // bounded per-day aggregates and a watermark advance is always atomic
+      // with its aggregate update.
+      rollupEventContribution({
+        dayKey,
+        type: row.type,
+        template,
+        provider: identity?.provider ?? null,
+        model: identity?.model ?? null,
+        modelId: identity?.model_id ?? null,
+        count: row.type === 'dispatch' ? 1 : 0,
+        inputTokens: row.type === 'turn_usage' ? uInput + uCached
+          : row.type === 'gateway.request.completed' ? fbInput + fbCached : 0,
+        outputTokens: row.type === 'turn_usage' ? uOutput
+          : row.type === 'gateway.request.completed' ? fbOutput : 0,
+      })
+      // A committed event landing on an already-sealed day invalidates that
+      // sealed aggregate; mark it dirty in this same transaction so the
+      // bounded re-seal (and the stamp) see a consistent correction state.
+      markSealedDayDirty(dayKey)
+      // Only turn_usage rows can change a run's client-report flags, and a
+      // gateway completion needs the run's flags resolved at least once; both
+      // cases are covered by dirty-marking those two types here (a dispatch
+      // never affects fallback attribution). turn_usage inserts also mark at
+      // the writer site, so this is belt-and-suspenders for backfilled rows.
+      if (taskRunId && (row.type === 'turn_usage' || row.type === 'gateway.request.completed')) {
+        dbRun(`INSERT OR IGNORE INTO stats_dirty_runs (task_run_id) VALUES (?)`, taskRunId)
+      }
+    }
+    const lastId = rows[rows.length - 1].id
+    writeProjectionMeta('event_watermark', String(lastId))
+  })
+  return rows.length
+}
+
+interface DirtyRunFlags { input: boolean; cached: boolean; output: boolean }
+
+/**
+ * Recompute one run's whole-run client-report flags over all its executions'
+ * turn_usage rows (bounded by run size, never by time): a valid non-negative
+ * field — including an explicit zero — counts as reported; the cached
+ * partition is the normalized total/split union.
+ */
+function readDirtyRunFlags(taskRunId: string): DirtyRunFlags {
+  const flags: DirtyRunFlags = { input: false, cached: false, output: false }
+  for (const row of dbQuery<{ data: string | null }>(
+    `SELECT ev.data AS data
+     FROM executions ex
+     JOIN events ev ON ev.execution_id = ex.id AND ev.type = 'turn_usage'
+     WHERE ex.task_id = ?`,
+    taskRunId,
+  )) {
+    const parsed = parseJsonValue(row.data)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue
+    const record = parsed as JsonRecord
+    if (isMeasuredNumber(record.input_tokens)) flags.input = true
+    if (
+      isMeasuredNumber(record.cached_input_tokens)
+      || isMeasuredNumber(record.cache_read_input_tokens)
+      || isMeasuredNumber(record.cache_creation_input_tokens)
+    ) flags.cached = true
+    if (isMeasuredNumber(record.output_tokens)) flags.output = true
+    if (flags.input && flags.cached && flags.output) break
+  }
+  return flags
+}
+
+/** Persist a run's resolved client-report flags; a NULL row means fallback on all partitions. */
+function writeDirtyRunFlags(taskRunId: string, flags: DirtyRunFlags): void {
+  dbRun(
+    `INSERT OR REPLACE INTO stats_projection_meta (key, value) VALUES (?, ?)`,
+    `run_flags:${taskRunId}`,
+    `${flags.input ? 1 : 0}${flags.cached ? 1 : 0}${flags.output ? 1 : 0}`,
+  )
+}
+
+function readStoredRunFlags(taskRunId: string): DirtyRunFlags | undefined {
+  const value = readProjectionMeta(`run_flags:${taskRunId}`)
+  if (value === undefined || value.length !== 3) return undefined
+  return { input: value[0] === '1', cached: value[1] === '1', output: value[2] === '1' }
+}
+
+/**
+ * Drain up to `batch` dirty runs: recompute each run's client-report flags and
+ * rewrite the effective fallback attribution of that run's projected gateway
+ * events by adjusting their fb_* columns between the stored candidate values
+ * and zero. Idempotent: equal flags recompute to a no-op UPDATE.
+ * Returns runs reconciled.
+ */
+function drainStatsProjectionRuns(batch: number): number {
+  const runs = dbQuery<{ task_run_id: string }>(
+    `SELECT task_run_id FROM stats_dirty_runs ORDER BY rowid ASC LIMIT ?`, batch,
+  )
+  if (runs.length === 0) return 0
+  dbTx(() => {
+    const del = getDb().prepare<unknown[]>(`DELETE FROM stats_dirty_runs WHERE task_run_id = ?`)
+    const updateFb = getDb().prepare<unknown[]>(
+      `UPDATE stats_event_projection
+       SET fb_input = ?, fb_cached = ?, fb_output = ?
+       WHERE event_id = ?`,
+    )
+    const selectCand = getDb().prepare<unknown[]>(
+      `SELECT event_id, day_key, template, provider, model, model_id,
+              fb_input, fb_cached, fb_output,
+              cand_fb_input, cand_fb_cached, cand_fb_output
+       FROM stats_event_projection
+       WHERE type = 'gateway.request.completed' AND task_run_id = ?`,
+    )
+    for (const { task_run_id: runId } of runs) {
+      const flags = readDirtyRunFlags(runId)
+      const prior = readStoredRunFlags(runId)
+      writeDirtyRunFlags(runId, flags)
+      if (!prior || prior.input !== flags.input || prior.cached !== flags.cached || prior.output !== flags.output) {
+        // Re-attribute each projected gateway event's effective fallback
+        // between its stored candidate values and zero under the new flags,
+        // and apply the token delta to the day rollup so a late correction
+        // keeps the pre-aggregated read path consistent.
+        for (const event of selectCand.all(runId) as {
+          event_id: number
+          day_key: string
+          template: string | null
+          provider: string | null
+          model: string | null
+          model_id: string | null
+          fb_input: number
+          fb_cached: number
+          fb_output: number
+          cand_fb_input: number
+          cand_fb_cached: number
+          cand_fb_output: number
+        }[]) {
+          const newInput = flags.input ? 0 : event.cand_fb_input
+          const newCached = flags.cached ? 0 : event.cand_fb_cached
+          const newOutput = flags.output ? 0 : event.cand_fb_output
+          updateFb.run(newInput, newCached, newOutput, event.event_id)
+          const inputDelta = (newInput + newCached) - (event.fb_input + event.fb_cached)
+          const outputDelta = newOutput - event.fb_output
+          if (inputDelta !== 0 || outputDelta !== 0) {
+            rollupEventContribution({
+              dayKey: event.day_key,
+              type: 'gateway.request.completed',
+              template: event.template,
+              provider: event.provider,
+              model: event.model,
+              modelId: event.model_id,
+              count: 0,
+              inputTokens: inputDelta,
+              outputTokens: outputDelta,
+            })
+            // The whole-run fallback re-attribution changed a committed rollup
+            // contribution; if that day is already sealed, mark it dirty in
+            // this same transaction so its sealed row is rebuilt bounded.
+            markSealedDayDirty(event.day_key)
+          }
+        }
+      }
+      del.run(runId)
+    }
+  })
+  return runs.length
+}
+
+/** Backfill terminal task intervals for tasks that ended before the interval projection existed. */
+function drainStatsProjectionTaskIntervals(batch: number): number {
+  const rows = dbQuery<{ id: string; template: string | null; definition_source: string | null; status: string; created_at: string; ended_at: string }>(
+    `SELECT t.id, t.template, t.definition_source, t.status, t.created_at, t.ended_at
+     FROM tasks t
+     WHERE t.status IN ('done','failed','cancelled','interrupted')
+       AND t.ended_at IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM stats_task_interval s WHERE s.task_id = t.id)
+     LIMIT ?`,
+    batch,
+  )
+  if (rows.length === 0) return 0
+  dbTx(() => {
+    const insert = getDb().prepare<unknown[]>(
+      `INSERT OR REPLACE INTO stats_task_interval (task_id, template, definition_source, status, created_at, effective_end)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    for (const row of rows) {
+      insert.run(row.id, row.template, row.definition_source, row.status, row.created_at, row.ended_at)
+      // A committed interval on an already-sealed day invalidates its cached
+      // terminal counts; mark it dirty in this same transaction so the
+      // bounded re-seal recomputes from the full committed interval set once
+      // the day's contributing projections are drained. INSERT OR IGNORE
+      // makes the mark idempotent across replays.
+      markSealedDayDirty(localDayKeyOf(row.ended_at))
+    }
+  })
+  return rows.length
+}
+
+/** Max dirty sealed days re-sealed per drain pass; leftovers stay dirty for the next pass. */
+const STATS_PROJECTION_BATCH_DIRTY_DAYS = 32
+
+/**
+ * Re-seal up to `batch` dirty sealed days from the committed projections:
+ * dispatch/token totals come from stats_event_rollup for that one day_key
+ * (already encoding the whole-run fallback partition semantics, including
+ * late corrections), and terminal task outcomes from stats_task_interval
+ * bounded to the day's window — the same buckets sealStatsDay fills, but
+ * sourced from committed projections so a late correction is reflected.
+ * Runs inside one committed transaction per call so a fresh read either
+ * composes the corrected sealed row or still sees the day as dirty.
+ * Returns days re-sealed.
+ */
+function drainStatsDirtySealedDays(batch: number): number {
+  const dirty = dbQuery<{ day_key: string }>(
+    `SELECT day_key FROM stats_dirty_days ORDER BY day_key ASC LIMIT ?`, batch,
+  )
+  if (dirty.length === 0) return 0
+  const builtAt = new Date().toISOString()
+  dbTx(() => {
+    for (const { day_key: dayKey } of dirty) {
+      upsertCommittedSealedDay(dayKey, builtAt)
+      dbRun(`DELETE FROM stats_dirty_days WHERE day_key = ?`, dayKey)
+    }
+    writeProjectionMeta('sealed_day_version', String(Number(readProjectionMeta('sealed_day_version') ?? '0') + 1))
+  })
+  return dirty.length
+}
+
+/**
+ * Write one day's sealed row from the committed projections: dispatch/token
+ * totals from stats_event_rollup for that one day_key (already encoding the
+ * whole-run gateway/client partition, including late dirty-run corrections),
+ * and terminal outcomes from stats_task_interval bounded to the day's window.
+ * This is the single per-day accounting contract shared by every sealing
+ * path — initial/missing/cold/rollover seal and dirty re-seal compose the
+ * same committed row, so a first seal never underreports a day whose
+ * projection already holds gateway fallback.
+ */
+function upsertCommittedSealedDay(dayKey: string, builtAt: string): void {
+  const rollup = dbGet<{ dispatch_count: number; input_tokens: number; output_tokens: number }>(
+    `SELECT COALESCE(SUM(CASE WHEN type = 'dispatch' THEN event_count ELSE 0 END), 0) AS dispatch_count,
+            COALESCE(SUM(input_tokens), 0) AS input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS output_tokens
+     FROM stats_event_rollup WHERE day_key = ?`,
+    dayKey,
+  )
+  let done = 0
+  let failed = 0
+  let cancelled = 0
+  const window = dayWindowFromDayKey(dayKey)
+  if (window) {
+    for (const row of dbQuery<{ status: string }>(
+      `SELECT status FROM stats_task_interval
+       WHERE effective_end >= ? AND effective_end < ?
+         AND status IN ('done','failed','cancelled','interrupted')`,
+      window.startAt,
+      window.endAt,
+    )) {
+      if (row.status === 'done') done++
+      else if (row.status === 'failed') failed++
+      else cancelled++
+    }
+  }
+  dbRun(
+    SQL_SEAL_UPSERT_STATS_DAY,
+    dayKey,
+    rollup?.dispatch_count ?? 0,
+    rollup?.input_tokens ?? 0,
+    rollup?.output_tokens ?? 0,
+    done,
+    failed,
+    cancelled,
+    builtAt,
+  )
+}
+
+/**
+ * True while a day still has un-drained contributing projection work:
+ * summary-relevant events in its local-day range above the watermark, a
+ * pending terminal task interval ending that day, or a pending dirty-run
+ * reconcile whose projected gateway/usage rows land on that day. A first
+ * seal must not publish while any of these could still change the day's
+ * committed aggregates.
+ */
+function sealedDayContributionIncomplete(dayKey: string): boolean {
+  const window = dayWindowFromDayKey(dayKey)
+  if (!window) return true
+  const watermark = projectionWatermark()
+  const pendingEvent = dbGet<{ one: number }>(
+    `SELECT 1 AS one FROM events
+     WHERE id > ? AND created_at >= ? AND created_at < ?
+       AND type IN ('dispatch','turn_usage','gateway.request.completed')
+     LIMIT 1`,
+    watermark,
+    window.startAt,
+    window.endAt,
+  )
+  if (pendingEvent) return true
+  const pendingInterval = dbGet<{ one: number }>(
+    `SELECT 1 AS one FROM tasks t
+     WHERE t.status IN ('done','failed','cancelled','interrupted')
+       AND t.ended_at IS NOT NULL
+       AND t.ended_at >= ? AND t.ended_at < ?
+       AND NOT EXISTS (SELECT 1 FROM stats_task_interval s WHERE s.task_id = t.id)
+     LIMIT 1`,
+    window.startAt,
+    window.endAt,
+  )
+  if (pendingInterval) return true
+  const pendingRun = dbGet<{ one: number }>(
+    `SELECT 1 AS one FROM stats_dirty_runs dr
+     WHERE EXISTS (
+       SELECT 1 FROM stats_event_projection p
+       WHERE p.task_run_id = dr.task_run_id AND p.day_key = ?
+     )
+     LIMIT 1`,
+    dayKey,
+  )
+  return !!pendingRun
+}
+
+/**
+ * Seal up to `batch` deferred missing days whose contributing projection is
+ * now complete, using the same committed-per-day contract as the dirty-day
+ * re-seal. Days still incomplete stay deferred for the next pass.
+ * Returns days re-checked.
+ */
+function drainStatsDeferredSealedDays(batch: number): number {
+  const deferred = dbQuery<{ day_key: string }>(
+    `SELECT day_key FROM stats_deferred_days ORDER BY day_key ASC LIMIT ?`, batch,
+  )
+  if (deferred.length === 0) return 0
+  const builtAt = new Date().toISOString()
+  dbTx(() => {
+    for (const { day_key: dayKey } of deferred) {
+      if (sealedDayContributionIncomplete(dayKey)) continue
+      upsertCommittedSealedDay(dayKey, builtAt)
+      dbRun(`DELETE FROM stats_deferred_days WHERE day_key = ?`, dayKey)
+    }
+  })
+  return deferred.length
+}
+
+/**
+ * Apply all pending bounded projection work: event rows above the watermark,
+ * dirty-run flag reconciles, and terminal task interval backfill. Each phase
+ * is capped; a large backlog simply leaves more for the next read or the
+ * background backfill. Called on the summary miss path and by the cold
+ * backfill loop. Dirty sealed days are re-sealed last so they observe the
+ * rollup state this pass committed. Missing sealed days deferred by the
+ * unified seal path are attempted last so their first seal reads this pass's
+ * newly committed projection rows.
+ */
+export function drainStatsProjection(options: {
+  maxEvents?: number
+  maxRuns?: number
+  maxTaskIntervals?: number
+  maxDirtyDays?: number
+  maxDeferredDays?: number
+} = {}): { events: number; runs: number; taskIntervals: number; dirtyDays: number; deferredDays: number } {
+  ensureStatsProjection()
+  const events = drainStatsProjectionEvents(options.maxEvents ?? STATS_PROJECTION_BATCH_EVENTS)
+  const runs = drainStatsProjectionRuns(options.maxRuns ?? STATS_PROJECTION_BATCH_RUNS)
+  const taskIntervals = drainStatsProjectionTaskIntervals(options.maxTaskIntervals ?? STATS_PROJECTION_BATCH_TASKS)
+  const dirtyDays = drainStatsDirtySealedDays(options.maxDirtyDays ?? STATS_PROJECTION_BATCH_DIRTY_DAYS)
+  const deferredDays = drainStatsDeferredSealedDays(options.maxDeferredDays ?? STATS_PROJECTION_BATCH_DIRTY_DAYS)
+  return { events, runs, taskIntervals, dirtyDays, deferredDays }
+}
+
+/** Number of still-pending projection event rows (backlog above the watermark). */
+export function statsProjectionPendingEvents(): number {
+  const watermark = projectionWatermark()
+  return dbGet<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM events WHERE id > ? AND type IN ('dispatch','turn_usage','gateway.request.completed')`,
+    watermark,
+  )?.count ?? 0
+}
+
+let statsProjectionBackfillStopped = false
+
+export function stopStatsProjectionBackfill(): void {
+  statsProjectionBackfillStopped = true
+}
+
+/**
+ * Bounded cold backfill / restart rebuild, modeled on the day-cache sealer:
+ * applies the historical event range in capped batches, yielding via
+ * setImmediate between them so the daemon stays responsive. A version
+ * mismatch resets the projection and rebuilds from scratch; reads during
+ * backfill compose the sealed days plus the partial projection. Marks the
+ * projection fully caught up when the backlog is drained.
+ */
+export function startStatsProjectionBackfill(options: { isShuttingDown: () => boolean }): void {
+  statsProjectionBackfillStopped = false
+  void (async () => {
+    try {
+      ensureStatsProjection()
+      while (!statsProjectionBackfillStopped && !options.isShuttingDown()) {
+        const applied = drainStatsProjection({
+          maxEvents: STATS_PROJECTION_BATCH_EVENTS,
+          maxRuns: STATS_PROJECTION_BATCH_RUNS,
+          maxTaskIntervals: STATS_PROJECTION_BATCH_TASKS,
+        })
+        if (applied.events === 0 && applied.runs === 0 && applied.taskIntervals === 0 && applied.dirtyDays === 0 && applied.deferredDays === 0) {
+          writeProjectionMeta('backfilling', '0')
+          return
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    } catch (error) {
+      writeDaemonLogNonFatal('stats projection backfill failed', error)
+    }
+  })()
+}
+
+/**
+ * The stamp is derived entirely from projection reconciliation state plus the
+ * stats-relevant non-projected inputs; it never probes MAX(events.id), so a
+ * reasoning-only event insert cannot invalidate the summary. Terms: the
+ * applied events.id watermark (a committed drain/catchup batch — including
+ * one that lands no new raw row — always invalidates), the backfilling flag,
+ * a bounded count of still-pending summary-relevant event rows above the
+ * watermark (new dispatch/turn_usage/gateway inserts invalidate before the
+ * drain runs), the pending dirty-run count, a bounded pending task-interval
+ * count, indexed rowid maxima of the non-projected input tables
+ * (tasks/executions/auxiliary_runs feed the live intervals, dispatch cohort
+ * and the recent-run ledger), and the newest updated_at among still-active
+ * tasks so queued/running transitions the projection does not cover also
+ * invalidate, and the sealed-day reconciliation version (dirtied and
+ * re-sealed days both advance it in the committing transaction, so a late
+ * correction to a closed day always invalidates the cached summary).
+ * total_changes is not used.
+ */
 function readSummaryStamp(): string {
-  const row = dbGet<{ e: number; t: number; x: number; a: number; c: number }>(
-    `SELECT (SELECT COALESCE(MAX(id), 0) FROM events) AS e,
+  const row = dbGet<{ w: string; b: string; p: number; d: number; i: number; t: number; x: number; a: number; u: string; v: string; s: number; f: number }>(
+    `SELECT (SELECT COALESCE(value, '0') FROM stats_projection_meta WHERE key = 'event_watermark') AS w,
+            (SELECT COALESCE(value, '0') FROM stats_projection_meta WHERE key = 'backfilling') AS b,
+            (SELECT COUNT(*) FROM (
+              SELECT 1 FROM events
+              WHERE id > CAST(COALESCE((SELECT value FROM stats_projection_meta WHERE key = 'event_watermark'), '0') AS INTEGER)
+                AND type IN ('dispatch','turn_usage','gateway.request.completed')
+              LIMIT ${STATS_PROJECTION_BATCH_EVENTS})) AS p,
+            (SELECT COUNT(*) FROM stats_dirty_runs) AS d,
+            (SELECT COUNT(*) FROM (
+              SELECT 1 FROM tasks t
+              WHERE t.status IN ('done','failed','cancelled','interrupted')
+                AND t.ended_at IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM stats_task_interval s WHERE s.task_id = t.id)
+              LIMIT ${STATS_PROJECTION_BATCH_TASKS})) AS i,
             (SELECT COALESCE(MAX(rowid), 0) FROM tasks) AS t,
             (SELECT COALESCE(MAX(rowid), 0) FROM executions) AS x,
             (SELECT COALESCE(MAX(rowid), 0) FROM auxiliary_runs) AS a,
-            (SELECT total_changes()) AS c`,
+            (SELECT COALESCE(MAX(updated_at), '') FROM tasks WHERE status IN ('queued','running')) AS u,
+            (SELECT COALESCE(value, '0') FROM stats_projection_meta WHERE key = 'sealed_day_version') AS v,
+            (SELECT COUNT(*) FROM stats_dirty_days) AS s,
+            (SELECT COUNT(*) FROM stats_deferred_days) AS f`,
   )
-  return row ? `${row.e}/${row.t}/${row.x}/${row.a}/${row.c}` : ''
+  return row ? `${row.w}/${row.b}/${row.p}/${row.d}/${row.i}/${row.t}/${row.x}/${row.a}/${row.u}/${row.v}/${row.s}/${row.f}` : ''
+}
+
+/**
+ * Truthful reconciliation state of the persisted projection after the bounded
+ * per-read drain. `fresh` means every committed projection batch is applied —
+ * the composed snapshot is internally consistent. Otherwise the snapshot is
+ * partial: `backfilling` reports the persisted flag or remaining backlog, and
+ * `asOf` is the created_at of the last applied event (the read watermark),
+ * omitted when nothing has been applied yet.
+ */
+function readStatsProjectionFreshness(): StatsSummaryFreshness {
+  const watermark = projectionWatermark()
+  const pendingEvents = statsProjectionPendingEvents()
+  const pendingRuns = dbGet<{ n: number }>(`SELECT COUNT(*) AS n FROM stats_dirty_runs`)?.n ?? 0
+  const pendingIntervals = dbGet<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM (
+      SELECT 1 FROM tasks t
+      WHERE t.status IN ('done','failed','cancelled','interrupted')
+        AND t.ended_at IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM stats_task_interval s WHERE s.task_id = t.id)
+      LIMIT ?)`,
+    STATS_PROJECTION_BATCH_TASKS,
+  )?.n ?? 0
+  const pendingDirtyDays = dbGet<{ n: number }>(`SELECT COUNT(*) AS n FROM stats_dirty_days`)?.n ?? 0
+  const pendingDeferredDays = dbGet<{ n: number }>(`SELECT COUNT(*) AS n FROM stats_deferred_days`)?.n ?? 0
+  const backfilling = statsProjectionBackfilling()
+    || pendingEvents > 0 || pendingRuns > 0 || pendingIntervals > 0 || pendingDirtyDays > 0 || pendingDeferredDays > 0
+  if (!backfilling) return { state: 'fresh' }
+  const freshness: StatsSummaryFreshness = { state: 'backfilling', backfilling: true }
+  if (watermark > 0) {
+    const asOf = dbGet<{ created_at: string }>(`SELECT created_at FROM events WHERE id = ?`, watermark)?.created_at
+    if (asOf) freshness.asOf = asOf
+  }
+  return freshness
 }
 
 interface StatsDayCacheRow {
@@ -306,62 +1134,6 @@ interface StatsDayCacheRow {
   cancelled_count: number
   built_at: string
 }
-
-/** Inner-select JSON aliases: one parse per key; outer CASE only compares aliases. */
-const SQL_USAGE_JSON_ALIASES = `
-    json_valid(e.data) AS valid,
-    json_extract(e.data, '$.input_tokens') AS v_in,
-    json_extract(e.data, '$.cached_input_tokens') AS v_cached,
-    json_extract(e.data, '$.cache_read_input_tokens') AS v_read,
-    json_extract(e.data, '$.cache_creation_input_tokens') AS v_write,
-    json_extract(e.data, '$.output_tokens') AS v_out,
-    json_type(e.data, '$.input_tokens') AS t_in,
-    json_type(e.data, '$.cached_input_tokens') AS t_cached,
-    json_type(e.data, '$.cache_read_input_tokens') AS t_read,
-    json_type(e.data, '$.cache_creation_input_tokens') AS t_write,
-    json_type(e.data, '$.output_tokens') AS t_out,
-    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
-         THEN json_extract(e.data, '$.data.executionId') END AS exec_nested,
-    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
-              AND json_extract(e.data, '$.schema_version') = 'foreman.event.v1'
-              AND json_extract(e.data, '$.data.status') = 200
-         THEN 1 ELSE 0 END AS gw_ok,
-    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
-         THEN json_extract(e.data, '$.data.usage.input') END AS gw_in,
-    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
-         THEN json_type(e.data, '$.data.usage.input') END AS gw_in_t,
-    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
-         THEN json_extract(e.data, '$.data.usage.output') END AS gw_out,
-    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
-         THEN json_type(e.data, '$.data.usage.output') END AS gw_out_t,
-    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
-         THEN json_extract(e.data, '$.data.usage.cachedInput') END AS gw_cached,
-    CASE WHEN e.type = 'gateway.request.completed' AND json_valid(e.data)
-         THEN json_type(e.data, '$.data.usage.cachedInput') END AS gw_cached_t`
-
-const SQL_USAGE_U_INPUT_FROM_ALIASES = `CASE WHEN valid AND t_in IN ('integer','real') AND v_in >= 0 AND v_in < 1e308 THEN v_in ELSE 0 END`
-
-// Cached input precedence: a valid cached_input_tokens total wins; otherwise the
-// defined read/creation split fields are summed (a lone split still counts).
-const SQL_USAGE_U_CACHED_FROM_ALIASES = `CASE
-    WHEN valid AND t_cached IN ('integer','real') AND v_cached >= 0 AND v_cached < 1e308 THEN v_cached
-    WHEN valid THEN
-      CASE WHEN t_read IN ('integer','real') AND v_read >= 0 AND v_read < 1e308 THEN v_read ELSE 0 END
-    + CASE WHEN t_write IN ('integer','real') AND v_write >= 0 AND v_write < 1e308 THEN v_write ELSE 0 END
-    ELSE 0 END`
-
-const SQL_USAGE_U_OUTPUT_FROM_ALIASES = `CASE WHEN valid AND t_out IN ('integer','real') AND v_out >= 0 AND v_out < 1e308 THEN v_out ELSE 0 END`
-
-const SQL_USAGE_U_INPUT_LIVE = `CASE WHEN ev.type = 'turn_usage' AND valid AND t_in IN ('integer','real') AND v_in >= 0 AND v_in < 1e308 THEN v_in ELSE 0 END`
-
-const SQL_USAGE_U_CACHED_LIVE = `CASE
-    WHEN ev.type = 'turn_usage' AND valid AND t_cached IN ('integer','real') AND v_cached >= 0 AND v_cached < 1e308 THEN v_cached
-    WHEN ev.type = 'turn_usage' AND valid THEN
-      CASE WHEN t_read IN ('integer','real') AND v_read >= 0 AND v_read < 1e308 THEN v_read ELSE 0 END
-    + CASE WHEN t_write IN ('integer','real') AND v_write >= 0 AND v_write < 1e308 THEN v_write ELSE 0 END
-    ELSE 0 END`
-
-const SQL_USAGE_U_OUTPUT_LIVE = `CASE WHEN ev.type = 'turn_usage' AND valid AND t_out IN ('integer','real') AND v_out >= 0 AND v_out < 1e308 THEN v_out ELSE 0 END`
 
 interface StatsDayWindow {
   dayKey: string
@@ -427,65 +1199,6 @@ function dayWindowFromDayKey(dayKey: string): StatsDayWindow | undefined {
   return { dayKey, startAt: start.toISOString(), endAt: end.toISOString() }
 }
 
-interface SealUsageLoadRow {
-  created_at: string
-  u_input: number
-  u_cached: number
-  u_output: number
-}
-
-interface SealDispatchLoadRow {
-  created_at: string
-}
-
-interface SealTaskLoadRow {
-  ended_at: string
-  status: string
-}
-
-interface SealDayTotals {
-  dispatch_count: number
-  input_tokens: number
-  output_tokens: number
-  done_count: number
-  failed_count: number
-  cancelled_count: number
-}
-
-function emptySealDayTotals(): SealDayTotals {
-  return {
-    dispatch_count: 0,
-    input_tokens: 0,
-    output_tokens: 0,
-    done_count: 0,
-    failed_count: 0,
-    cancelled_count: 0,
-  }
-}
-
-const SQL_LOAD_SEAL_USAGE = `WITH usage AS MATERIALIZED (
-       SELECT e.created_at,
-              ${SQL_USAGE_JSON_ALIASES}
-       FROM events e INDEXED BY idx_event_type_created
-       WHERE e.created_at >= ? AND e.created_at < ?
-         AND e.type = 'turn_usage'
-     )
-     SELECT created_at,
-            ${SQL_USAGE_U_INPUT_FROM_ALIASES} AS u_input,
-            ${SQL_USAGE_U_CACHED_FROM_ALIASES} AS u_cached,
-            ${SQL_USAGE_U_OUTPUT_FROM_ALIASES} AS u_output
-     FROM usage`
-
-const SQL_LOAD_SEAL_DISPATCH = `SELECT e.created_at
-     FROM events e INDEXED BY idx_event_type_created
-     WHERE e.created_at >= ? AND e.created_at < ?
-       AND e.type = 'dispatch'`
-
-const SQL_LOAD_SEAL_TASKS = `SELECT t.ended_at, t.status
-     FROM tasks t
-     WHERE t.ended_at >= ? AND t.ended_at < ?
-       AND t.status IN ('done', 'failed', 'cancelled', 'interrupted')`
-
 const SQL_SEAL_UPSERT_STATS_DAY = `INSERT OR REPLACE INTO stats_day_cache (day_key, dispatch_count, input_tokens, output_tokens, done_count, failed_count, cancelled_count, built_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
@@ -494,72 +1207,31 @@ export function sealStatsDay(dayKey: string): void {
   sealStatsDaysInTransaction([dayKey])
 }
 
+/**
+ * First-seal missing days through the same committed per-day contract the
+ * dirty-day re-seal uses (stats_event_rollup + stats_task_interval), never
+ * the legacy client-only raw scan: a day whose committed rollup already
+ * carries whole-run gateway fallback (e.g. a cold-backfilled day with no
+ * client usage) seals with those tokens instead of 0, and a later client
+ * supersession corrects it through the same dirty-run/dirty-day path. A day
+ * whose contributing projection is not yet drained is deferred to
+ * stats_deferred_days instead of publishing a partial seal; the bounded
+ * drain retries it on each pass until its contributions are complete.
+ */
 function sealStatsDaysInTransaction(dayKeys: string[]): void {
   if (dayKeys.length === 0) return
-  const windows: StatsDayWindow[] = []
-  for (const dayKey of dayKeys) {
-    const window = dayWindowFromDayKey(dayKey)
-    if (window) windows.push(window)
-  }
-  if (windows.length === 0) return
-
-  let minStart = windows[0].startAt
-  let maxEnd = windows[0].endAt
-  for (const window of windows) {
-    if (window.startAt < minStart) minStart = window.startAt
-    if (window.endAt > maxEnd) maxEnd = window.endAt
-  }
-
-  const totalsByDayKey = new Map<string, SealDayTotals>()
-  for (const window of windows) {
-    totalsByDayKey.set(window.dayKey, emptySealDayTotals())
-  }
-
+  ensureStatsProjection()
   const builtAt = new Date().toISOString()
   dbTx(() => {
-    const usageRows = dbQuery<SealUsageLoadRow>(SQL_LOAD_SEAL_USAGE, minStart, maxEnd)
-    const dispatchRows = dbQuery<SealDispatchLoadRow>(SQL_LOAD_SEAL_DISPATCH, minStart, maxEnd)
-    const taskRows = dbQuery<SealTaskLoadRow>(SQL_LOAD_SEAL_TASKS, minStart, maxEnd)
-
-    for (const row of usageRows) {
-      const key = localDayKeyOf(row.created_at)
-      const totals = totalsByDayKey.get(key)
-      if (!totals) continue
-      totals.input_tokens += row.u_input + row.u_cached
-      totals.output_tokens += row.u_output
-    }
-
-    for (const row of dispatchRows) {
-      const key = localDayKeyOf(row.created_at)
-      const totals = totalsByDayKey.get(key)
-      if (!totals) continue
-      totals.dispatch_count++
-    }
-
-    for (const row of taskRows) {
-      const key = localDayKeyOf(row.ended_at)
-      const totals = totalsByDayKey.get(key)
-      if (!totals) continue
-      if (row.status === 'done') totals.done_count++
-      else if (row.status === 'failed') totals.failed_count++
-      else if (row.status === 'cancelled' || row.status === 'interrupted') totals.cancelled_count++
-    }
-
     for (const dayKey of dayKeys) {
-      const totals = totalsByDayKey.get(dayKey)
-      if (!totals) continue
-      dbRun(
-        SQL_SEAL_UPSERT_STATS_DAY,
-        dayKey,
-        totals.dispatch_count,
-        totals.input_tokens,
-        totals.output_tokens,
-        totals.done_count,
-        totals.failed_count,
-        totals.cancelled_count,
-        builtAt,
-      )
+      if (!dayWindowFromDayKey(dayKey)) continue
+      if (sealedDayContributionIncomplete(dayKey)) {
+        dbRun(`INSERT OR IGNORE INTO stats_deferred_days (day_key) VALUES (?)`, dayKey)
+        continue
+      }
+      upsertCommittedSealedDay(dayKey, builtAt)
     }
+    writeProjectionMeta('sealed_day_version', String(Number(readProjectionMeta('sealed_day_version') ?? '0') + 1))
   })
 }
 
@@ -797,8 +1469,31 @@ export function readStatsSummary(
     return structuredClone(hit.result)
   }
 
-  const result = readStatsSummaryUncached(params, now, options, todayWindow)
-  byKey.set(cacheKey, { stamp, cachedAtMs: now.getTime(), result: structuredClone(result) })
+  const { result, freshness } = readStatsSummaryUncached(params, now, options, todayWindow)
+  result.freshness = freshness
+  if (freshness.state === 'fresh') {
+    // Consistency contract: only fully-consistent snapshots enter the cache,
+    // stored under the post-drain stamp so a drained projection does not turn
+    // every read into a rebuild.
+    const asOf = dbGet<{ created_at: string }>(
+      `SELECT created_at FROM events WHERE id = ?`, projectionWatermark(),
+    )?.created_at
+    byKey.set(cacheKey, { stamp: readSummaryStamp(), cachedAtMs: now.getTime(), result: structuredClone(result), ...(asOf ? { asOf } : {}) })
+    return result
+  }
+  // A partially-applied projection is never published as a fresh summary:
+  // serve the last consistent snapshot when one exists (marked stale even
+  // past its TTL), otherwise return the partial snapshot marked backfilling.
+  // Incomplete results are never cached so they cannot masquerade as fresh.
+  if (hit) {
+    const stale = structuredClone(hit.result)
+    stale.freshness = {
+      state: 'stale',
+      ...(freshness.backfilling ? { backfilling: true } : {}),
+      ...(hit.asOf ? { asOf: hit.asOf } : {}),
+    }
+    return stale
+  }
   return result
 }
 
@@ -807,7 +1502,7 @@ function readStatsSummaryUncached(
   now: Date,
   options: StatsQueryOptions,
   todayWindow: { dayKey: string; startAt: string; endAt: string },
-): StatsSummaryResult {
+): { result: StatsSummaryResult; freshness: StatsSummaryFreshness } {
   const days = params.days ?? 7
   const limit = params.limit ?? 20
 
@@ -820,6 +1515,16 @@ function readStatsSummaryUncached(
   const dailyStartIso = localDayOffsetStartIso(now, -(days - 1))
   const sealBeforeDayKey = localDayKeyOf(windowsStartIso)
   const fullEndIso = todayWindow.endAt
+
+  // Drain bounded pending projection work first so the composed snapshot
+  // reflects the newest relevant writes without ever re-materializing history:
+  // event rows above the events.id watermark, dirty runs needing a per-run
+  // fallback reconcile, terminal task intervals awaiting projection, and
+  // dirty sealed days awaiting bounded re-seal. Each phase is capped; a
+  // backlog simply leaves the remainder to the background backfill or the
+  // next read. The drain must run before the sealed rows below are read so a
+  // just-re-sealed day is composed from its corrected aggregate.
+  drainStatsProjection()
 
   // Daily chart days strictly before the 31-day live window are served from
   // sealed per-day totals (lazy seal on read); rankings and fixed windows stay live.
@@ -837,119 +1542,37 @@ function readStatsSummaryUncached(
     }
   }
 
-  // Bounded live event scan for the rolling 31-local-day window only. Token
-  // fields are extracted in SQL under json_valid so the event `data` blob never
-  // crosses to JS; executions wide profile columns are not selected.
-  //
-  // gateway.request.completed events join the same scan as a per-run usage
-  // fallback: a usage partition the run's client turn_usage events never
-  // reported anywhere in the run is filled from that run's successful gateway
-  // completions, with each completion counted at its own created_at and its
-  // own measured partitions. usage.input is the full gateway-measured input
-  // (it already includes the cached portion), so the input partition is
-  // reported as the uncached remainder max(input - cachedInput, 0) and the
-  // cached partition separately; both partitions can come from the same
-  // completion or independently from different completions, and a client
-  // partition reported on any attempt — including an explicit zero — always
-  // wins. The fallback is resolved per partition: client uncached input is
-  // added only when the run never reported input, gateway uncached input only
-  // when the run never reported input, and gateway cached input only when the
-  // run never reported a normalized cached partition.
-  const allEventsRows = dbQuery<StatsEventRow>(
-    `WITH ev AS MATERIALIZED (
-       SELECT e.execution_id, e.task_id, e.type, e.created_at,
-              ${SQL_USAGE_JSON_ALIASES}
-       FROM events e INDEXED BY idx_event_type_created
-       WHERE e.type IN ('dispatch', 'turn_usage', 'gateway.request.completed')
-         AND e.created_at >= ? AND e.created_at < ?
-     ),
-     -- Executions mapped to their canonical task run, covering every attempt
-     -- of any run that produced an in-window gateway completion (presence of
-     -- a client partition is evaluated over the whole run, so sibling
-     -- executions of the same run must be included). Bounded by the windowed
-     -- event scan through the nested executionId join on executions.id.
-     run_exec AS MATERIALIZED (
-       SELECT ex2.id AS execution_id, ex2.task_id AS task_run_id
-       FROM executions ex2
-       WHERE ex2.task_id IN (
-         SELECT ex.task_id
-         FROM executions ex
-         JOIN ev ON ev.exec_nested = ex.id
-       )
-     ),
-     -- Client partition presence over the whole run: a turn_usage row whose
-     -- field is a valid non-negative number counts as reported, including an
-     -- explicit zero. has_cached uses the normalized cached partition: a
-     -- valid cached_input_tokens total wins; otherwise a lone defined
-     -- read/creation split counts.
-     run_report AS MATERIALIZED (
-       SELECT re.task_run_id,
-              MAX(CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
-                       AND json_type(e.data, '$.input_tokens') IN ('integer','real')
-                       AND json_extract(e.data, '$.input_tokens') >= 0
-                  THEN 1 ELSE 0 END) AS has_in,
-              MAX(CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
-                       AND (
-                         (json_type(e.data, '$.cached_input_tokens') IN ('integer','real')
-                          AND json_extract(e.data, '$.cached_input_tokens') >= 0)
-                         OR (json_type(e.data, '$.cache_read_input_tokens') IN ('integer','real')
-                          AND json_extract(e.data, '$.cache_read_input_tokens') >= 0)
-                         OR (json_type(e.data, '$.cache_creation_input_tokens') IN ('integer','real')
-                          AND json_extract(e.data, '$.cache_creation_input_tokens') >= 0)
-                       )
-                  THEN 1 ELSE 0 END) AS has_cached,
-              MAX(CASE WHEN e.type = 'turn_usage' AND json_valid(e.data)
-                       AND json_type(e.data, '$.output_tokens') IN ('integer','real')
-                       AND json_extract(e.data, '$.output_tokens') >= 0
-                  THEN 1 ELSE 0 END) AS has_out
-       FROM run_exec re
-       LEFT JOIN events e INDEXED BY idx_event_exec_type ON e.execution_id = re.execution_id AND e.type = 'turn_usage'
-       GROUP BY re.task_run_id
-     )
-     SELECT ev.type, ev.execution_id, re.task_run_id, ev.created_at,
-            COALESCE(t.template, ex_t.template, run_t.template) AS template,
-            tra.provider AS provider, tra.model AS model, tra.model_id AS model_id,
-            ${SQL_USAGE_U_INPUT_LIVE} AS u_input,
-            ${SQL_USAGE_U_CACHED_LIVE} AS u_cached,
-            ${SQL_USAGE_U_OUTPUT_LIVE} AS u_output,
-            CASE WHEN ev.type = 'gateway.request.completed' AND ev.gw_ok = 1
-                      AND COALESCE(rr.has_in, 0) = 0
-                      AND ev.gw_in_t IN ('integer','real') AND ev.gw_in >= 0 AND ev.gw_in < 1e308
-                 THEN MAX(ev.gw_in - CASE WHEN ev.gw_cached_t IN ('integer','real')
-                                          AND ev.gw_cached >= 0 AND ev.gw_cached < 1e308
-                                     THEN ev.gw_cached ELSE 0 END, 0)
-                 ELSE 0 END AS u_fb_input,
-            CASE WHEN ev.type = 'gateway.request.completed' AND ev.gw_ok = 1
-                      AND COALESCE(rr.has_cached, 0) = 0
-                      AND ev.gw_cached_t IN ('integer','real') AND ev.gw_cached >= 0 AND ev.gw_cached < 1e308
-                 THEN ev.gw_cached ELSE 0 END AS u_fb_cached,
-            CASE WHEN ev.type = 'gateway.request.completed' AND ev.gw_ok = 1
-                      AND COALESCE(rr.has_out, 0) = 0
-                      AND ev.gw_out_t IN ('integer','real') AND ev.gw_out >= 0 AND ev.gw_out < 1e308
-                 THEN ev.gw_out ELSE 0 END AS u_fb_output
-     FROM ev
-     LEFT JOIN run_exec re ON ev.exec_nested = re.execution_id
-     LEFT JOIN run_report rr ON rr.task_run_id = re.task_run_id
-     LEFT JOIN executions ex ON ev.execution_id = ex.id
-     LEFT JOIN tasks t ON ev.task_id = t.id
-     LEFT JOIN tasks ex_t ON ex.task_id = ex_t.id
-     LEFT JOIN executions run_ex ON ev.exec_nested = run_ex.id
-     LEFT JOIN tasks run_t ON run_ex.task_id = run_t.id
-     LEFT JOIN task_run_attempt_dispatch tra ON COALESCE(ev.exec_nested, ev.execution_id) = tra.execution_id`,
-    windowsStartIso,
-    fullEndIso,
+  // Truthful reconciliation state of what the drain just committed; a
+  // remaining backlog marks the composed snapshot backfilling instead of
+  // letting it pass as a fresh complete summary.
+  const freshness = readStatsProjectionFreshness()
+
+  // Composed live-window event aggregates come from the persisted per-day
+  // rollup the bounded drain maintains atomically with the event watermark:
+  // one pre-aggregated row per (local day, event type, template, model
+  // identity) carries the same token/identity semantics the retired 31-day
+  // MATERIALIZED scan produced, with gateway fallback already gated per-run
+  // by the reconciled client-report flags. Every window boundary is
+  // day-aligned, so the read composes day-granularity aggregates and never
+  // maps individual event rows.
+  const eventRollupRows = dbQuery<StatsEventRollupRow>(
+    `SELECT day_key, type, template, provider, model, model_id,
+            event_count, input_tokens, output_tokens
+     FROM stats_event_rollup
+     WHERE day_key >= ? AND day_key <= ?`,
+    sealBeforeDayKey,
+    todayWindow.dayKey,
   )
 
-  // One bounded terminal+active task interval scan over the 31-day window.
-  // Terminal rows overlap via ended_at (idx_task_ended_at); queued/running rows
-  // are bounded by status (idx_task_status) and end at the injected now.
+  // Terminal task intervals come from the persisted projection; still-active
+  // rows stay live (status-indexed) because their effective end is now().
   const taskIntervalRows = dbQuery<StatsTaskIntervalRow>(
     `SELECT template, created_at, effective_end, status, project, definition_source
      FROM (
-       SELECT t.template AS template, t.created_at AS created_at, t.ended_at AS effective_end, t.status AS status, t.project AS project, t.definition_source AS definition_source
-       FROM tasks t INDEXED BY idx_task_ended_at
-       WHERE t.ended_at >= ? AND t.ended_at < ?
-         AND t.status IN ('done','failed','cancelled','interrupted')
+       SELECT s.template AS template, s.created_at AS created_at, s.effective_end AS effective_end, s.status AS status, t.project AS project, s.definition_source AS definition_source
+       FROM stats_task_interval s
+       LEFT JOIN tasks t ON t.id = s.task_id
+       WHERE s.effective_end >= ? AND s.effective_end < ?
        UNION ALL
        SELECT t.template AS template, t.created_at AS created_at, ? AS effective_end, t.status AS status, t.project AS project, t.definition_source AS definition_source
        FROM tasks t
@@ -996,20 +1619,15 @@ function readStatsSummaryUncached(
     bucketByDayKey.set(bucket.dayKey, bucket)
   }
 
-  for (const row of allEventsRows) {
-    const key = localDayKeyOf(row.created_at)
-    const bucket = bucketByDayKey.get(key)
+  for (const row of eventRollupRows) {
+    const bucket = bucketByDayKey.get(row.day_key)
     if (!bucket) continue
 
     if (row.type === 'dispatch') {
-      bucket.dispatchCount++
-    } else if (row.type === 'turn_usage') {
-      bucket.inputTokens += row.u_input + row.u_cached
-      bucket.outputTokens += row.u_output
-    } else if (row.type === 'gateway.request.completed') {
-      bucket.inputTokens += row.u_fb_input + row.u_fb_cached
-      bucket.outputTokens += row.u_fb_output
+      bucket.dispatchCount += row.event_count
     }
+    bucket.inputTokens += row.input_tokens
+    bucket.outputTokens += row.output_tokens
   }
 
   // Recompute totalTokens after event partitioning
@@ -1062,8 +1680,8 @@ function readStatsSummaryUncached(
     },
   }
 
-  // --- TODAY RANKINGS: filter the full event set to today only ---
-  const todayRows = allEventsRows.filter((row) => localDayKeyOf(row.created_at) === todayWindow.dayKey)
+  // --- TODAY RANKINGS: filter the day rollup to today only ---
+  const todayRows = eventRollupRows.filter((row) => row.day_key === todayWindow.dayKey)
 
   // --- byProfile: group by explicit shared canonical identity when the exact
   // persisted provider/model route declares one; otherwise retain a namespaced
@@ -1089,14 +1707,10 @@ function readStatsSummaryUncached(
     }
     recordModelDisplay(g, identity)
     if (row.type === 'dispatch') {
-      g.dispatchCount++
-    } else if (row.type === 'turn_usage') {
-      g.inputTokens += row.u_input + row.u_cached
-      g.outputTokens += row.u_output
-    } else if (row.type === 'gateway.request.completed') {
-      g.inputTokens += row.u_fb_input + row.u_fb_cached
-      g.outputTokens += row.u_fb_output
+      g.dispatchCount += row.event_count
     }
+    g.inputTokens += row.input_tokens
+    g.outputTokens += row.output_tokens
   }
 
   const byProfile: ProfileRankingItem[] = [...modelMap.entries()]
@@ -1122,21 +1736,17 @@ function readStatsSummaryUncached(
   // --- byTask: group by task display name (template name), NEVER a run id ---
   const taskMap = new Map<string, { dispatchCount: number; inputTokens: number; outputTokens: number }>()
   for (const row of todayRows) {
-    const taskName = normalizeTaskName(row.template)
+    const taskName = normalizeTaskName(row.template === '' ? null : row.template)
     let g = taskMap.get(taskName)
     if (!g) {
       g = { dispatchCount: 0, inputTokens: 0, outputTokens: 0 }
       taskMap.set(taskName, g)
     }
     if (row.type === 'dispatch') {
-      g.dispatchCount++
-    } else if (row.type === 'turn_usage') {
-      g.inputTokens += row.u_input + row.u_cached
-      g.outputTokens += row.u_output
-    } else if (row.type === 'gateway.request.completed') {
-      g.inputTokens += row.u_fb_input + row.u_fb_cached
-      g.outputTokens += row.u_fb_output
+      g.dispatchCount += row.event_count
     }
+    g.inputTokens += row.input_tokens
+    g.outputTokens += row.output_tokens
   }
 
   const byTask: TaskRankingItem[] = [...taskMap.entries()]
@@ -1179,7 +1789,7 @@ function readStatsSummaryUncached(
     todayWindow,
     windowsStartIso,
     windowsEndAt: fullEndIso,
-    allEventsRows,
+    eventRollupRows,
     taskIntervalRows,
     tpsSamples,
     now,
@@ -1188,15 +1798,18 @@ function readStatsSummaryUncached(
   })
 
   return {
-    source: 'sqlite',
-    today,
-    byProfile,
-    byTask,
-    daily: dailyBuckets,
-    totalTaskDurationMs,
-    byTaskDuration,
-    windows,
-    recentRuns: readRecentTaskRunLedger(Math.min(limit, RECENT_RUNS_CAP), options.resolveDisplayNames),
+    result: {
+      source: 'sqlite',
+      today,
+      byProfile,
+      byTask,
+      daily: dailyBuckets,
+      totalTaskDurationMs,
+      byTaskDuration,
+      windows,
+      recentRuns: readRecentTaskRunLedger(Math.min(limit, RECENT_RUNS_CAP), options.resolveDisplayNames),
+    },
+    freshness,
   }
 }
 
@@ -1494,7 +2107,7 @@ function buildWindows(options: {
   todayWindow: { startAt: string; endAt: string }
   windowsStartIso: string
   windowsEndAt: string
-  allEventsRows: StatsEventRow[]
+  eventRollupRows: StatsEventRollupRow[]
   taskIntervalRows: StatsTaskIntervalRow[]
   tpsSamples: ExecutionTpsSample[]
   now: Date
@@ -1514,7 +2127,7 @@ function buildWindow(
   startAt: string,
   endAt: string,
   options: {
-    allEventsRows: StatsEventRow[]
+    eventRollupRows: StatsEventRollupRow[]
     taskIntervalRows: StatsTaskIntervalRow[]
     tpsSamples: ExecutionTpsSample[]
     limit: number
@@ -1523,6 +2136,10 @@ function buildWindow(
 ): StatsWindowSummary {
   const startMs = new Date(startAt).getTime()
   const endMs = new Date(endAt).getTime()
+  // Every window spec is local-day aligned, so a day-rollup row belongs to the
+  // window iff its day_key falls inside [startAt, endAt).
+  const startDayKey = localDayKeyOf(startAt)
+  const endDayKey = localDayKeyOf(new Date(endMs - 1).toISOString())
   let dispatchCount = 0
   let totalTokens = 0
   // Group by an explicit shared identity or a namespaced provider-local one;
@@ -1530,38 +2147,23 @@ function buildWindow(
   // rows are omitted from model rankings but still counted in totals.
   const modelMap = new Map<string, WindowModelAccumulator>()
 
-  for (const row of options.allEventsRows) {
-    const tsMs = new Date(row.created_at).getTime()
-    if (!Number.isFinite(tsMs) || tsMs < startMs || tsMs >= endMs) continue
+  for (const row of options.eventRollupRows) {
+    if (row.day_key < startDayKey || row.day_key > endDayKey) continue
 
     const persisted = eligibleModelIdentity(row)
     if (row.type === 'dispatch') {
-      dispatchCount++
-      if (!persisted) continue
-      const identity = resolveStatsModelIdentity(persisted, options.resolveDisplayNames)
-      const g = ensureWindowModel(modelMap, identity)
-      recordModelDisplay(g, identity)
-      g.runCount++
-    } else if (row.type === 'turn_usage') {
-      const inputTokens = row.u_input + row.u_cached
-      const outputTokens = row.u_output
-      totalTokens += inputTokens + outputTokens
-      if (!persisted) continue
-      const identity = resolveStatsModelIdentity(persisted, options.resolveDisplayNames)
-      const g = ensureWindowModel(modelMap, identity)
-      recordModelDisplay(g, identity)
-      g.inputTokens += inputTokens
-      g.outputTokens += outputTokens
-    } else if (row.type === 'gateway.request.completed') {
-      const inputTokens = row.u_fb_input + row.u_fb_cached
-      const outputTokens = row.u_fb_output
-      totalTokens += inputTokens + outputTokens
-      if (!persisted) continue
-      const identity = resolveStatsModelIdentity(persisted, options.resolveDisplayNames)
-      const g = ensureWindowModel(modelMap, identity)
-      recordModelDisplay(g, identity)
-      g.inputTokens += inputTokens
-      g.outputTokens += outputTokens
+      dispatchCount += row.event_count
+    }
+    totalTokens += row.input_tokens + row.output_tokens
+    if (!persisted) continue
+    const identity = resolveStatsModelIdentity(persisted, options.resolveDisplayNames)
+    const g = ensureWindowModel(modelMap, identity)
+    recordModelDisplay(g, identity)
+    if (row.type === 'dispatch') {
+      g.runCount += row.event_count
+    } else {
+      g.inputTokens += row.input_tokens
+      g.outputTokens += row.output_tokens
     }
   }
 

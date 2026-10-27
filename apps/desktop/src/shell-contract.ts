@@ -54,6 +54,7 @@ import type {
   TaskUsageLive,
   TaskUsageLiveListParams,
   TaskUsageLiveListResult,
+  TaskRunStatusResult,
 } from '@wrenyard/protocol/task';
 import type { DailyBucket as StatsDailySnapshot } from '@wrenyard/protocol/stats';
 import type {
@@ -1503,13 +1504,14 @@ export interface TaskUsageLiveUpdate {
 }
 
 /** The bounded daemon surface the shell `task` bridge forwards. */
-export const TASK_METHODS = ['task.usage.liveList'] as const;
+export const TASK_METHODS = ['task.usage.liveList', 'task.run.status'] as const;
 
 export type TaskMethod = (typeof TASK_METHODS)[number];
 
 /** Params and result of each forwarded task method, used to type the facade. */
 export interface TaskMethodMap {
   'task.usage.liveList': { params: TaskUsageLiveListParams; result: TaskUsageLiveListResult };
+  'task.run.status': { params: { task_run_id: string }; result: TaskRunStatusResult };
 }
 
 /* ------------------------------------------------------------------ */

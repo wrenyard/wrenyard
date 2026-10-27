@@ -437,11 +437,32 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         { param: 'limit', value: limit },
       )
     }
-    return readStatsSummary(
+    const result = readStatsSummary(
       { days, limit },
       new Date(),
       options.resolveTaskRunDisplayNames ? { resolveDisplayNames: options.resolveTaskRunDisplayNames } : undefined,
-    ) satisfies StatsSummaryResult
+    )
+    const freshness = result.freshness
+    if (freshness?.state !== 'fresh') {
+      // Fail closed: only a fully-consistent projection is published as a
+      // successful summary. Stale/backfilling — and an absent or malformed
+      // freshness attestation — reject as a method error so consumers that
+      // retain their last-good snapshot keep it instead of treating partial
+      // data as a refreshed success.
+      const state = freshness?.state === 'stale' || freshness?.state === 'backfilling'
+        ? freshness.state
+        : 'backfilling'
+      throw new ProtocolError(
+        { code: INTERNAL_ERROR.code, message: `stats.summary projection is not fresh (${state})` },
+        {
+          code: state === 'backfilling' ? 'stats.backfilling' : 'stats.not_fresh',
+          state,
+          ...(freshness?.backfilling === true ? { backfilling: true } : {}),
+          ...(typeof freshness?.asOf === 'string' ? { asOf: freshness.asOf } : {}),
+        },
+      )
+    }
+    return result satisfies StatsSummaryResult
   })
   router.register('daemon.shutdown', (params, _message, context) => {
     const rpcContext = coreRpcContextFromUnknown(context)

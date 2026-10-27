@@ -81,7 +81,7 @@ import { createWorkspaceControl } from './services/workspace-control.mts'
 import { ForemanConfigManager } from '../config/manager.mts'
 import { getForemanEventBus } from '../events/event-bus.mts'
 import { initializeLocalSpeedSamples, readLocalSpeedSamplesCached, updateLocalSpeedSample } from '../events/tps.mts'
-import { startStatsDayCacheBackgroundSealer, stopStatsDayCacheBackgroundSealer } from '../events/stats-query.mts'
+import { startStatsDayCacheBackgroundSealer, startStatsProjectionBackfill, stopStatsDayCacheBackgroundSealer, stopStatsProjectionBackfill } from '../events/stats-query.mts'
 import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../events/event-types.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { WorkspaceTodoService, todoIndexPath } from './services/workspace-todo-service.mts'
@@ -489,6 +489,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
     // them ownership when the current holder releases.
     desktopLane.close()
     stopStatsDayCacheBackgroundSealer()
+    stopStatsProjectionBackfill()
     this.shutdownForce ||= force
     this.shutdownRequestedFlag = true
     this.resolveShutdownRequested()
@@ -691,6 +692,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
     // against a released database.
     stopManagedCleanup()
     stopStatsDayCacheBackgroundSealer()
+    stopStatsProjectionBackfill()
     const cleanupDrained = await drainManagedCleanup(SHUTDOWN_DRAIN_TIMEOUT_MS)
     if (!cleanupDrained) {
       writeDaemonLog('warn', `cleanup drain exceeded ${SHUTDOWN_DRAIN_TIMEOUT_MS}ms; remaining cleanup is fenced and will not resume SQL`)
@@ -3336,6 +3338,7 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
   // path re-runs the historical TPS queries.
   initializeLocalSpeedSamples(db)
   startStatsDayCacheBackgroundSealer({ isShuttingDown: () => false })
+  startStatsProjectionBackfill({ isShuttingDown: () => false })
   const taskDispatchResolver = await createTaskDispatchResolver({
     catalog,
     runtime: providerRuntime,
