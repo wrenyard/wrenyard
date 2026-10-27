@@ -44,6 +44,7 @@ export function readFirstRequest(
   try {
     const value = JSON.parse(localStorage.getItem(FIRST_REQUEST_KEY) ?? '') as Partial<FirstRequest> | null;
     if (typeof value?.model !== 'string' || value.model === '' || !isReasoningEffort(value.effort)) return undefined;
+    if (value.model === 'auto') return { model: value.model, effort: value.effort };
     const fast = typeof value.fast === 'boolean' && (supportsFast === undefined || supportsFast(value.model))
       ? { fast: value.fast }
       : {};

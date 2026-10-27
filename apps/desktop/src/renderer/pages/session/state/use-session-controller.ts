@@ -101,7 +101,7 @@ export interface SessionController {
   state: SessionPageState;
   selectSession(sessionId: string): Promise<void>;
   newDraft(): void;
-  sendMessage(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, fast: boolean | undefined, attachments: DraftAttachment[]): Promise<void>;
+  sendMessage(text: string, model: ModelEntry | { auto: true }, reasoningEffort: ReasoningEffort, fast: boolean | undefined, attachments: DraftAttachment[]): Promise<void>;
   interruptTurn(turn: number): Promise<void>;
   cancelTask(taskRunId: string): Promise<void>;
   deleteSession(sessionId: string): Promise<void>;
@@ -259,7 +259,7 @@ export function useSessionController(api: SessionApi) {
     return pending;
   }, [api, refreshList, reportError, selectSession]);
 
-  const sendMessage = useCallback(async (text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, fast: boolean | undefined, attachments: DraftAttachment[]): Promise<void> => {
+  const sendMessage = useCallback(async (text: string, model: ModelEntry | { auto: true }, reasoningEffort: ReasoningEffort, fast: boolean | undefined, attachments: DraftAttachment[]): Promise<void> => {
     dispatch({ type: 'clear-error' });
     const localId = `local-${++localSeq}`;
     const optimistic = {
@@ -283,7 +283,7 @@ export function useSessionController(api: SessionApi) {
       const { turn } = await api.send({
         sessionId,
         text,
-        model: {
+        model: 'auto' in model ? { auto: true } : {
           provider: model.provider,
           model: model.model,
           reasoningEffort,

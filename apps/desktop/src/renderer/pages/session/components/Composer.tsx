@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { REASONING_EFFORTS } from '@wrenyard/models';
 import { AlertTriangle, Plus, Zap } from 'lucide-react';
 import { countInputTokens } from '../model/usage.js';
-import { ModelPicker, modelBadges, type ModelOption } from '@/renderer/components/chat/model-picker';
+import { AUTO_OPTION_VALUE, ModelPicker, modelBadges, type ModelOption } from '@/renderer/components/chat/model-picker';
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
 import { InputGroupButton } from '@/renderer/components/ui/input-group';
 import { getSessionBridge } from '@/renderer/lib/session';
@@ -128,7 +128,7 @@ export interface ComposerProps {
   sessionKey: string;
   disabled?: boolean;
   /** `undefined` means the selected model has no Fast capability, so no Fast field is sent. */
-  onSend(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, fast: boolean | undefined, attachments: DraftAttachment[]): void | Promise<void>;
+  onSend(text: string, model: ModelEntry | { auto: true }, reasoningEffort: ReasoningEffort, fast: boolean | undefined, attachments: DraftAttachment[]): void | Promise<void>;
   injectedText?: { text: string; attachments?: DraftAttachment[]; nonce: number };
   /** Bumped to request an explicit input focus (e.g. the new-conversation shortcut). */
   focusRequest?: number;
@@ -339,6 +339,10 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     // when the route still supports it, else resolved by the shared nearest
     // rule (a missing catalog row falls back to the full effort ladder).
     if (last !== undefined) {
+      if (last.model.autoSelected === true) {
+        setModelId(AUTO_OPTION_VALUE);
+        return;
+      }
       const publicId = `${last.model.provider}/${last.model.model}`;
       const supported = models.find((entry) => entry.publicId === publicId)?.reasoningEfforts ?? [];
       setModelId(publicId);
@@ -355,6 +359,12 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     // supports it, else the level as recorded.
     const first = readFirstRequest((modelId) => models.find((entry) => entry.publicId === modelId)?.supportsFast === true);
     if (first !== undefined) {
+      if (first.model === AUTO_OPTION_VALUE) {
+        setModelId(AUTO_OPTION_VALUE);
+        setEffort(first.effort);
+        setFast(false);
+        return;
+      }
       const supported = models.find((entry) => entry.publicId === first.model)?.reasoningEfforts ?? [];
       setModelId(first.model);
       setEffort(
@@ -395,7 +405,10 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     if (selected !== undefined && selected.supportsFast !== true) setFast(false);
   }, [selected]);
   const selectionUsable = selected !== undefined && isRouteCallable(selected);
-  const selectionUnusable = modelId !== '' && !selectionUsable;
+  const selectionUnusable = modelId !== '' && modelId !== AUTO_OPTION_VALUE && !selectionUsable;
+  // Auto is a valid selection without a catalog entry: the input, focus and
+  // submit readiness treat it the same as a resolved concrete model.
+  const selectionReady = modelId === AUTO_OPTION_VALUE || selected !== undefined;
 
   // An explicit focus request is one-shot: it is served only once the textarea
   // is actually ready (mounted, enabled and carrying a selected model), then
@@ -403,10 +416,10 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   // commits the focus before paint once the input mounts.
   useLayoutEffect(() => {
     if (focusRequest <= 0) return;
-    if (disabled || !selected) return;
+    if (disabled || !selectionReady) return;
     textareaRef.current?.focus({ preventScroll: true });
     onFocusRequestHandled?.();
-  }, [focusRequest, disabled, selected, onFocusRequestHandled]);
+  }, [focusRequest, disabled, selectionReady, onFocusRequestHandled]);
 
   // The model entry always rides the composer toolbar: next to the typed text in
   // the compact row, and on the toolbar's left in the expanded layout.
@@ -463,13 +476,13 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     // submenu pick; a ladder-less model row click carries no level choice and
     // writes nothing. In both cases only the picked model's own key is written,
     // so a switch never overwrites another model's memory.
-    if ((models.find((entry) => entry.publicId === nextModelId)?.reasoningEfforts.length ?? 0) > 0) {
+    if (nextModelId !== AUTO_OPTION_VALUE && (models.find((entry) => entry.publicId === nextModelId)?.reasoningEfforts.length ?? 0) > 0) {
       writeModelEffort(nextModelId, nextEffort);
     }
     setModelId(nextModelId);
     setEffort(nextEffort);
     // Fast is a per-route capability; never leave it on for a model without it.
-    if (models.find((entry) => entry.publicId === nextModelId)?.supportsFast !== true) setFast(false);
+    if (nextModelId === AUTO_OPTION_VALUE || models.find((entry) => entry.publicId === nextModelId)?.supportsFast !== true) setFast(false);
   };
 
   const submit = (): void => {
@@ -480,7 +493,8 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
       submitLatch.current = true;
       const body = text.trim();
       const submitted = attachmentsRef.current;
-      if (submitted.some((item) => item.preview !== undefined || item.mime?.startsWith('image/'))
+      if (modelId !== AUTO_OPTION_VALUE
+        && submitted.some((item) => item.preview !== undefined || item.mime?.startsWith('image/'))
         && selected?.capabilities?.includes('image') !== true) {
         const confirmed = await confirm({
           title: '当前模型不支持图片',
@@ -495,7 +509,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     // An over-budget context is not refused here: only sending a turn triggers
     // the engine's compaction, so blocking would deadlock the session. What the
     // engine still refuses after compacting surfaces through the turn error.
-    if ((body === '' && submitted.length === 0) || !selected || sending || disabled || selectionUnusable) {
+    if ((body === '' && submitted.length === 0) || (modelId !== AUTO_OPTION_VALUE && !selected) || sending || disabled || selectionUnusable) {
       submitLatch.current = false;
       return;
     }
@@ -512,7 +526,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     // Call `onSend` inside the chain so a synchronous throw becomes a
     // rejection and the latch is always released.
     void Promise.resolve()
-      .then(() => onSend(body, selected, effort, selected.supportsFast === true ? fast : undefined, submitted))
+      .then(() => onSend(body, modelId === AUTO_OPTION_VALUE ? { auto: true } : selected!, effort, modelId === AUTO_OPTION_VALUE ? undefined : selected?.supportsFast === true ? fast : undefined, submitted))
       .then(
         () => {
           // Clear the sent draft (and only the sent one) independently for text
@@ -540,7 +554,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
             void getSessionBridge().discardDraftAttachments(releasable).catch(() => undefined);
           }
           // Only a session's first request is remembered for the next new session.
-          if (firstInSession) writeFirstRequest({ model: selected.publicId, effort, ...(selected.supportsFast === true ? { fast } : {}) });
+          if (firstInSession) writeFirstRequest({ model: modelId, effort, ...(modelId !== AUTO_OPTION_VALUE && selected?.supportsFast === true ? { fast } : {}) });
         },
         () => {
           // A rejected send keeps the text and every attachment so the user can retry.
@@ -588,7 +602,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         value={text}
         onValueChange={handleChange}
         onSubmit={submit}
-        disabled={disabled || !selected}
+        disabled={disabled || !selectionReady}
         submitDisabled={sending || selectionUnusable}
         sendKey={preferences.data?.session.sendKey ?? 'enter'}
         textareaRef={textareaRef}

@@ -91,6 +91,8 @@ export interface ModelOption {
   free?: boolean;
 }
 
+export const AUTO_OPTION_VALUE = 'auto';
+
 /** Quota tiers in picker order; unknown quota ranks with sufficient supply. */
 function quotaTier(option: ModelOption): number {
   switch (option.quotaState) {
@@ -295,7 +297,9 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
   const effortLabel = REASONING_EFFORT_NAMES[effort];
   // The full model name plus effort, used as the trigger's accessible name and
   // (in compact mode) its title, so the narrow icon trigger is never ambiguous.
-  const triggerLabel = selected === null
+  const triggerLabel = value === AUTO_OPTION_VALUE
+    ? '自动'
+    : selected === null
     ? placeholder
     : `${selected.label}，思考强度：${effortLabel}`;
 
@@ -450,7 +454,9 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
           />
         }
       >
-        {selected === null ? (
+        {value === AUTO_OPTION_VALUE ? (
+          '自动'
+        ) : selected === null ? (
           placeholder
         ) : compactTrigger ? (
           <>
@@ -501,6 +507,13 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
           // to, so the submenu would ride along and then vanish; close it instead.
           onScroll={() => setOpenSubmenu(null)}
         >
+          <DropdownMenuItem
+            onClick={() => onChange(AUTO_OPTION_VALUE, effort)}
+            className={cn(value === AUTO_OPTION_VALUE && 'bg-accent/60 font-medium')}
+          >
+            <span>自动</span>
+            {value === AUTO_OPTION_VALUE && <SelectedModelIndicator />}
+          </DropdownMenuItem>
           {visibleGroups.length === 0 ? (
             <p className="px-2 py-6 text-center text-sm text-muted-foreground">No models found</p>
           ) : (

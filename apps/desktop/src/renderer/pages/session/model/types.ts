@@ -48,7 +48,7 @@ export interface TurnModel {
   id: number;
   /** User text comes from `turn.started`; attachments from following `files` events. */
   user: { text: string; at: string; attachments?: SessionFile[]; sender?: { botId: string } };
-  model: { provider: string; model: string; reasoningEffort?: string };
+  model: { provider: string; model: string; reasoningEffort?: string; autoSelected?: boolean };
   status: TurnStatus;
   phase?: Phase;
   cycle: number;

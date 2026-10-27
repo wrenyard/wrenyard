@@ -329,8 +329,8 @@ export function SessionPage() {
       disabled={!draft && !state.ledgerLoaded}
       latestMessageAt={newestMessageAt}
       latestUserMessageAt={latestUserMessageAt}
-      onSend={async (text, entry, effort, fast, attachments) => {
-        await sendMessage(text, entry, effort, fast, attachments);
+      onSend={async (text, modelEntry, effort, fast, attachments) => {
+        await sendMessage(text, modelEntry, effort, fast, attachments);
       }}
       injectedText={retry}
       focusRequest={composerFocusRequest}
