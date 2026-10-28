@@ -2502,6 +2502,10 @@ async function createForemanDaemonResources(
   }
   if (!ipcServer) throw new Error('failed to start IPC server')
   const runningIpcServer = ipcServer
+  // The cold stats-projection backfill runs synchronous drain batches, so it
+  // may only start after the IPC server is listening; started earlier it would
+  // starve the event loop before any client could connect.
+  startStatsProjectionBackfill({ isShuttingDown: () => options.isShuttingDown() })
   // Load the persisted routines before anything ticks, and start the bot agent
   // kernel before the scheduler's first tick: a routine that is already due
   // fires on that first tick and must find a kernel whose bot configs are
@@ -3338,7 +3342,6 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
   // path re-runs the historical TPS queries.
   initializeLocalSpeedSamples(db)
   startStatsDayCacheBackgroundSealer({ isShuttingDown: () => false })
-  startStatsProjectionBackfill({ isShuttingDown: () => false })
   const taskDispatchResolver = await createTaskDispatchResolver({
     catalog,
     runtime: providerRuntime,

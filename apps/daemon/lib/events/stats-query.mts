@@ -994,6 +994,9 @@ export function statsProjectionPendingEvents(): number {
   )?.count ?? 0
 }
 
+/** Real-yield delay between cold-backfill batches; keeps IPC/bot work responsive during the rebuild. */
+const STATS_PROJECTION_BACKFILL_YIELD_MS = 5
+
 let statsProjectionBackfillStopped = false
 
 export function stopStatsProjectionBackfill(): void {
@@ -1002,8 +1005,10 @@ export function stopStatsProjectionBackfill(): void {
 
 /**
  * Bounded cold backfill / restart rebuild, modeled on the day-cache sealer:
- * applies the historical event range in capped batches, yielding via
- * setImmediate between them so the daemon stays responsive. A version
+ * applies the historical event range in capped batches, yielding via a real
+ * setTimeout macrotask between them so IPC and bot work stay responsive
+ * (setImmediate would only yield to the check phase, letting a multi-minute
+ * rebuild starve the loop). A version
  * mismatch resets the projection and rebuilds from scratch; reads during
  * backfill compose the sealed days plus the partial projection. Marks the
  * projection fully caught up when the backlog is drained.
@@ -1023,7 +1028,7 @@ export function startStatsProjectionBackfill(options: { isShuttingDown: () => bo
           writeProjectionMeta('backfilling', '0')
           return
         }
-        await new Promise<void>((resolve) => setImmediate(resolve))
+        await new Promise<void>((resolve) => setTimeout(resolve, STATS_PROJECTION_BACKFILL_YIELD_MS))
       }
     } catch (error) {
       writeDaemonLogNonFatal('stats projection backfill failed', error)
