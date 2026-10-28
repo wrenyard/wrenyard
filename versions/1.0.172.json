@@ -1,0 +1,47 @@
+{
+  "schema_version": "wrenyard.update.v1",
+  "version": "1.0.172",
+  "published_at": "2026-10-28T13:29:01.000Z",
+  "assets": [
+    {
+      "name": "wrenyard-desktop-1.0.172-darwin-arm64.dmg",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.172/wrenyard-desktop-1.0.172-darwin-arm64.dmg",
+      "sha256": "d75c6749de0039cd59142b13d716e0ab3585a11b913b0a5c88e2ce290606d57a"
+    },
+    {
+      "name": "wrenyard-desktop-1.0.172-darwin-arm64.zip",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.172/wrenyard-desktop-1.0.172-darwin-arm64.zip",
+      "sha256": "65becb0e6b1829139908736bfd4a3362a63a4f507d470e32a510704f21af6aef"
+    },
+    {
+      "name": "wrenyard-desktop-1.0.172-win32-x64-setup.exe",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.172/wrenyard-desktop-1.0.172-win32-x64-setup.exe",
+      "sha256": "e5535947f0de1ac79b12d23e7c7037595f630c269259bbc783e972eb83677ca8"
+    },
+    {
+      "name": "wrenyard-desktop-1.0.172-linux-x64.AppImage",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.172/wrenyard-desktop-1.0.172-linux-x64.AppImage",
+      "sha256": "5df9aa66502f10033d707c8fd9a6d2292e162b16f7e24b55870941070bc187e3"
+    }
+  ],
+  "remote_payloads": [
+    {
+      "target": "darwin-arm64",
+      "name": "wrenyard-remote-1.0.172-darwin-arm64.tar.gz",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.172/wrenyard-remote-1.0.172-darwin-arm64.tar.gz",
+      "sha256": "83559f8ea491afe179115d459e448ef0eb4829bcbef3fd0729da17226816fc44"
+    },
+    {
+      "target": "win32-x64",
+      "name": "wrenyard-remote-1.0.172-win32-x64.tar.gz",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.172/wrenyard-remote-1.0.172-win32-x64.tar.gz",
+      "sha256": "3b19e2afd14ebc194790dacb07e25c00a3ef8ccc553b09ebe015e8689b20e793"
+    },
+    {
+      "target": "linux-x64",
+      "name": "wrenyard-remote-1.0.172-linux-x64.tar.gz",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.172/wrenyard-remote-1.0.172-linux-x64.tar.gz",
+      "sha256": "97a8fed31e9a2391a993945f674c58673600526b05f1400cc7085608d8d90551"
+    }
+  ]
+}
