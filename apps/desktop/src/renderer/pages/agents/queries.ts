@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { LedgerEvent } from '@wrenyard/protocol/session';
 import { agentRequest, useRemoteConnection } from '@/renderer/lib/desktop';
+import { settingsQuery } from '@/renderer/lib/queries';
 import { TODO_STATUS_LABEL } from '@/renderer/pages/todo/queries';
 import type {
   AgentCreateParams,
@@ -283,17 +284,16 @@ interface GroupTranscriptCacheEntry {
 /**
  * Transcript state lifted above GroupView so Activity resumes and
  * group↔private remounts rehydrate instead of reloading. Keyed by the remote
- * connection generation, which already changes whenever the committed
- * endpoint/host does, so it fully identifies the transcript's endpoint; there
- * is a single group transcript per endpoint, so no group id is needed. Stale
- * keys are pruned on every lookup and results publish only while their entry
- * is still the current one, so a late response from a stale generation can
- * never surface on a new connection.
+ * connection generation plus the active workspace identity, which changes on
+ * workspace switch even though the daemon process and generation stay the
+ * same. Stale keys are pruned on every lookup and results publish only while
+ * their entry is still the current one, so a late response from a stale
+ * generation or workspace can never surface on the current context.
  */
 const groupTranscriptCache = new Map<string, GroupTranscriptCacheEntry>();
 
-function groupTranscriptEntry(generation: number): GroupTranscriptCacheEntry {
-  const key = `${generation}`;
+function groupTranscriptEntry(generation: number, workspaceId: string | null): GroupTranscriptCacheEntry {
+  const key = `${generation}:${workspaceId ?? ''}`;
   for (const stale of groupTranscriptCache.keys()) {
     if (stale !== key) groupTranscriptCache.delete(stale);
   }
@@ -330,6 +330,8 @@ function groupTranscriptEntry(generation: number): GroupTranscriptCacheEntry {
 export function useGroupEvents(): GroupTranscript {
   const connection = useRemoteConnection();
   const enabled = useAgentEnabled();
+  const settings = useQuery(settingsQuery);
+  const workspacePath = settings.data?.service.workspace.path ?? null;
   const [messages, setMessages] = useState<readonly GroupMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -343,8 +345,8 @@ export function useGroupEvents(): GroupTranscript {
   const anchorRef = useRef<GroupTranscriptAnchor>({ mode: 'bottom' });
 
   useEffect(() => {
-    const key = `${connection.generation}`;
-    const entry = groupTranscriptEntry(connection.generation);
+    const key = `${connection.generation}:${workspacePath ?? ''}`;
+    const entry = groupTranscriptEntry(connection.generation, workspacePath);
     anchorRef.current = entry.anchor;
     // Rehydrate synchronously from the cache; never clear on setup.
     setMessages(entry.messages);
@@ -616,7 +618,7 @@ export function useGroupEvents(): GroupTranscript {
       jumpToLatestRef.current = () => Promise.resolve(false);
       window.clearInterval(timer);
     };
-  }, [enabled, connection.state, connection.generation]);
+  }, [enabled, connection.state, connection.generation, workspacePath]);
 
   return {
     messages,
@@ -630,7 +632,7 @@ export function useGroupEvents(): GroupTranscript {
     loadOlder: () => { loadOlderRef.current(); },
     jumpToLatest: () => jumpToLatestRef.current(),
     setAnchor: (anchor) => {
-      const entry = groupTranscriptEntry(connection.generation);
+      const entry = groupTranscriptEntry(connection.generation, workspacePath);
       entry.anchor = anchor;
       anchorRef.current = anchor;
     },
