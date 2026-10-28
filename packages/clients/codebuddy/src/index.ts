@@ -1,6 +1,6 @@
 import { rm } from 'node:fs/promises';
 import { openSession } from '@wrenyard/agent-client/session';
-import type { AgentClient, AgentEvent, AgentFinalizeContext, AgentRequest, AgentSession, ClientStatus, InspectOptions, InternalAgentEvent, OperationOptions } from '@wrenyard/agent-client';
+import type { AgentClient, AgentClientPreparation, AgentEvent, AgentFinalizeContext, AgentRequest, AgentSession, ClientStatus, InspectOptions, InternalAgentEvent, OperationOptions } from '@wrenyard/agent-client';
 import { clientStateDirForEnv } from '@wrenyard/agent-client/native';
 import type { CodeBuddyAccountContext, CodeBuddyEnvironment } from './account.ts';
 import { decodeCodeBuddy } from './events.ts';
@@ -22,6 +22,12 @@ export class CodeBuddyClient implements AgentClient {
 
     inspect(options?: InspectOptions): Promise<ClientStatus> {
         return this.load(options).then((install) => inspectStatus(install));
+    }
+    async prepare(request: AgentRequest): Promise<AgentClientPreparation | void> {
+        const executionId = request.executionId?.trim();
+        if (!executionId)
+            return;
+        return { env: { WRENYARD_EXECUTION_ID: executionId } };
     }
     async start(request: AgentRequest, options?: OperationOptions): Promise<AgentSession> {
         const env = options?.env ?? process.env;

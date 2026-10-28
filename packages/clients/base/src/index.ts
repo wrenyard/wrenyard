@@ -134,8 +134,11 @@ export interface ReadinessOptions extends OperationOptions {
     readonly home?: string;
 }
 /**
- * Launch preparation returned by {@link OperationOptions.prepare}. The `env`
- * entries are merged over the caller-supplied operation env before `start`.
+ * Client-side launch preparation returned by {@link AgentClient.prepare}. The
+ * `env` entries are merged over the caller-supplied operation env before
+ * `start`, composing with any env the operation-component preparation
+ * (browser env modifiers, desktop lane release ordering, core.mts exec.start
+ * reuse) already produced — the client never replaces that env wholesale.
  */
 export interface AgentClientPreparation {
     readonly env?: NodeJS.ProcessEnv;
@@ -147,6 +150,13 @@ export interface AgentClient {
     readonly id: string;
     readonly capabilities: ClientCapabilities;
     inspect(options?: InspectOptions): Promise<ClientStatus>;
+    /**
+     * Optional pre-start hook: runs before {@link start} with the fully
+     * resolved request (including `executionId`) and the composed operation
+     * env available, so the adapter can contribute run-scoped env or bind
+     * per-execution state. Clients that do not implement it are unaffected.
+     */
+    prepare?(request: AgentRequest, options?: OperationOptions): Promise<AgentClientPreparation | void>;
     start(request: AgentRequest, options?: OperationOptions): Promise<AgentSession>;
     /**
      * Optional post-run hook: runs after the run's committed terminal status
