@@ -193,12 +193,16 @@ function mergeUpdatesAndCompletion(
             // while the queue is empty is picked up without waiting on one
             // more notification.
             const completion = finished.event();
-            // Sentinel for the non-blocking drain below: an already-resolved
-            // promise loses Promise.race against a `pending` that resolved
-            // earlier, so only a still-pending update reaches the sentinel.
-            const sentinel = Promise.resolve({ drained: true });
+            // Sentinel for the non-blocking drain below: resolved on the next
+            // macrotask via setImmediate, so each iteration gives `pending`
+            // a full macrotask to resolve. An already-resolved microtask
+            // sentinel would always win the race because `pending` takes
+            // several microtasks even when the queue already has data.
             const drainQueued = async function* (): AsyncGenerator<MergedItem> {
                 while (true) {
+                    const sentinel = new Promise<{ drained: true }>((resolve) =>
+                        setImmediate(() => resolve({ drained: true })),
+                    );
                     const next = await Promise.race([pending, sentinel]);
                     if ('drained' in next) return;
                     if (next.notification !== undefined) {
