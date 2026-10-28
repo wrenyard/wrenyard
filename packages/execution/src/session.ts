@@ -612,7 +612,7 @@ function controlErrorTail(stderrTail: string): string | undefined {
  * mistake an unconfirmed cleanup for a successful one; only the timeout is
  * surfaced as a rejection with `timeoutMessage`.
  */
-function withTimeoutResolved<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+export function withTimeoutResolved<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
     void promise.then(

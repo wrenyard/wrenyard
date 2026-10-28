@@ -4,9 +4,8 @@ import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { closeSidePanel } from '@/renderer/lib/side-panel';
 
-export function SidePanelView({ title, actions, children }: {
+export function SidePanelView({ title, children }: {
   title: string;
-  actions?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -14,7 +13,6 @@ export function SidePanelView({ title, actions, children }: {
       <div className="flex h-12 items-center justify-between gap-2 px-4">
         <span className="text-sm font-medium">{title}</span>
         <div className="flex items-center gap-1">
-          {actions}
           <Tooltip>
             <TooltipTrigger
               render={(

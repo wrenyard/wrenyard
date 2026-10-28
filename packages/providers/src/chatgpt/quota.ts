@@ -99,8 +99,7 @@ export function chatGptFundingSourceFromSnapshot(input: {
   const subscriptionExhausted = applicable.some((window) => window.remainingPct <= 0);
   const availability = input.creditsBalance?.availability;
   const credits: 'available' | 'empty' | 'unknown' =
-    input.stale === true || availability === undefined || availability === null || availability === 'unknown'
-      ? 'unknown'
+    input.stale === true ? 'unknown'
       : availability === 'available' ? 'available'
       : availability === 'unavailable' ? 'empty'
       : 'unknown';

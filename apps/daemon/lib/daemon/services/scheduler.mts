@@ -14,8 +14,6 @@ import { validateRoutine, writeRoutine, removeRoutine, type RoutineDefinition } 
 const TICK_MS = 5_000
 /** At most this many active or paused routines may exist per bot. */
 const MAX_PER_BOT = 50
-const MIN_INTERVAL_MINUTES = 1
-const MAX_INTERVAL_MINUTES = 10_080
 const MAX_PROMPT_LENGTH = 4_000
 
 /** Diagnostic sink; wired to the daemon log by the caller. */

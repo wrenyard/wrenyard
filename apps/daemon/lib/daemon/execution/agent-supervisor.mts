@@ -2319,10 +2319,6 @@ function dropUndefined<T extends Record<string, unknown>>(value: T): T {
   return next as T
 }
 
-function compactStrings(values: Array<string | null | undefined>): string[] {
-  return values.filter((value): value is string => Boolean(value?.trim()))
-}
-
 /**
  * Copy a retained string into a flat, exactly-sized buffer so a V8 slice cannot
  * keep a much larger incoming payload's backing store alive. The UTF-16

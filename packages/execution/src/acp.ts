@@ -8,6 +8,7 @@ import {
     markOwnedRunPhase,
     materializeFiles,
     unixProcessGroupIsGone,
+    withTimeoutResolved,
     type ProcessFile,
     type ProcessSpec,
 } from './session.ts';
@@ -33,8 +34,6 @@ export interface AcpTransportSpec {
 export interface AcpTransportOptions {
     /** Human-readable connection name for JSON-RPC diagnostics. */
     readonly name?: string;
-    /** Timeout for the child process to confirm it started. */
-    readonly startupTimeoutMs?: number;
 }
 
 /** MCP server definition accepted by the transport; converted to ACP shape. */
@@ -45,14 +44,12 @@ export type AcpMcpServer =
 export interface AcpNewSessionRequest {
     readonly cwd: string;
     readonly mcpServers: readonly AcpMcpServer[];
-    readonly additionalDirectories?: readonly string[];
 }
 
 export interface AcpResumeSessionRequest {
     readonly sessionId: string;
     readonly cwd: string;
     readonly mcpServers?: readonly AcpMcpServer[];
-    readonly additionalDirectories?: readonly string[];
 }
 
 export interface AcpPromptResult {
@@ -130,7 +127,7 @@ export async function startAcpTransport(spec: AcpTransportSpec, options: AcpTran
     let spawnError: Error | undefined;
     const startupTimer = setTimeout(() => {
         end(new Error('ACP agent process did not start'));
-    }, options.startupTimeoutMs && options.startupTimeoutMs > 0 ? options.startupTimeoutMs : STARTUP_CONFIRM_MS);
+    }, STARTUP_CONFIRM_MS);
     const startup = new Promise<number | undefined>((resolve, reject) => {
         child.once('spawn', () => resolve(child.pid));
         child.once('error', reject);
@@ -266,13 +263,11 @@ export async function startAcpTransport(spec: AcpTransportSpec, options: AcpTran
         newSession: (request) => connection.agent.request('session/new', {
             cwd: request.cwd,
             mcpServers: request.mcpServers.map(toAcpMcpServer),
-            ...(request.additionalDirectories ? { additionalDirectories: [...request.additionalDirectories] } : {}),
         }),
         resumeSession: (request) => connection.agent.request('session/resume', {
             sessionId: request.sessionId,
             cwd: request.cwd,
             ...(request.mcpServers ? { mcpServers: request.mcpServers.map(toAcpMcpServer) } : {}),
-            ...(request.additionalDirectories ? { additionalDirectories: [...request.additionalDirectories] } : {}),
         }),
         setConfigOption: (sessionId, configId, value) => connection.agent.request('session/set_config_option', { sessionId, configId, value }),
         setMode: (sessionId, modeId) => connection.agent.request('session/set_mode', { sessionId, modeId }),
@@ -315,16 +310,6 @@ function toAcpMcpServer(server: AcpMcpServer): acp.McpServer {
         args: [...(server.args ?? [])],
         env: Object.entries(server.env ?? {}).map(([name, value]) => ({ name, value })),
     };
-}
-
-function withTimeoutResolved<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
-        void promise.then(
-            (value) => { clearTimeout(timer); resolve(value); },
-            (error) => { clearTimeout(timer); reject(error); },
-        );
-    });
 }
 
 /** Bounded string tail keeping only the most recent characters. */

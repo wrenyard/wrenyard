@@ -128,7 +128,7 @@ async function* runEvents(
         // effect and surfaces as cancelled, not failed. With no cancel in
         // flight the error keeps its real provider/transport classification.
         const event = state.callerCancelled
-            ? cancelledFinished(state)
+            ? finishedForStopReason('cancelled', state.sessionId, state.output)
             : failedFromStderr(launch, transport, error instanceof Error ? error.message : String(error), state.sessionId);
         if (state.usage) yield state.usage;
         terminal.set(event);
@@ -241,7 +241,7 @@ function consume(transport: AcpTransport, launch: KimiLaunch, request: AgentRequ
             // any cancel keeps its real provider/transport classification even
             // if the caller cancels while the event is still draining.
             if (state.callerCancelled)
-                return cancelledFinished(state);
+                return finishedForStopReason('cancelled', state.sessionId, state.output);
             return failedFromStderr(launch, transport, error instanceof Error ? error.message : String(error), state.sessionId);
         }
     })();
@@ -349,14 +349,6 @@ function finishedForStopReason(stopReason: string, sessionId: string | undefined
 }
 
 /** Cancelled terminal event, mirroring the 'cancelled' stopReason mapping. */
-function cancelledFinished(state: TurnState): AgentEvent {
-    return runFinishedRecord('kimi', 'done', state.sessionId, {
-        is_error: false,
-        ...(state.output ? { output: state.output } : {}),
-        stop_reason: 'cancelled',
-    });
-}
-
 /**
  * Failure payload classified the way the retired wire decoder did: a 429 /
  * exceeded_current_quota_error is quota_exhausted (with recovery_at when a

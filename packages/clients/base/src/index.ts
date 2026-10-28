@@ -53,15 +53,15 @@ export interface AgentRequest {
     readonly cwd: string;
     readonly resumeSessionId?: string;
     /**
-     * Public reasoning-effort level selected by the caller. Every run names an
-     * exact level; `assertLaunch` rejects a missing or unknown value.
-     */
-    /**
      * Execution id assigned by the execution layer. Set for supervised task
      * runs; adapters that need run-scoped state key it off this value rather
      * than a supervisor-injected environment variable.
      */
     readonly executionId?: string;
+    /**
+     * Public reasoning-effort level selected by the caller. Every run names an
+     * exact level; `assertLaunch` rejects a missing or unknown value.
+     */
     readonly reasoningEffort: ReasoningEffort;
     /** Optional Fast mode flag; native clients may apply a provider-verified fast variant. */
     readonly fast?: boolean;
@@ -83,14 +83,6 @@ export interface UpstreamError {
     readonly errorType?: string;
     readonly message?: string;
     readonly resetsAt?: string;
-}
-/** Semantic terminal result retained as a type for existing client imports. */
-export interface AgentResult {
-    readonly status: 'done' | 'failed';
-    readonly error?: string;
-    readonly failureClass?: string;
-    readonly upstreamError?: UpstreamError;
-    readonly profile?: string;
 }
 export type AgentEvent =
     | { readonly type: 'session'; readonly nativeSessionId: string; readonly profile?: string }
@@ -142,11 +134,8 @@ export interface ReadinessOptions extends OperationOptions {
     readonly home?: string;
 }
 /**
- * Client-side launch preparation returned by {@link AgentClient.prepare}. The
- * `env` entries are merged over the caller-supplied operation env before
- * `start`, composing with any env the operation-component preparation
- * (browser env modifiers, desktop lane release ordering, core.mts exec.start
- * reuse) already produced — the client never replaces that env wholesale.
+ * Launch preparation returned by {@link OperationOptions.prepare}. The `env`
+ * entries are merged over the caller-supplied operation env before `start`.
  */
 export interface AgentClientPreparation {
     readonly env?: NodeJS.ProcessEnv;
@@ -158,13 +147,6 @@ export interface AgentClient {
     readonly id: string;
     readonly capabilities: ClientCapabilities;
     inspect(options?: InspectOptions): Promise<ClientStatus>;
-    /**
-     * Optional pre-start hook: runs before {@link start} with the fully
-     * resolved request (including `executionId`) and the composed operation
-     * env available, so the adapter can contribute run-scoped env or bind
-     * per-execution state. Clients that do not implement it are unaffected.
-     */
-    prepare?(request: AgentRequest, options?: OperationOptions): Promise<AgentClientPreparation | void>;
     start(request: AgentRequest, options?: OperationOptions): Promise<AgentSession>;
     /**
      * Optional post-run hook: runs after the run's committed terminal status

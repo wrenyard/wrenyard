@@ -26,7 +26,7 @@ import { DesktopQuotaSource } from './quota-service.js';
 import { ActivityStatusProjector } from './main/activity-status.js';
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
-import { readStatsSnapshot } from './stats-snapshot.js';
+import { readStatsSnapshot, unavailableStatsSnapshot } from './stats-snapshot.js';
 import type { StatsSnapshotResult } from './stats-snapshot.js';
 import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RemoteConnectionTestInput, type RemoteConnectionTestResult, type RemoteConnectionSnapshot, type RemoteHostListResult, type RemoteHostMutationResult, type RemoteHostView, type AgentMethod, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskDefinitionListResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome, type OperationComponentAction, type OperationComponentId, type OperationComponentSnapshot, type StatsSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
@@ -2064,7 +2064,7 @@ async function bootstrap(): Promise<void> {
       if (result.status === 'success') {
         return { ...result.snapshot, fetchedAt: result.fetchedAt };
       }
-      return { status: 'unavailable', today: null, daily: [], windows: [], recentTaskRuns: [], lastError: result.error, consecutiveFailures: statsConsecutiveFailures } satisfies StatsSnapshot;
+      return { ...unavailableStatsSnapshot(), lastError: result.error, consecutiveFailures: statsConsecutiveFailures } satisfies StatsSnapshot;
     },
     request: (method, params) => daemonClient.request(method, params),
     getQuota: (forceRefresh = false) => quotaController!.getSnapshot(forceRefresh),

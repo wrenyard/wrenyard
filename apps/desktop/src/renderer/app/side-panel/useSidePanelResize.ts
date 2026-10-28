@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { HTMLAttributes, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { cn } from 'cn';
 
-export const SIDE_PANEL_DEFAULT_WIDTH = 380;
-export const SIDE_PANEL_MIN_WIDTH = 280;
-export const SIDE_PANEL_MAIN_MIN_WIDTH = 360;
+const SIDE_PANEL_DEFAULT_WIDTH = 380;
+const SIDE_PANEL_MIN_WIDTH = 280;
+const SIDE_PANEL_MAIN_MIN_WIDTH = 360;
 const HANDLE_HALF_WIDTH = 3;
 const KEYBOARD_STEP = 16;
 const STORAGE_KEY = 'wrenyard.shell.activity-panel-width';
@@ -34,7 +34,6 @@ function writeStoredWidth(value: number): void {
 
 export interface SidePanelResize {
   width: number;
-  resizing: boolean;
   handleProps: HTMLAttributes<HTMLDivElement>;
 }
 
@@ -155,5 +154,5 @@ export function useSidePanelResize(enabled: boolean, reservedWidth: number): Sid
     onKeyDown,
   };
 
-  return { width, resizing, handleProps };
+  return { width, handleProps };
 }

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { LedgerEvent } from '@wrenyard/protocol/session';
 import { agentRequest, useRemoteConnection } from '@/renderer/lib/desktop';
+import { TODO_STATUS_LABEL } from '@/renderer/pages/todo/queries';
 import type {
   AgentCreateParams,
   AgentGroupEventsResult,
@@ -139,8 +140,6 @@ export interface GroupTranscript {
   error: string | null;
   /** Whether the initial snapshot for the current endpoint identity was read. */
   ready: boolean;
-  /** True while an incremental poll is in flight after `ready` was reached. */
-  refreshing: boolean;
   /** Whether older retained history exists before the loaded window. */
   hasMoreBefore: boolean;
   /** True while a backward history page is in flight. */
@@ -334,7 +333,6 @@ export function useGroupEvents(): GroupTranscript {
   const [messages, setMessages] = useState<readonly GroupMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [hasMoreBefore, setHasMoreBefore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [liveGap, setLiveGap] = useState(false);
@@ -352,7 +350,6 @@ export function useGroupEvents(): GroupTranscript {
     setMessages(entry.messages);
     setError(entry.error);
     setReady(entry.initialized);
-    setRefreshing(false);
     setHasMoreBefore(entry.hasMoreBefore);
     setLoadingOlder(entry.loadingOlder);
     setLiveGap(entry.liveGap);
@@ -428,7 +425,6 @@ export function useGroupEvents(): GroupTranscript {
       if (cancelled || inFlight) return false;
       inFlight = true;
       const initial = !entry.initialized;
-      if (!initial) setRefreshing(true);
       try {
         if (initial) {
           await resnapshot();
@@ -499,7 +495,6 @@ export function useGroupEvents(): GroupTranscript {
         return false;
       } finally {
         inFlight = false;
-        if (!cancelled) setRefreshing(false);
         void runPendingLatest();
       }
     };
@@ -571,7 +566,6 @@ export function useGroupEvents(): GroupTranscript {
      */
     const runLatest = async (): Promise<boolean> => {
       inFlight = true;
-      setRefreshing(true);
       try {
         await resnapshot();
         return !cancelled;
@@ -583,7 +577,6 @@ export function useGroupEvents(): GroupTranscript {
         return false;
       } finally {
         inFlight = false;
-        if (!cancelled) setRefreshing(false);
         // Intents queued while this resnapshot ran drain into one follow-up.
         void runPendingLatest();
       }
@@ -622,7 +615,6 @@ export function useGroupEvents(): GroupTranscript {
       loadOlderRef.current = () => {};
       jumpToLatestRef.current = () => Promise.resolve(false);
       window.clearInterval(timer);
-      setRefreshing(false);
     };
   }, [enabled, connection.state, connection.generation]);
 
@@ -630,7 +622,6 @@ export function useGroupEvents(): GroupTranscript {
     messages,
     error,
     ready,
-    refreshing,
     hasMoreBefore,
     loadingOlder,
     liveGap,
@@ -750,7 +741,7 @@ export function frequencyText(intervalMinutes?: number, on?: string, match?: str
 
 function todoMatchText(rule: string): string {
   if (rule === 'comment') return '新增评论';
-  if (rule.startsWith('status:')) return `状态变为 ${{ open: '未开始', in_progress: '进行中', done: '已完成', cancelled: '已取消' }[rule.slice(7)] ?? rule.slice(7)}`;
+  if (rule.startsWith('status:')) return `状态变为 ${TODO_STATUS_LABEL[rule.slice(7) as keyof typeof TODO_STATUS_LABEL] ?? rule.slice(7)}`;
   if (rule.startsWith('+')) return `添加标签 ${rule.slice(1)}`;
   if (rule.startsWith('-')) return `移除标签 ${rule.slice(1)}`;
   return rule;

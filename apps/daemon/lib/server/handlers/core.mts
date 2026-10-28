@@ -769,11 +769,6 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
                 }),
               },
             )
-            void (async () => {
-              try {
-                for await (const _event of handle.events) { /* drain semantic events */ }
-              } catch { /* release prepared resources when the stream closes */ }
-            })()
           } catch (error) {
             if (error instanceof DesktopLaneClosedError) {
               await service.cancel(runId).catch(() => undefined)

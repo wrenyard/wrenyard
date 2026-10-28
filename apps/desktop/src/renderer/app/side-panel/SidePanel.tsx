@@ -14,10 +14,7 @@ export function SidePanel({ reservedWidth }: { reservedWidth: number }) {
     <aside
       className="relative flex w-(--side-panel-width) min-h-0 shrink-0 flex-col border-l bg-background"
       data-side-panel
-      style={{
-        '--side-panel-width': `${resize.width}px`,
-        '--side-panel-reserved-width': `${reservedWidth}px`,
-      } as CSSProperties}
+      style={{ '--side-panel-width': `${resize.width}px` } as CSSProperties}
     >
       <div {...resize.handleProps} />
         <Content key={view} />

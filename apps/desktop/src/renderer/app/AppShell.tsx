@@ -153,10 +153,7 @@ export function AppShell() {
       }}
     >
       <TitleBar />
-      <div
-        className="relative flex min-h-0 flex-1"
-        style={{ '--side-panel-reserved-width': `${isMobile ? 0 : leftSidebarWidth}px` } as CSSProperties}
-      >
+      <div className="relative flex min-h-0 flex-1">
         <SidebarProvider
           className="h-full min-h-0 min-w-0"
           open={shellSidebarOpen}

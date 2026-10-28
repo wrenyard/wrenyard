@@ -23,6 +23,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import { TODO_STATUSES } from '../workspace-todo-service.mts'
 
 /** One routine as its file defines it. */
 export interface RoutineDefinition {
@@ -44,11 +45,9 @@ const MAX_NAME_LENGTH = 64
 const FRONT_MATTER = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/
 const KEYS = new Set(['name', 'intervalMinutes', 'on', 'match', 'state'])
 
-const VALID_STATUSES = new Set(['open', 'in_progress', 'done', 'cancelled'])
-
 function validateMatch(value: string): string {
   if (value === 'comment') return value
-  if (value.startsWith('status:') && VALID_STATUSES.has(value.slice(7))) return value
+  if (value.startsWith('status:') && (TODO_STATUSES as readonly string[]).includes(value.slice(7))) return value
   const tag = /^[+-]([^\s\p{Cc}*]+)(\*)?$/u.exec(value)
   if (tag !== null && tag[1] !== '') return value
   throw new Error(`invalid routine match: ${value}`)

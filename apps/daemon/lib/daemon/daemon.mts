@@ -1735,11 +1735,10 @@ async function createForemanDaemonResources(
     const rel = relativePath(parent, candidate)
     return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
   }
-  const expectedBinName = (id: string): string => id === 'opencode' ? 'opencode' : id
   const declaredBin = (id: string, bin: string | Record<string, string> | undefined): string | undefined => {
     if (typeof bin === 'string') return bin
     if (!bin || typeof bin !== 'object' || Array.isArray(bin)) return undefined
-    const expected = bin[expectedBinName(id)]
+    const expected = bin[id]
     return typeof expected === 'string' ? expected : undefined
   }
   const launcherTargetMatches = async (actual: string, declared: string): Promise<boolean> => {

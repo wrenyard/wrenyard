@@ -57,11 +57,11 @@ export const QUOTA_INSUFFICIENT_REMAINING = 0.1;
 /** A rolling window (no reset facts, so no pace) is abundant from this share. */
 export const ROLLING_ABUNDANT_REMAINING = 0.8;
 /** Display and conversion metadata for supported balance units. */
-export const BALANCE_UNITS = Object.freeze({
-  CNY: { precision: 2, isCurrency: true },
-  USD: { precision: 2, isCurrency: true },
-  Credits: { precision: 0, isCurrency: false },
-  '积分': { precision: 0, isCurrency: false },
+const BALANCE_UNITS = Object.freeze({
+  CNY: { precision: 2 },
+  USD: { precision: 2 },
+  Credits: { precision: 0 },
+  '积分': { precision: 0 },
 } as const);
 
 /** Whole-unit display of a signed decimal string: a true mathematical floor,
@@ -97,7 +97,7 @@ function twoDecimalAmount(amount: string): string {
  * unchanged (the provider's precision is kept verbatim).
  */
 export function formatBalanceAmount(amount: string, unit: string): string {
-  const meta = (BALANCE_UNITS as Record<string, { precision: number; isCurrency: boolean }>)[unit];
+  const meta = (BALANCE_UNITS as Record<string, { precision: number }>)[unit];
   if (meta === undefined) return amount;
   return meta.precision === 0 ? floorDecimalInteger(amount) : twoDecimalAmount(amount);
 }

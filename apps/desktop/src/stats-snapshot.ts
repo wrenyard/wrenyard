@@ -76,17 +76,7 @@ export async function readStatsSnapshot(ipcPath: string): Promise<StatsSnapshotR
  * Build the Desktop ledger projection from the authoritative `stats.summary`
  * method only. Period windows are the single source for rankings, so there is
  * no `stats.today` fallback and no separate top-level profile/task ranking.
- * Kept for existing callers that only need the projection; failures collapse
- * to the same stable unavailable snapshot as before.
- */
-export async function buildStatsSnapshot(request: StatsRequest): Promise<StatsSnapshot> {
-  const result = await buildStatsSnapshotResult(request);
-  return result.status === 'success' ? result.snapshot : unavailableStatsSnapshot();
-}
-
-/**
- * Same projection as {@link buildStatsSnapshot} but never throws and preserves
- * the failure classification. A request rejection is classified by kind; a
+ * Never throws and preserves the failure classification. A request rejection is classified by kind; a
  * reply that resolves but fails payload validation becomes `payload`.
  */
 export async function buildStatsSnapshotResult(request: StatsRequest): Promise<StatsSnapshotResult> {

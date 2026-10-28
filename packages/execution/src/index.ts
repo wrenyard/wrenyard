@@ -6,12 +6,6 @@ export {
   type ExecutionSession,
   type ExecutionEvent,
   type StartProcessOptions,
-  markOwnedRunPhase,
-  cleanupOwnedRunHome,
-  materializeFiles,
-  cleanupFiles,
-  unixProcessGroupIsGone,
-  type OwnedFile,
 } from './session.ts';
 export {
   killProcessTree,

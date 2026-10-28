@@ -2,7 +2,7 @@ import { mkdir, readdir, rm, stat, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findExecutable, type AgentRequest } from '@wrenyard/agent-client';
 import { resolveMcpServers, type ResolvedMcpServer } from '@wrenyard/agent-client/mcp';
-import { assertLaunch, clientStateDirForEnv, createOwnedClientRunHome, preserveClientRunHomeSessionSnapshot, stringEnv, type OwnedClientRunHome } from '@wrenyard/agent-client/native';
+import { assertLaunch, clientStateDirForEnv, createOwnedClientRunHome, preserveClientRunHomeSessionSnapshot, stringEnv } from '@wrenyard/agent-client/native';
 import type { AcpTransportSpec } from '@wrenyard/execution';
 import { KIMI_KEY_ENV, readManagedKimiCodingKey } from './credential.ts';
 
@@ -21,12 +21,6 @@ const KIMI_BASE_URL = 'https://api.kimi.com/coding/v1';
 
 export interface KimiLaunch {
     readonly spec: AcpTransportSpec;
-    /** Exact upstream model id the run requested. */
-    readonly expectedModel: string;
-    /** The Wrenyard-owned KIMI_CODE_HOME this run uses. */
-    readonly runHome: string;
-    /** Run home ownership record; the adapter finalizes it on settle. */
-    readonly ownedHome: OwnedClientRunHome;
     /** MCP servers converted to the ACP session/new surface. */
     readonly mcpServers: readonly ResolvedMcpServer[];
     /** Session id discovered by the preserve hook before home deletion. */
@@ -197,7 +191,7 @@ export async function launchKimi(request: AgentRequest, env: NodeJS.ProcessEnv):
             files,
             ownedRunHome: ownedHome,
         };
-        return { spec, expectedModel, runHome: ownedHome.path, ownedHome, mcpServers, captured };
+        return { spec, mcpServers, captured };
     } catch (error) {
         await rm(ownedHome.path, { recursive: true, force: true }).catch(() => undefined);
         throw error;

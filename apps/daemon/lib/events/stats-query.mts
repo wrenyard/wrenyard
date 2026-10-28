@@ -445,16 +445,6 @@ function ensureStatsProjection(): void {
 }
 
 /**
- * Local-day key of an ISO timestamp, shared with the writer sites that mark
- * dirty projection work in their own transaction. Kept exported (and not
- * duplicated) so the day attribution the writers record is bit-identical to
- * what the read path computes.
- */
-export function statsProjectionDayKey(iso: string): string {
-  return localDayKeyOf(iso)
-}
-
-/**
  * Mark bounded dirty projection work inside an existing write transaction.
  * Called only after a genuinely new row landed (events INSERT changes===1, or
  * a tasks transition whose UPDATE matched), so duplicate replays never enqueue
@@ -705,11 +695,7 @@ function readDirtyRunFlags(taskRunId: string): DirtyRunFlags {
 
 /** Persist a run's resolved client-report flags; a NULL row means fallback on all partitions. */
 function writeDirtyRunFlags(taskRunId: string, flags: DirtyRunFlags): void {
-  dbRun(
-    `INSERT OR REPLACE INTO stats_projection_meta (key, value) VALUES (?, ?)`,
-    `run_flags:${taskRunId}`,
-    `${flags.input ? 1 : 0}${flags.cached ? 1 : 0}${flags.output ? 1 : 0}`,
-  )
+  writeProjectionMeta(`run_flags:${taskRunId}`, `${flags.input ? 1 : 0}${flags.cached ? 1 : 0}${flags.output ? 1 : 0}`)
 }
 
 function readStoredRunFlags(taskRunId: string): DirtyRunFlags | undefined {
