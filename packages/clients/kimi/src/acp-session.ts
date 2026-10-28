@@ -43,8 +43,12 @@ export async function startKimiAcpSession(request: AgentRequest, launch: KimiLau
     const transport = await startAcpTransport(launch.spec, { name: 'wrenyard-kimi' });
     const state: TurnState = { sessionId: undefined, output: '', sessionEmitted: false, done: false, callerCancelled: false };
     const terminal = deferred<AgentEvent>();
+    // Filled in once the signal listener below is registered; the events
+    // generator calls it on every terminal/cleanup path. Removing an
+    // already-fired once-listener is harmless.
+    let removeAbortListener = (): void => {};
     const session: AgentSession = {
-        events: runEvents(transport, launch, request, state, terminal),
+        events: runEvents(transport, launch, request, state, terminal, () => removeAbortListener()),
         cancel: async () => {
             // Record caller intent first: any terminal outcome from here on is
             // attributed to this cancellation, including errors the bounded
@@ -66,8 +70,10 @@ export async function startKimiAcpSession(request: AgentRequest, launch: KimiLau
     if (options?.signal?.aborted) {
         await session.cancel();
     } else if (options?.signal) {
+        const signal = options.signal;
         const onAbort = () => { void session.cancel(); };
-        options.signal.addEventListener('abort', onAbort, { once: true });
+        signal.addEventListener('abort', onAbort, { once: true });
+        removeAbortListener = () => signal.removeEventListener('abort', onAbort);
     }
     return session;
 }
@@ -89,6 +95,7 @@ async function* runEvents(
     request: AgentRequest,
     state: TurnState,
     terminal: ReturnType<typeof deferred<AgentEvent>>,
+    onTerminal: () => void,
 ): AsyncGenerator<AgentEvent> {
     // Updates and prompt completion are consumed concurrently through one
     // merged stream so permission requests can never deadlock against an
@@ -135,6 +142,10 @@ async function* runEvents(
         yield event;
     } finally {
         state.done = true;
+        // Detach the signal abort listener on every exit path — normal,
+        // error, and cancel-settle alike — so a long-lived caller signal
+        // does not retain this run.
+        onTerminal();
         // transport.close() applies the owned teardown contract — files rolled
         // back, marker finalized, home removed only after the process tree was
         // confirmed gone. A close failure means teardown is unproven: the home
@@ -182,13 +193,37 @@ function mergeUpdatesAndCompletion(
             // while the queue is empty is picked up without waiting on one
             // more notification.
             const completion = finished.event();
+            // Sentinel for the non-blocking drain below: an already-resolved
+            // promise loses Promise.race against a `pending` that resolved
+            // earlier, so only a still-pending update reaches the sentinel.
+            const sentinel = Promise.resolve({ drained: true });
+            const drainQueued = async function* (): AsyncGenerator<MergedItem> {
+                while (true) {
+                    const next = await Promise.race([pending, sentinel]);
+                    if ('drained' in next) return;
+                    if (next.notification !== undefined) {
+                        yield { kind: 'notification', notification: next.notification };
+                        pending = nextNotification();
+                        continue;
+                    }
+                    if (next.error !== undefined)
+                        throw next.error;
+                    return;
+                }
+            };
             while (true) {
                 const raced = await Promise.race([
                     pending,
-                    completion.then((event): { completion: AgentEvent } => ({ completion: event })),
+                    completion.then((): { completion: true } => ({ completion: true })),
                 ]);
                 if ('completion' in raced) {
-                    yield { kind: 'completion', event: raced.completion };
+                    // The prompt settled while updates were still queued:
+                    // drain whatever is already in the queue (non-blocking —
+                    // do not wait for new arrivals) and yield it before the
+                    // completion so the finished event, built lazily inside
+                    // finished.event(), sees the full output and tool events.
+                    yield* drainQueued();
+                    yield { kind: 'completion', event: await finished.event() };
                     return;
                 }
                 if (raced.notification !== undefined) {
@@ -210,7 +245,7 @@ function mergeUpdatesAndCompletion(
 
 /** The ordered ACP request sequence, resolved once into the terminal event. */
 function consume(transport: AcpTransport, launch: KimiLaunch, request: AgentRequest, state: TurnState) {
-    const promise = (async (): Promise<AgentEvent> => {
+    const promise = (async (): Promise<() => AgentEvent> => {
         try {
             await transport.initialize({ name: 'wrenyard', title: 'Wrenyard', version: '1' });
             const mcpServers = toAcpServers(launch.mcpServers);
@@ -232,7 +267,10 @@ function consume(transport: AcpTransport, launch: KimiLaunch, request: AgentRequ
                 await transport.setConfigOption(sessionId, 'model', request.model.trim());
             const result = await transport.prompt(sessionId, request.prompt);
             emitUsage(result, state);
-            return finishedForStopReason(result.stopReason, sessionId, state.output);
+            // Built lazily by event(): updates already queued when the prompt
+            // resolved are drained first, so the terminal event sees the full
+            // output and tool events they carried.
+            return () => finishedForStopReason(result.stopReason, sessionId, state.output);
         } catch (error) {
             // A failure produced while a caller-initiated cancel is in flight
             // — a prompt rejected because our own session/cancel or connection
@@ -241,15 +279,15 @@ function consume(transport: AcpTransport, launch: KimiLaunch, request: AgentRequ
             // any cancel keeps its real provider/transport classification even
             // if the caller cancels while the event is still draining.
             if (state.callerCancelled)
-                return finishedForStopReason('cancelled', state.sessionId, state.output);
-            return failedFromStderr(launch, transport, error instanceof Error ? error.message : String(error), state.sessionId);
+                return () => finishedForStopReason('cancelled', state.sessionId, state.output);
+            return () => failedFromStderr(launch, transport, error instanceof Error ? error.message : String(error), state.sessionId);
         }
     })();
     // The terminal outcome is always a finished event, never a rejection:
     // cancel() may await it after teardown began.
     promise.catch(() => undefined);
     return {
-        async event() { return enrichFinishedEvent(await promise, transport.stderrTail); },
+        async event() { return enrichFinishedEvent((await promise)(), transport.stderrTail); },
     };
 }
 
