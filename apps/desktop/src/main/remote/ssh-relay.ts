@@ -109,10 +109,11 @@ const DEFAULT_CONNECT_TIMEOUT_SEC = 10;
 const DEFAULT_MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 const DEFAULT_IDLE_TIMEOUT_MS = 0;
 /**
- * Bound on simultaneously open ssh tunnels. The default OpenSSH
- * `MaxStartups 10:30:100` starts dropping unauthenticated connections past 10,
- * and the initial UI read burst opens far more than that, so tunnels beyond
- * this cap wait for a slot instead of spawning an ssh child that sshd drops.
+ * Bound on concurrent ssh *establishments*, not on live tunnels. The default
+ * OpenSSH `MaxStartups 10:30:100` throttles unauthenticated connections, so
+ * the cap only needs to limit how many ssh children are still handshaking at
+ * once; a tunnel that finished establishing frees its slot while staying
+ * alive for its normal lifetime.
  */
 const MAX_CONCURRENT_TUNNELS = 4;
 
@@ -175,6 +176,8 @@ interface Tunnel {
   socket: Socket | null;
   /** Set the instant this relay begins tearing the tunnel down itself. */
   closing: boolean;
+  /** True while the ssh child is still establishing; only these count against the cap. */
+  establishing: boolean;
 }
 
 /**
@@ -235,8 +238,10 @@ export class SshRelay {
   /** The live `-F` candidate, or null once the default config applies. */
   private candidateConfigFile: string | null;
   private readonly tunnels = new Set<Tunnel>();
-  /** Accepted local sockets waiting for a tunnel slot below the cap. */
+  /** Accepted local sockets waiting for an ssh establishment slot below the cap. */
   private readonly socketQueue: Socket[] = [];
+  /** Per-queued-socket deadline timers; cleared on promote or close. */
+  private readonly queueTimers = new Map<Socket, NodeJS.Timeout>();
   /** Single-flight guard for the last-tunnel-lost health probe. */
   private healthProbeInFlight = false;
   private stopped = false;
@@ -299,6 +304,8 @@ export class SshRelay {
     this.stopped = true;
     for (const tunnel of [...this.tunnels]) this.closeTunnel(tunnel);
     this.tunnels.clear();
+    for (const timer of this.queueTimers.values()) clearTimeout(timer);
+    this.queueTimers.clear();
     for (const socket of this.socketQueue.splice(0)) socket.destroy();
     const server = this.server;
     this.server = null;
@@ -367,30 +374,50 @@ export class SshRelay {
     }
   }
 
+  /** Tunnels whose ssh child is still handshaking; only these hold a slot. */
+  private establishingCount(): number {
+    let count = 0;
+    for (const tunnel of this.tunnels) if (tunnel.establishing) count++;
+    return count;
+  }
+
   private handleConnection(socket: Socket): void {
     if (this.stopped) { socket.destroy(); return; }
-    // Beyond the tunnel cap the socket waits (paused, so its data is buffered
-    // by the OS) until a live tunnel frees a slot; spawning another ssh child
-    // here would just be dropped by the remote MaxStartups throttle.
-    if (this.tunnels.size >= MAX_CONCURRENT_TUNNELS) {
+    // Beyond the establishment cap the socket waits (paused, so its data is
+    // buffered by the OS) until an in-flight ssh handshake frees a slot;
+    // spawning another ssh child here would just be dropped by the remote
+    // MaxStartups throttle.
+    if (this.establishingCount() >= MAX_CONCURRENT_TUNNELS) {
       socket.pause();
       const drop = (): void => {
         const index = this.socketQueue.indexOf(socket);
         if (index >= 0) this.socketQueue.splice(index, 1);
+        const timer = this.queueTimers.get(socket);
+        if (timer) {
+          clearTimeout(timer);
+          this.queueTimers.delete(socket);
+        }
       };
       socket.once('close', drop);
       socket.once('error', drop);
       this.socketQueue.push(socket);
+      // 15s stays safely under the caller's 30s WrenyardRpcTimeoutError.
+      this.queueTimers.set(socket, setTimeout(() => socket.destroy(), 15_000));
       return;
     }
     this.attachSocket(socket);
   }
 
-  /** Dequeue the next waiting socket into a freed tunnel slot, if any. */
+  /** Dequeue the next waiting socket into a freed establishment slot, if any. */
   private promoteQueuedSocket(): void {
     if (this.stopped) return;
-    while (this.socketQueue.length > 0 && this.tunnels.size < MAX_CONCURRENT_TUNNELS) {
+    while (this.socketQueue.length > 0 && this.establishingCount() < MAX_CONCURRENT_TUNNELS) {
       const socket = this.socketQueue.shift()!;
+      const timer = this.queueTimers.get(socket);
+      if (timer) {
+        clearTimeout(timer);
+        this.queueTimers.delete(socket);
+      }
       if (socket.destroyed) continue;
       socket.resume();
       this.attachSocket(socket);
@@ -408,6 +435,17 @@ export class SshRelay {
     }
     this.tunnels.add(tunnel);
     tunnel.socket = socket;
+
+    // The tunnel holds an establishment slot only until the ssh child's first
+    // output, which means the handshake completed and the bridge is up; a
+    // handshake that dies first frees its slot through closeTunnel instead.
+    const established = (): void => {
+      if (!tunnel.establishing) return;
+      tunnel.establishing = false;
+      this.promoteQueuedSocket();
+    };
+    tunnel.child.stdout.once('data', established);
+    tunnel.child.stderr.once('data', established);
 
     let buffered = 0;
     let remoteBuffered = 0;
@@ -497,7 +535,7 @@ export class SshRelay {
     // stdin. The tunnel owner decides what that means; this listener only keeps
     // the failure from becoming an unhandled stream error.
     child.stdin.on('error', () => { /* handled by the tunnel owner */ });
-    return { child: child as ChildProcessWithoutNullStreams, socket: null, closing: false };
+    return { child: child as ChildProcessWithoutNullStreams, socket: null, closing: false, establishing: true };
   }
 
   private closeTunnel(tunnel: Tunnel): void {
