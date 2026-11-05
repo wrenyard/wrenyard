@@ -159,7 +159,7 @@ Usage:
   wrenyard todo list [--tag <tag>] [--config path] [--json]
   wrenyard todo add --title <t> [--request <text>] [--acceptance <text>] [--project <p>] [--depends-on <id>]... [--attach <path>]... [--config path] [--json]
   wrenyard todo show <id> [--config path] [--json]
-  wrenyard todo set-status <id> <open|in_progress|done|cancelled> [--config path] [--json]
+  wrenyard todo set-status <id> <open|in_progress|ready|blocked|done|cancelled> [--config path] [--json]
   wrenyard todo update <id> [--old-title <text> --title <text>] [--old-request <text> --request <text>] [--old-acceptance <text> --acceptance <text>] [--status <status>] [--project <p>] [--depends-on <id>]... [--attach <path>]... [--config path] [--json]
   wrenyard todo comment <id> --text <text> [--config path] [--json]
   wrenyard todo uncomment <id> --comment-id <6-hex-id> [--config path] [--json]

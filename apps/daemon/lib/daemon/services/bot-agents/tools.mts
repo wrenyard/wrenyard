@@ -151,8 +151,8 @@ const TODO_TOOL: ToolSpec = {
       },
       status: {
         type: 'string',
-        enum: ['open', 'in_progress', 'done', 'cancelled'],
-        description: 'New status; required for set_status.',
+        enum: ['open', 'in_progress', 'ready', 'blocked', 'done', 'cancelled'],
+        description: 'New status: open, in_progress, ready, blocked, done or cancelled; required for set_status.',
       },
       text: {
         type: 'string',
