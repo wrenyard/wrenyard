@@ -1,6 +1,7 @@
 import { MAINSTREAM_MODEL_IDS } from './mainstream.ts';
-import { INTELLIGENCE_TIERS, type RegisteredModel } from './types.ts';
+import { INTELLIGENCE_TIERS, REASONING_EFFORTS, type RegisteredModel } from './types.ts';
 import { defineModel } from './definitions/define.ts';
+import { CATALOG_METADATA } from './definitions/catalog-metadata.ts';
 import { alibabaModels } from './definitions/alibaba.ts';
 import { anthropicModels } from './definitions/anthropic.ts';
 import { bytedanceModels } from './definitions/bytedance.ts';
@@ -78,6 +79,27 @@ function validateModel(model: RegisteredModel, seen: Set<string>): void {
   }
   if (model.defaults.capabilities.length === 0) {
     throw new Error(`registered model ${model.id} capabilities must not be empty`);
+  }
+  const maxInputTokens = model.defaults.maxInputTokens;
+  if (maxInputTokens === undefined || !Number.isSafeInteger(maxInputTokens) || maxInputTokens <= 0) {
+    throw new Error(`registered model ${model.id} must declare a positive input token limit`);
+  }
+  const inputModalities = model.defaults.inputModalities;
+  if (!Array.isArray(inputModalities) || inputModalities.length === 0
+    || inputModalities.some((modality) => typeof modality !== 'string' || modality.trim() === '')
+    || new Set(inputModalities).size !== inputModalities.length) {
+    throw new Error(`registered model ${model.id} must declare unique non-empty input modalities`);
+  }
+  const efforts = model.defaults.reasoningEfforts;
+  if (efforts !== undefined) {
+    if (!Array.isArray(efforts) || new Set(efforts).size !== efforts.length
+      || efforts.some((effort) => !REASONING_EFFORTS.includes(effort))) {
+      throw new Error(`registered model ${model.id} reasoning efforts must be unique public levels`);
+    }
+  }
+  if (model.defaults.maxOutputTokens !== undefined
+    && (!Number.isSafeInteger(model.defaults.maxOutputTokens) || model.defaults.maxOutputTokens <= 0)) {
+    throw new Error(`registered model ${model.id} max output tokens must be a positive integer`);
   }
 }
 
@@ -349,6 +371,12 @@ const devinModels: readonly RegisteredModel[] = [
   }, { lab: 'cognition', family: 'swe' }),
 ];
 
+function withCatalogMetadata(model: RegisteredModel): RegisteredModel {
+  const metadata = CATALOG_METADATA[model.id];
+  if (metadata === undefined) return model;
+  return { ...model, defaults: { ...model.defaults, ...metadata } };
+}
+
 const BUILTIN_MODELS: readonly RegisteredModel[] = [
   ...deepseekModels,
   ...tencentModels,
@@ -375,7 +403,7 @@ const BUILTIN_MODELS: readonly RegisteredModel[] = [
   ...reflectionModels,
   ...devinModels,
   ...modelsDevCanonicalModels,
-];
+].map(withCatalogMetadata);
 
 function assertMainstreamModelIds(registry: ModelRegistry): void {
   if (new Set(MAINSTREAM_MODEL_IDS).size !== MAINSTREAM_MODEL_IDS.length) {

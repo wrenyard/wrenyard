@@ -46,6 +46,7 @@ import { TaskService, isTaskRunRejection } from '../core/task/service.mts'
 import { Ledger, createSession, createWorkspaceMemory, resolveModelMetadata, type Session } from '@wrenyard/session'
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
+import { withCatalogMetadata } from './services/endpoint-models.mts'
 import { createScheduler, type Scheduler } from './services/scheduler.mts'
 import { migrateDeviceBots } from './services/bot-agents/device-migration.mts'
 import { createBotAgentKernel, type AgentModelRoute, type BotAgentKernel } from './services/bot-agents/kernel.mts'
@@ -1231,10 +1232,14 @@ async function createForemanDaemonResources(
   const ipcPath = resolveWrenyardIpcPath(process.env, { config })
   // The single shared gateway connection snapshot, used by the session gateway,
   // the IPC gateway.connection surface and the environment injection below.
-  const gatewayConnectionSnapshot = async (): Promise<DaemonGatewayConnection> => ({
-    ...await gateway.connection(gatewayOrigin(boundPort)),
-    token: gatewayToken,
-  })
+  const gatewayConnectionSnapshot = async (): Promise<DaemonGatewayConnection> => {
+    const connection = await gateway.connection(gatewayOrigin(boundPort))
+    return {
+      ...connection,
+      models: connection.models.map(withCatalogMetadata),
+      token: gatewayToken,
+    }
+  }
   // Assigned before IPC routes are registered; saves invoked earlier in startup
   // safely skip list invalidation without touching a temporal-dead-zone binding.
   let providerServiceForInvalidation: ProviderService | undefined

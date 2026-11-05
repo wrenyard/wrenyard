@@ -123,7 +123,23 @@ export interface ModelDefaults {
   intelligence: IntelligenceTier;
   capabilities: readonly ModelCapability[];
   contextWindow: number;
+  /**
+   * Explicit maximum input tokens when the source states one separately from
+   * the total context window. `contextWindow` keeps its total-window meaning.
+   */
+  maxInputTokens?: number;
   maxOutputTokens?: number;
+  /**
+   * Adjustable reasoning levels the source declares for this identity. An empty
+   * array means the source establishes no adjustable level; an absent field
+   * means the source does not establish the ladder at all.
+   */
+  reasoningEfforts?: readonly ReasoningEffort[];
+  /**
+   * Full input modalities the source lists, including values outside the
+   * product's `ModelCapability` subset (for example `pdf` or `video`).
+   */
+  inputModalities?: readonly string[];
   pricing?: ModelPricing;
   /**
    * Default generation throughput after the first token, in tokens per second.
