@@ -7,8 +7,8 @@
  * root: the caller can only name a todo and its fields, never where it lives.
  */
 
-/** The valid todo statuses; a stored legacy `accepted` reads as `done`. */
-export type TodoStatus = 'open' | 'in_progress' | 'done' | 'cancelled'
+/** The valid todo statuses. */
+export type TodoStatus = 'open' | 'in_progress' | 'ready' | 'blocked' | 'done' | 'cancelled'
 
 /** A workspace todo as stored in its Markdown file. */
 export interface Todo {

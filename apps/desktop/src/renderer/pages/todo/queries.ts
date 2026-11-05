@@ -31,7 +31,7 @@ export function useTodosQuery() {
 }
 
 /** Statuses shown in the project sections. */
-export const ACTIVE_TODO_STATUSES = ['open', 'in_progress'] as const;
+export const ACTIVE_TODO_STATUSES = ['open', 'in_progress', 'ready', 'blocked'] as const;
 /** Statuses shown in the bottom completed section. */
 export const COMPLETED_TODO_STATUSES = ['done', 'cancelled'] as const;
 
@@ -52,6 +52,8 @@ export const PROJECTLESS_SECTION_LABEL = '未分项目';
 export const TODO_STATUS_LABEL: Record<Todo['status'], string> = {
   open: '未开始',
   in_progress: '进行中',
+  ready: '就绪',
+  blocked: '受阻',
   done: '已完成',
   cancelled: '已取消',
 };

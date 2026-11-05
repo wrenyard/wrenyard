@@ -33,13 +33,13 @@ export type {
 } from '@wrenyard/protocol/workspace'
 
 /** The complete, ordered set of valid todo statuses shared by every schema. */
-const TODO_STATUS_VALUES = ['open', 'in_progress', 'done', 'cancelled'] as const
+const TODO_STATUS_VALUES = ['open', 'in_progress', 'ready', 'blocked', 'done', 'cancelled'] as const
 
 /** Status discriminator shared by every todo schema. */
 const todoStatusProperty = {
   type: 'string',
   enum: TODO_STATUS_VALUES,
-  description: "The todo status: 'open', 'in_progress', 'done' or 'cancelled'.",
+  description: "The todo status: 'open', 'in_progress', 'ready', 'blocked', 'done' or 'cancelled'.",
 } as const satisfies JsonSchema
 
 /** The complete todo record returned by get/create/update and inside list. */

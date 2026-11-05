@@ -77,11 +77,11 @@ const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-
 /** The only front matter fields a todo file may declare. */
 const FRONT_MATTER_KEYS = new Set(['id', 'title', 'status', 'project', 'depends_on', 'created', 'updated', 'tags'])
 
-/** The valid todo statuses; a stored legacy `accepted` reads as `done`. */
-export type TodoStatus = 'open' | 'in_progress' | 'done' | 'cancelled'
+/** The valid todo statuses. */
+export type TodoStatus = 'open' | 'in_progress' | 'ready' | 'blocked' | 'done' | 'cancelled'
 
 /** The complete, ordered set of valid todo statuses. */
-export const TODO_STATUSES: readonly TodoStatus[] = ['open', 'in_progress', 'done', 'cancelled']
+export const TODO_STATUSES: readonly TodoStatus[] = ['open', 'in_progress', 'ready', 'blocked', 'done', 'cancelled']
 
 /** A workspace todo as stored in its Markdown file. */
 export interface Todo {
@@ -810,7 +810,7 @@ function readIndexRows(db: DatabaseInstance): TodoIndexRecord[] {
   return rows.map((row) => ({
     id: row.id,
     title: row.title,
-    status: row.status === 'accepted' ? 'done' : (row.status as TodoStatus),
+    status: row.status as TodoStatus,
     ...(row.project === null ? {} : { project: row.project }),
     depends_on: JSON.parse(row.depends_on) as string[],
     created: row.created,
@@ -842,9 +842,8 @@ function requireStatus(value: unknown, id: string): TodoStatus {
   return value as TodoStatus
 }
 
-/** Read a stored status; the retired `accepted` presents as `done`, never written back. */
+/** Read a stored status. */
 function readStatus(value: unknown, id: string): TodoStatus {
-  if (value === 'accepted') return 'done'
   return requireStatus(value, id)
 }
 

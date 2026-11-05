@@ -22,6 +22,8 @@ export interface StatusMeta {
 export const STATUS_META: Record<Todo['status'], StatusMeta> = {
   open: { Icon: Circle, tone: 'text-muted-foreground' },
   in_progress: { Icon: CircleDot, tone: 'text-primary' },
+  ready: { Icon: CircleCheck, tone: 'text-primary' },
+  blocked: { Icon: CircleSlash, tone: 'text-destructive' },
   done: { Icon: CircleCheck, tone: 'text-muted-foreground' },
   cancelled: { Icon: CircleSlash, tone: 'text-muted-foreground' },
 };
