@@ -5,9 +5,7 @@ import { cn } from 'cn';
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSub,
@@ -76,7 +74,7 @@ export interface ModelOption {
   quotaState?: 'abundant' | 'sufficient' | 'insufficient' | 'exhausted';
   /** How that state was obtained; absent when no quota was assessed. */
   quotaEvidence?: 'measured' | 'unknown_by_design' | 'not_obtained';
-  /** Per-provider quota summary shown in the group header. */
+  /** Per-provider quota summary carried with the route. */
   providerQuotaSummary?: string;
   /** Catalog intelligence tier; absent when unknown. */
   intelligence?: 'low' | 'mid' | 'high' | 'premium';
@@ -93,60 +91,9 @@ export interface ModelOption {
 
 export const AUTO_OPTION_VALUE = 'auto';
 
-/** Quota tiers in picker order; unknown quota ranks with sufficient supply. */
-function quotaTier(option: ModelOption): number {
-  switch (option.quotaState) {
-    case 'abundant': return 0;
-    case 'insufficient': return 2;
-    case 'exhausted': return 3;
-    default: return 1;
-  }
-}
-
-/** Intelligence tiers in picker order; an unknown tier ranks after mid. */
-function intelligenceTier(option: ModelOption): number {
-  switch (option.intelligence) {
-    case 'premium': return 0;
-    case 'high': return 1;
-    case 'mid': return 2;
-    default: return 3;
-  }
-}
-
 /** A route that carries a fault notice is ordered behind healthy ones. */
 function routeFaulted(option: ModelOption): boolean {
   return option.routeNotice !== undefined;
-}
-
-/** Route tier in picker order: healthy, then degraded by health record, then
- *  routes with an open fault. An open fault keeps priority over a health hint. */
-function routeTier(option: ModelOption): number {
-  if (option.routeDegraded === true) return 1;
-  return routeFaulted(option) ? 2 : 0;
-}
-
-/** Scored routes rank above unrated ones; higher scores rank first within each tier. */
-function compareRoutingScore(left: ModelOption, right: ModelOption): number {
-  const leftScored = left.routingScore !== undefined;
-  const rightScored = right.routingScore !== undefined;
-  if (leftScored !== rightScored) return Number(rightScored) - Number(leftScored);
-  if (leftScored && rightScored) return (right.routingScore ?? 0) - (left.routingScore ?? 0);
-  return 0;
-}
-
-/** Stable picker order: route tier → routing score → intelligence → quota → input order. */
-function orderPickerItems(items: readonly ModelOption[]): ModelOption[] {
-  return items
-    .map((option, index) => ({ option, index }))
-    .sort(
-      (left, right) =>
-        routeTier(left.option) - routeTier(right.option)
-        || compareRoutingScore(left.option, right.option)
-        || intelligenceTier(left.option) - intelligenceTier(right.option)
-        || quotaTier(left.option) - quotaTier(right.option)
-        || left.index - right.index,
-    )
-    .map(({ option }) => option);
 }
 
 /** Small label for a nearly-used-up option; a by-design unknown is never a number. */
@@ -183,7 +130,7 @@ export interface ModelPickerProps {
 }
 
 /** One option's truncating name and aligned supply indicators. */
-function ModelOptionContent({ option, compact = false }: { option: ModelOption; compact?: boolean }) {
+function ModelOptionContent({ option, compact = false, description }: { option: ModelOption; compact?: boolean; description?: string }) {
   const speed = option.badges?.find((badge) => badge.kind === 'turbo' || badge.kind === 'fast');
   const free = option.badges?.find((badge) => badge.kind === 'free');
   const quota = option.badges?.find((badge) => badge.kind === 'quota');
@@ -206,6 +153,9 @@ function ModelOptionContent({ option, compact = false }: { option: ModelOption; 
   return (
     <span className={compact ? 'flex min-w-0 max-w-full flex-1 flex-wrap items-center gap-2' : 'flex min-w-0 flex-1 items-center gap-1.5'}>
       <span className={compact ? 'min-w-0 max-w-full whitespace-normal [overflow-wrap:anywhere]' : 'min-w-0 truncate'}>{option.label}</span>
+      {!compact && description !== undefined && (
+        <span className="shrink-0 truncate text-xs text-muted-foreground">{description}</span>
+      )}
       {speed && slot(speed, speed.kind, 'flex shrink-0 items-center gap-1')}
       {!compact && free && slot(free, 'free', 'flex w-3.5 shrink-0 items-center justify-center')}
       {!compact && quota && slot(quota, 'quota', 'flex w-3.5 shrink-0 items-center justify-center')}
@@ -229,16 +179,17 @@ function SelectedModelIndicator() {
 }
 
 /**
- * One unified model picker: providers are labelled menu groups, each model is a
+ * One unified model picker: one flat list in connection order. Each model is a
  * submenu trigger (with a distinct selected-model mark) whose content is a radio
  * group of that model's supported reasoning efforts. Choosing an effort selects
  * that model and that exact level in one action. Values are opaque to the page.
  * The picker only chooses a model and an effort: Fast is a separate control that
- * lives outside it.
+ * lives outside it. A provider name is shown beside a model only when that
+ * model's displayed name would otherwise collide with another row.
  *
  * The popup is capped at `min(24rem, available viewport space)` with a fixed
  * search header; only the result list scrolls (scrollbars hidden). The search
- * field filters by model name/id and provider group name, and takes over the
+ * field filters by model name/id and provider name, and takes over the
  * keyboard so its text editing never reaches the menu's typeahead.
  */
 export function ModelPicker({ models, value, effort, onChange, disabled = false, placeholder = '选择模型', className, compactTrigger = false }: ModelPickerProps) {
@@ -246,48 +197,16 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
   const [query, setQuery] = useState('');
   /** The model whose effort submenu is open. */
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
-  /** Per-group expansion of the folded exhausted rows. */
-  const [expandedExhausted, setExpandedExhausted] = useState<Record<string, boolean>>({});
+  /** Expansion of the folded exhausted rows. */
+  const [expandedExhausted, setExpandedExhausted] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
 
-  const groups = useMemo(() => {
-    const map = new Map<string, ModelOption[]>();
-    for (const model of models) {
-      const bucket = map.get(model.group);
-      if (bucket) bucket.push(model);
-      else map.set(model.group, [model]);
-    }
-    return [...map.entries()]
-      .map(([group, items]) => {
-        const ordered = orderPickerItems(items);
-        return {
-          value: group,
-          items: ordered,
-          quotaSummary: ordered.find((item) => item.providerQuotaSummary !== undefined)?.providerQuotaSummary,
-        };
-      })
-      // Groups keep the same health → intelligence → quota ordering, keyed on
-      // each group's first item; input group order breaks the tie.
-      .map((group, index) => ({ group, index }))
-      .sort((left, right) => {
-        const a = left.group.items[0];
-        const b = right.group.items[0];
-        if (a === undefined || b === undefined) return left.index - right.index;
-        return (
-          routeTier(a) - routeTier(b)
-          || compareRoutingScore(a, b)
-          || intelligenceTier(a) - intelligenceTier(b)
-          || quotaTier(a) - quotaTier(b)
-          || left.index - right.index
-        );
-      })
-      .map(({ group }) => group);
+  const labelCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const model of models) counts.set(model.label, (counts.get(model.label) ?? 0) + 1);
+    return counts;
   }, [models]);
-
-  const toggleExhausted = (group: string): void => {
-    setExpandedExhausted((current) => ({ ...current, [group]: current[group] !== true }));
-  };
 
   const selected = useMemo(
     () => models.find((model) => model.value === value) ?? null,
@@ -304,24 +223,23 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
     : `${selected.label}，思考强度：${effortLabel}`;
 
   const normalizedQuery = query.trim().toLowerCase();
-  const visibleGroups = useMemo(() => {
-    if (normalizedQuery === '') return groups;
-    return groups
-      .map((group) => {
-        // A matching provider name keeps that provider's whole list.
-        if (group.value.toLowerCase().includes(normalizedQuery)) return group;
-        return {
-          value: group.value,
-          items: group.items.filter(
-            (item) =>
-              item.label.toLowerCase().includes(normalizedQuery) ||
-              item.value.toLowerCase().includes(normalizedQuery),
-          ),
-          quotaSummary: group.quotaSummary,
-        };
-      })
-      .filter((group) => group.items.length > 0);
-  }, [groups, normalizedQuery]);
+  const visible = useMemo(() => {
+    if (normalizedQuery === '') return models;
+    return models.filter(
+      (item) =>
+        item.label.toLowerCase().includes(normalizedQuery) ||
+        item.value.toLowerCase().includes(normalizedQuery) ||
+        item.group.toLowerCase().includes(normalizedQuery),
+    );
+  }, [models, normalizedQuery]);
+  // The selected option and free supply are never folded away; a search shows
+  // every matching exhausted row in place instead.
+  const exhausted = normalizedQuery === ''
+    ? visible.filter(
+        (option) => option.quotaState === 'exhausted' && option.value !== value && option.free !== true,
+      )
+    : [];
+  const folded = exhausted.length > 0 && !expandedExhausted ? new Set(exhausted) : undefined;
 
   // The open popup moves focus onto its menu items; hand focus to the search
   // field instead, and re-assert it on the next frame in case the menu's own
@@ -374,6 +292,7 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
     const checked = isCurrent ? effort : option.defaultEffort;
     const muted = quotaMuted(option) || routeFaulted(option);
     const notice = option.routeNotice ?? (muted ? quotaNotice(option) : undefined);
+    const description = (labelCounts.get(option.label) ?? 0) > 1 ? option.group : undefined;
     const rowClass = cn(
       isCurrent && 'bg-accent/60 font-medium',
       isCurrent && option.quotaState === 'exhausted' && 'text-destructive',
@@ -386,7 +305,7 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
           onClick={() => onChange(option.value, checked)}
           className={rowClass}
         >
-          <ModelOptionContent option={option} />
+          <ModelOptionContent option={option} description={description} />
           {notice !== undefined && (
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">{notice}</span>
           )}
@@ -401,7 +320,7 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
         onOpenChange={(next) => setOpenSubmenu(next ? option.value : null)}
       >
         <DropdownMenuSubTrigger className={cn('[&>svg:last-child]:hidden', rowClass)}>
-          <ModelOptionContent option={option} />
+          <ModelOptionContent option={option} description={description} />
           {notice !== undefined && (
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">{notice}</span>
           )}
@@ -514,45 +433,24 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
             <span>自动</span>
             {value === AUTO_OPTION_VALUE && <SelectedModelIndicator />}
           </DropdownMenuItem>
-          {visibleGroups.length === 0 ? (
+          {visible.length === 0 ? (
             <p className="px-2 py-6 text-center text-sm text-muted-foreground">No models found</p>
           ) : (
-            visibleGroups.map((group) => {
-              // The selected option and free supply are never folded away; a
-              // search shows every matching exhausted row in place instead.
-              const exhausted = group.items.filter(
-                (option) =>
-                  option.quotaState === 'exhausted' && option.value !== value && option.free !== true,
-              );
-              const expandable = normalizedQuery === '' && exhausted.length > 0;
-              const expanded = expandable && expandedExhausted[group.value] === true;
-              const folded = expandable && !expanded ? new Set(exhausted) : undefined;
-              return (
-                <DropdownMenuGroup key={group.value}>
-                  <DropdownMenuLabel className="flex items-baseline justify-between gap-2">
-                    <span>{group.value}</span>
-                    {group.quotaSummary !== undefined && (
-                      <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
-                        {group.quotaSummary}
-                      </span>
-                    )}
-                  </DropdownMenuLabel>
-                  {group.items.filter((option) => folded?.has(option) !== true).map(renderOption)}
-                  {expandable && (
-                    <DropdownMenuItem
-                      closeOnClick={false}
-                      onClick={() => toggleExhausted(group.value)}
-                      className="text-muted-foreground"
-                    >
-                      <span>额度用尽（{exhausted.length}）</span>
-                      <ChevronDown
-                        className={cn('ml-auto size-3.5 transition-transform', expanded && 'rotate-180')}
-                      />
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuGroup>
-              );
-            })
+            <>
+              {visible.filter((option) => folded?.has(option) !== true).map(renderOption)}
+              {exhausted.length > 0 && (
+                <DropdownMenuItem
+                  closeOnClick={false}
+                  onClick={() => setExpandedExhausted((current) => !current)}
+                  className="text-muted-foreground"
+                >
+                  <span>额度用尽（{exhausted.length}）</span>
+                  <ChevronDown
+                    className={cn('ml-auto size-3.5 transition-transform', expandedExhausted && 'rotate-180')}
+                  />
+                </DropdownMenuItem>
+              )}
+            </>
           )}
         </div>
       </DropdownMenuContent>

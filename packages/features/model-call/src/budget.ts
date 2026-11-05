@@ -73,10 +73,13 @@ export interface ContextBudget {
  * {@link boundedOutputReservation}: reserving a huge declared maximum verbatim
  * would leave almost no input budget, so a request never reserves more than the
  * shared cap. A per-call cap that is already smaller than that bound still wins.
- * The resolved `requestMaxOutputTokens` is the single cap handed back for both
- * this check and the serialized transport request: the per-call cap is reserved
- * verbatim (never raised above the source maximum) and, with none, the source
- * maximum is reserved exactly as before.
+ * The request output is then capped to the room left after the estimated input:
+ *
+ *   min(requested cap or source max, source max when known, contextWindow - estimatedInputTokens)
+ *
+ * Input that fits the window therefore passes, and only an input that leaves no
+ * positive room fails. The resolved `requestMaxOutputTokens` is the single cap
+ * handed back for both this check and the serialized transport request.
  */
 export function checkContextBudget(
   publicId: string,
@@ -89,42 +92,32 @@ export function checkContextBudget(
   const { contextWindow } = metadata;
   const sourceMax = boundedOutputReservation(metadata.maxOutputTokens);
 
-  // No declared window or maximum: nothing to check, exactly as before.
-  if (contextWindow === undefined || sourceMax === undefined) {
-    return { metadata, estimatedInputTokens, ok: true };
+  const requested = requestedMaxOutputTokens ?? sourceMax;
+  if (requested === undefined) return { metadata, estimatedInputTokens, ok: true };
+  const bounded = sourceMax === undefined ? requested : Math.min(requested, sourceMax);
+  if (contextWindow === undefined) {
+    return { metadata, estimatedInputTokens, requestMaxOutputTokens: bounded, ok: true };
   }
-  // With no explicit per-call cap the legacy reservation is the source maximum;
-  // the protocol default is still what the transport sends, so no cap is added.
-  if (requestedMaxOutputTokens === undefined) {
-    if (estimatedInputTokens + sourceMax > contextWindow) {
-      return {
-        metadata,
-        estimatedInputTokens,
-        ok: false,
-        reason: `Estimated input ${estimatedInputTokens} + max output ${sourceMax} exceeds the context window ${contextWindow}`,
-      };
-    }
-    return { metadata, estimatedInputTokens, ok: true };
-  }
-  const reserved = Math.min(requestedMaxOutputTokens, sourceMax);
-  if (estimatedInputTokens + reserved > contextWindow) {
+  const room = contextWindow - estimatedInputTokens;
+  if (room <= 0) {
     return {
       metadata,
       estimatedInputTokens,
       ok: false,
-      reason: `Estimated input ${estimatedInputTokens} + max output ${reserved} exceeds the context window ${contextWindow}`,
+      reason: `Estimated input ${estimatedInputTokens} leaves no room in the context window ${contextWindow}`,
     };
   }
-  return { metadata, estimatedInputTokens, requestMaxOutputTokens: reserved, ok: true };
+  return { metadata, estimatedInputTokens, requestMaxOutputTokens: Math.min(bounded, room), ok: true };
 }
 
 /**
  * The budget facts compaction and the turn need, resolved exactly as
- * {@link checkContextBudget} resolves them. `threshold` is the input size above
- * which a request compacts before sending: the lower of half the room left
- * after the output reservation and the caller-supplied
- * `compactionThresholdCap`; the cap is caller policy, so a caller without a
- * compaction threshold simply omits it.
+ * {@link checkContextBudget} resolves them: `outputReservation` is the per-call
+ * cap (or source maximum) bounded by the source maximum and the room left after
+ * the estimated input. `threshold` is the input size above which a request
+ * compacts before sending: the lower of half the room left after the output
+ * reservation and the caller-supplied `compactionThresholdCap`; the cap is
+ * caller policy, so a caller without a compaction threshold simply omits it.
  */
 export interface ContextBudgetFacts {
   contextWindow?: number;
@@ -147,11 +140,18 @@ export function contextBudgetOf(
   const estimatedInputTokens = estimateInputTokens(messages);
   const { contextWindow } = metadata;
   const sourceMax = boundedOutputReservation(metadata.maxOutputTokens);
-  const outputReservation = requestedMaxOutputTokens === undefined
-    ? sourceMax
-    : sourceMax === undefined
-      ? undefined
-      : Math.min(requestedMaxOutputTokens, sourceMax);
+  const requested = requestedMaxOutputTokens ?? sourceMax;
+  const bounded = sourceMax === undefined
+    ? requested
+    : requested === undefined
+      ? sourceMax
+      : Math.min(requested, sourceMax);
+  const room = contextWindow === undefined ? undefined : contextWindow - estimatedInputTokens;
+  const outputReservation = bounded === undefined
+    ? undefined
+    : room === undefined
+      ? bounded
+      : Math.min(bounded, room);
   const threshold = contextWindow === undefined || outputReservation === undefined
     ? undefined
     : Math.min(Math.floor(0.5 * (contextWindow - outputReservation)), compactionThresholdCap ?? Number.MAX_SAFE_INTEGER);
