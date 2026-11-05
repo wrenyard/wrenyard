@@ -70,10 +70,7 @@ export interface DaemonSessionHostOptions {
   workspaceRoot: string
   stateRoot: string
   gateway(): Promise<WrenyardGatewayConnection>
-  routeStatus?: SessionHost['routeStatus']
   selectAuxiliary: SessionHost['selectAuxiliary']
-  /** Current routing.exclude check for an open route wait. */
-  isRouteExcluded?: SessionHost['isRouteExcluded']
   taskService: TaskService
   /** Operation-component snapshots used to report the environment's tools. */
   operationComponents?: Pick<OperationComponents, 'list'>
@@ -259,7 +256,6 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     gateway: options.gateway,
     resolveInferenceProvider: options.resolveInferenceProvider,
     selectAuxiliary: (role, input) => options.selectAuxiliary(role, input),
-    ...(options.isRouteExcluded === undefined ? {} : { isRouteExcluded: (model: string) => options.isRouteExcluded!(model) }),
     // Read at call time, so a switch the user toggles now applies to a turn
     // that is already running without a restart.
     ...(options.taskSettingsConfigPath === undefined
@@ -270,7 +266,6 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
             retryBots: () => readGlobalRetrySwitches(options.taskSettingsConfigPath!).retryBots,
           },
         }),
-    routeStatus: options.routeStatus,
     recordAuxiliaryRun: (input) => auxiliaryRunStoreOf().insert(toAuxiliaryRunRecord(input)),
     /**
      * Read-only rank-1 preview of every auxiliary role. Reuses the injected

@@ -167,10 +167,11 @@ export function modelListEntry(model: PublicGatewayModel): Record<string, unknow
   const phase = (model as { routePhase?: unknown }).routePhase;
   const faultKind = (model as { faultKind?: unknown }).faultKind;
   return {
-    // The model identity in every protocol listing is the bare registered id.
-    // Provider selection is a separate dimension (the X-Wrenyard-Provider
-    // request header); `publicId` is only the internal route key.
-    id: model.id,
+    // The protocol `/models` listing publishes the provider-qualified public id
+    // (`publicId`) as the model identity. A request may send that exact id in
+    // `body.model`; native clients may still send the bare registered id plus
+    // the X-Wrenyard-Provider header.
+    id: model.publicId,
     object: 'model',
     owned_by: model.provider,
     display_name: model.displayName,

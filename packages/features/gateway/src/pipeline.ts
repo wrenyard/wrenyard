@@ -307,12 +307,11 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         const tooLarge = error instanceof Error && error.message === 'request_too_large';
         return reject(tooLarge ? 413 : 400, tooLarge ? 'Request body too large' : 'Request body must be a JSON object');
       }
-      if (typeof body.model !== 'string') return reject(400, 'model must be a registered model id string');
+      if (typeof body.model !== 'string') return reject(400, 'model must be a model id string');
 
-      // The request identity is the bare registered model id; the provider is a
-      // separate dimension carried by X-Wrenyard-Provider. A qualified id from
-      // the retired route namespace and a wire alias are both refused with an
-      // actionable message instead of being guessed.
+      // The request identity is either the protocol `/models` public id
+      // (`provider/model`) or the bare registered id plus the X-Wrenyard-Provider
+      // header. A wire alias is refused with an actionable message.
       const requestedModel = body.model.trim();
       const providerHeader = localHeader(request, GATEWAY_HEADERS.provider);
       if (request.headers[GATEWAY_HEADERS.provider] !== undefined && providerHeader === undefined) {
@@ -333,7 +332,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         return reject(404, error instanceof Error ? error.message : 'Unknown model', { publicModel: requestedModel });
       }
       // The internal route key stays provider-qualified for health, quota and
-      // statistics; the response identity is the requested registered id.
+      // statistics; the response identity is the requested model id.
       const publicModel = resolved.publicId;
       const registeredModel = resolved.model.id;
       const target = { publicModel, provider: resolved.provider.id };

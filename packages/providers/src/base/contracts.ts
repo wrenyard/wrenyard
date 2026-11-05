@@ -214,9 +214,9 @@ export interface UpstreamRouteErrorInput {
 
 export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel'> & {
   provider: string;
-  /** Internal, provider-qualified route key (`provider/id`). It is the key for
-   * route health, quota and statistics and is never the model's public
-   * identity: the entry's `id` is the registered model id. */
+  /** Provider-qualified public model identity (`provider/id`), also the key for
+   * route health, quota and statistics. The protocol `/models` listing and the
+   * session transport use this value; `id` stays the bare registered id. */
   publicId: string;
   routeState?: GatewayRouteState;
   routeUntil?: string;

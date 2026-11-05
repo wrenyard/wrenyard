@@ -1498,7 +1498,6 @@ async function createForemanDaemonResources(
           input,
         ),
         resolveInferenceProvider: id => catalog.provider(id),
-        routeStatus: model => gateway.routeStatus(model),
       }),
     })
     // Single shared TaskGraphService used by all RPC transports. Task nodes
@@ -1521,7 +1520,6 @@ async function createForemanDaemonResources(
       operationComponents: runtime.operationComponents,
       taskSettingsConfigPath: taskSettingsService.authoritativeConfigPath,
       router: rpcRouter,
-      routeStatus: model => gateway.routeStatus(model),
       selectAuxiliary: (role, input) => {
         resetAuxiliaryRouteHealth()
         return selectRoutesByRequirement(
@@ -1531,7 +1529,6 @@ async function createForemanDaemonResources(
           input,
         )
       },
-      isRouteExcluded,
       // The session's main inference validates against the same product-wired
       // catalog already injected into the gateway/provider.list surface, so a
       // CodeBuddy model is only offered after the daemon read the real install.

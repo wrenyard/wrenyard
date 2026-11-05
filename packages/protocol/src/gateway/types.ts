@@ -10,8 +10,9 @@ export interface GatewayModel {
   /** The registered model identity. It is never a provider-qualified id and
    * never an upstream wire spelling. */
   id: string;
-  /** Internal provider-scoped route key (`provider/id`) used for route health,
-   * quota and statistics. Provider selection is a separate dimension. */
+  /** Provider-qualified public identity (`provider/id`), also the key for
+   * route health, quota and statistics. The protocol `/models` listing publishes
+   * it as the model id and the session transport sends it verbatim. */
   publicId: string;
   provider: string;
   /**

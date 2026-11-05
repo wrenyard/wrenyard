@@ -1,8 +1,6 @@
-import { randomUUID } from 'node:crypto'
 import type { WrenyardGatewayConnection } from '@wrenyard/control'
 import type { ProviderDefinition } from '@wrenyard/providers'
 import type { ToolCall, ToolChoice, ToolSpec } from '@wrenyard/agent-loop'
-import type { GatewayRouteStatus } from '@wrenyard/providers/base'
 import type { ReasoningEffort } from '@wrenyard/models'
 import {
   callModelAttempt,
@@ -15,8 +13,8 @@ import {
 export interface AuxiliaryRoute { model: string; reasoningEffort: ReasoningEffort }
 
 /**
- * First-response timeout the task-output compile forwards to the Gateway
- * (seconds), matching the session auxiliary caller.
+ * Local first-response timeout the task-output compile uses (seconds), matching
+ * the session auxiliary caller.
  */
 const TASK_OUTPUT_FIRST_RESPONSE_TIMEOUT_SEC = 30
 
@@ -36,10 +34,8 @@ export function createTaskOutputModelCallPort(options: {
     input?: { toolChoice?: ToolChoice },
   ) => Promise<readonly AuxiliaryRoute[]> | readonly AuxiliaryRoute[]
   resolveInferenceProvider: (providerId: string) => ProviderDefinition | undefined
-  routeStatus?: (model: string) => GatewayRouteStatus | undefined
 }): TaskOutputModelCallPort {
   const transport = createModelTransport({ gateway: options.gateway })
-  const sessionId = `task-output-compile-${randomUUID()}`
 
   return async (request) => {
     // Only the task-output compile calls this port; any other role reaching it
@@ -64,9 +60,7 @@ export function createTaskOutputModelCallPort(options: {
       messages: request.messages,
       tools: request.tools,
       ...(request.toolChoice === undefined ? {} : { toolChoice: request.toolChoice }),
-      attribution: { role: 'task-output', sessionId },
       firstResponseTimeoutSec: TASK_OUTPUT_FIRST_RESPONSE_TIMEOUT_SEC,
-      attemptId: randomUUID(),
       signal,
       resolveProvider: options.resolveInferenceProvider,
     })

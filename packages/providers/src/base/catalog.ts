@@ -603,18 +603,17 @@ export class Catalog {
   }
 
   /**
-   * Resolve one Gateway request. `selector` carries the bare registered model
-   * id and an optional provider; a caller may also pass the two parts directly.
+   * Resolve one Gateway request. `selector` carries either the provider-qualified
+   * public id (`provider/model`, the identity the protocol `/models` listing
+   * publishes) or the bare registered model id plus an optional provider header.
    *
    * An explicit provider always wins. Without one, the provider is inferred only
    * when exactly one provider offers the registered id on this protocol —
-   * ambiguity is rejected instead of guessing. Qualified ids (`provider/model`)
-   * and historical wire aliases are not accepted as new request identities:
-   * both describe a different namespace and must be migrated by the caller.
+   * ambiguity is rejected instead of guessing. Historical wire aliases are not
+   * accepted as new request identities.
    *
-   * The returned `publicId` stays provider-qualified because it is the internal
-   * route key for health, quota and statistics; the public identity of the
-   * resolved model is always `model.id`.
+   * The returned `publicId` stays provider-qualified because it is the public
+   * identity and the internal route key for health, quota and statistics.
    */
   resolveGatewayModel(
     protocol: GatewayProtocol,
@@ -622,20 +621,34 @@ export class Catalog {
     providerID?: string,
     credentialAvailableProviderIDs: ReadonlySet<string> = new Set(),
   ): ResolvedGatewayModel {
-    const requestedModelID = (typeof selector === 'string' ? selector : selector.model).trim();
+    const rawModelID = (typeof selector === 'string' ? selector : selector.model).trim();
     const requestedProviderID = (typeof selector === 'string' ? providerID : selector.provider)?.trim();
-    if (requestedModelID === '') throw new Error('model must be a registered model id');
-    // A registered id never contains the provider separator; a qualified value
-    // belongs to the old public-route namespace and is rejected explicitly.
-    if (requestedModelID.includes('/')) {
+    if (rawModelID === '') throw new Error('model must be a registered model id');
+    // A qualified id names its provider in the same value; a bare id keeps the
+    // provider header (or inference) as its second dimension.
+    const separator = rawModelID.indexOf('/');
+    const qualifiedProviderID = separator > 0 && separator < rawModelID.length - 1
+      ? rawModelID.slice(0, separator)
+      : undefined;
+    if (separator !== -1 && qualifiedProviderID === undefined) {
+      throw new Error(`invalid model identity: ${rawModelID}`);
+    }
+    const requestedModelID = qualifiedProviderID === undefined
+      ? rawModelID
+      : rawModelID.slice(separator + 1);
+    if (qualifiedProviderID !== undefined && requestedProviderID !== undefined
+      && requestedProviderID !== '' && requestedProviderID !== qualifiedProviderID) {
       throw new Error(
-        `model must be a registered model id, not a provider-qualified id: ${requestedModelID}; send X-Wrenyard-Provider to select the provider`,
+        `model ${rawModelID} names provider ${qualifiedProviderID}, but the provider selector names ${requestedProviderID}`,
       );
     }
-    const provider = requestedProviderID === undefined || requestedProviderID === ''
+    const resolvedProviderID = requestedProviderID === undefined || requestedProviderID === ''
+      ? qualifiedProviderID
+      : requestedProviderID;
+    const provider = resolvedProviderID === undefined
       ? this.inferGatewayProvider(protocol, requestedModelID, credentialAvailableProviderIDs)
-      : this.providersByID.get(requestedProviderID);
-    if (!provider) throw new Error(`unknown provider: ${requestedProviderID}`);
+      : this.providersByID.get(resolvedProviderID);
+    if (!provider) throw new Error(`unknown provider: ${resolvedProviderID}`);
     // Wire aliases stay private: a new request names the registered id only.
     if (provider.modelAliases?.[requestedModelID] !== undefined) {
       throw new Error(

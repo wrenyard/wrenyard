@@ -104,33 +104,11 @@ export function supportsSession(model: { protocols?: readonly string[] }): boole
 /* ── Upstream retry hint ──────────────────────────────────────────────────── */
 
 /**
- * Where a normalized failure originated. `upstream` is a real supplier
- * response, connection failure or stream fault; `admission` is the local
- * Gateway circuit refusing to admit the request, which never reached upstream,
- * so it must never consume the upstream retry count or extend a cooldown.
- */
-export type ModelFailureSource = 'upstream' | 'admission';
-
-/**
- * Why the transport is waiting before its next attempt. `admission` is waiting
- * for permission to probe a locally blocked route; `recovery` is a guaranteed
+ * Why the session is waiting before its next attempt: `recovery` is a guaranteed
  * wait until an adopted not-before instant; `quota_exhausted` is waiting on a
  * free-quota block with a known or unknown reset time.
  */
-export type ModelWaitReason = 'admission' | 'recovery' | 'quota_exhausted';
-
-/**
- * Local route-health read before an attempt: when the route admits requests
- * again. `final` is set when the call must not be sent or waited for at all (an
- * exhausted quota with a stated reset) and is the reason the turn ends with.
- */
-export type ModelPreflightResult = { notBeforeMs: number; faultState?: string; final?: string; excluded?: boolean };
-
-/** Request attribution metadata; never sent to the supplier. */
-export interface ModelAttribution {
-  role?: string;
-  sessionId?: string;
-}
+export type ModelWaitReason = 'recovery' | 'quota_exhausted';
 
 /** One unified model call. The retry policy is fixed inside the transport. */
 export interface ModelRequest {
@@ -153,25 +131,12 @@ export interface ModelRequest {
   maxOutputTokens?: number;
   /** Stable prefix-cache key, mapped where the protocol has one. */
   cacheKey?: string;
-  /** Attribution metadata for the Gateway event; never sent upstream. */
-  attribution?: ModelAttribution;
   /**
-   * First-response timeout in whole seconds (1–600) for streaming Gateway
-   * requests. Omitted values use the Gateway default (120 s).
+   * Local first-response timeout in whole seconds: the call is aborted when no
+   * first content arrives after the request starts. Omitted values default to
+   * 120 seconds.
    */
   firstResponseTimeoutSec?: number;
-  /**
-   * Gateway-only correlation id of this attempt, sent as an internal header. It
-   * lets the Gateway tie a client-reported fetch failure to the exact attempt it
-   * already knows about, so one attempt is never double-counted.
-   */
-  attemptId?: string;
-  /**
-   * Optional route-health pre-check before the single upstream attempt: a
-   * `final` message ends without sending; a future `notBeforeMs` is waited out
-   * (honouring abort) before the one send.
-   */
-  preflight?: () => ModelPreflightResult | undefined;
   signal: AbortSignal;
   /** Called for every event of the call, in arrival order. */
   onEvent?: (event: ModelEvent) => void;
@@ -184,14 +149,11 @@ export interface ModelRequest {
  * only when an upstream hint was actually adopted for that retry; an ordinary
  * exponential-backoff retry never carries it.
  *
- * `wait` is the recovery wait: the transport is not retrying an upstream
- * failure but waiting until an absolute not-before instant — a local Gateway
- * admission refusal (never counted as an upstream retry) or a guaranteed
- * recovery after an adopted hint. `wait.reason` distinguishes waiting for
- * permission to probe from a granted recovery and `wait.retryAt` is the exact
- * instant the next probe/recovery is due. It is absent when no real instant is
- * known, so an unknown recovery time is reported as unknown rather than as a
- * fallback recheck delay.
+ * `wait` is the recovery wait: the transport is waiting until an absolute
+ * not-before instant after an adopted hint. `wait.retryAt` is the exact instant
+ * the next attempt is due. It is absent when no real instant is known, so an
+ * unknown recovery time is reported as unknown rather than as a fallback
+ * recheck delay.
  */
 export type ModelEvent =
   | { type: 'text'; delta: string }

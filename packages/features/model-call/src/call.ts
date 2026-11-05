@@ -14,8 +14,6 @@
  * deliberately does not do: it never selects a route, retries, backs off,
  * switches candidates, strips image content by role, applies a caller's
  * output-cap policy, starts or finishes any span/record, or persists anything.
- * The role in `attribution.role` is an opaque label forwarded to the Gateway for
- * attribution and never drives behaviour here.
  */
 import type { ProviderDefinition } from '@wrenyard/providers/base';
 import { PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
@@ -24,9 +22,7 @@ import {
   abortError,
   ModelError,
   type Message,
-  type ModelAttribution,
   type ModelEvent,
-  type ModelPreflightResult,
   type ModelRequest,
   type ModelResult,
   type ModelTransport,
@@ -48,20 +44,14 @@ export interface ModelCallAttemptInput {
   maxOutputTokens?: number;
   tools?: readonly ToolSpec[];
   toolChoice?: ToolChoice;
-  /** Opaque attribution label forwarded as Gateway headers; never interpreted. */
-  attribution?: ModelAttribution;
   /** Request cache key forwarded verbatim. */
   cacheKey?: string;
-  /** Caller-supplied first-response timeout (seconds); absent uses the Gateway default. */
+  /** Caller-supplied local first-response timeout (seconds); absent uses 120 s. */
   firstResponseTimeoutSec?: number;
-  /** Optional route-admission pre-check the transport waits out before the send. */
-  preflight?: () => ModelPreflightResult | undefined;
-  /** Gateway-only attempt correlation id forwarded verbatim. */
-  attemptId?: string;
   /**
    * Cancellation signal for the attempt. The transport call is raced against
    * it and settles promptly even while the transport is still awaiting the
-   * lazy gateway lookup, route admission or a stalled stream.
+   * lazy gateway lookup or a stalled stream.
    */
   signal: AbortSignal;
   onEvent?: (event: ModelEvent) => void;
@@ -108,14 +98,11 @@ export async function callModelAttempt(input: ModelCallAttemptInput): Promise<Mo
     messages: input.messages,
     reasoningEffort: sentEffort,
     ...(input.fast === undefined ? {} : { fast: input.fast }),
-    ...(input.attribution === undefined ? {} : { attribution: input.attribution }),
     ...(input.cacheKey === undefined ? {} : { cacheKey: input.cacheKey }),
     ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),
     ...(input.tools === undefined ? {} : { tools: input.tools }),
     ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
     ...(input.firstResponseTimeoutSec === undefined ? {} : { firstResponseTimeoutSec: input.firstResponseTimeoutSec }),
-    ...(input.attemptId === undefined ? {} : { attemptId: input.attemptId }),
-    ...(input.preflight === undefined ? {} : { preflight: input.preflight }),
     signal: input.signal,
     ...(input.onEvent === undefined ? {} : { onEvent: input.onEvent }),
   };

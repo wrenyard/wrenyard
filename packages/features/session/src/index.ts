@@ -270,10 +270,6 @@ export function createSession(host: SessionHost, options?: CreateSessionOptions)
       const executor = createCallRunner({
         transport: createModelTransport({ gateway: () => host.gateway() }),
         selectAuxiliary: (role, input) => host.selectAuxiliary(role, input),
-        ...(host.isRouteExcluded === undefined ? {} : {
-          isRouteExcluded: (model: string) => host.isRouteExcluded!(model),
-        }),
-        ...(host.routeStatus === undefined ? {} : { routeStatus: (model: string) => host.routeStatus!(model) }),
         ...(options?.selectAutomaticRoutes === undefined
           ? {}
           : { selectAutomaticRoutes: () => options.selectAutomaticRoutes!() }),
@@ -282,7 +278,6 @@ export function createSession(host: SessionHost, options?: CreateSessionOptions)
           : { retryPolicy: options.retryPolicy }),
         resolveProvider: (id) => host.resolveInferenceProvider(id),
         cacheKey: sessionId,
-        sessionId,
         append: recorder.report,
         ...(host.now === undefined ? {} : { now: () => host.now!() }),
       });

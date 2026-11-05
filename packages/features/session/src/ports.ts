@@ -56,18 +56,10 @@ export interface SessionHost {
   /** The product-wired provider definitions main inference validates its
    *  target against. */
   resolveInferenceProvider(providerId: string): ProviderDefinition | undefined;
-  /**
-   * In-memory Gateway state of a `provider/model` route; never queries a
-   * provider. The typed detail (`phase`, `resets`, `faultKind`) lets
-   * a caller skip an open route instead of only a legacy block.
-   */
-  routeStatus?(model: string): import('@wrenyard/providers/base').GatewayRouteStatus | undefined;
   selectAuxiliary(
     role: import('./model/roles.ts').AuxiliaryCallRole,
     input?: { toolChoice?: ToolChoice },
   ): Promise<readonly import('./model/request.ts').AuxiliaryRoute[]>;
-  /** Whether routing.exclude currently names a `provider/model` route. */
-  isRouteExcluded?(model: string): boolean;
   /**
    * Live global retry switches for main reasoning, read at call time: an absent
    * policy or an absent getter means retries are on.

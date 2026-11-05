@@ -17,8 +17,7 @@
  * automatic candidate after two consecutive failures on the same model. An
  * auxiliary call uses the route the selector ranked first.
  */
-import { randomUUID } from 'node:crypto';
-import type { GatewayRouteStatus, ProviderDefinition } from '@wrenyard/providers/base';
+import type { ProviderDefinition } from '@wrenyard/providers/base';
 import { PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
 import {
   abortError,
@@ -31,7 +30,6 @@ import {
   type ModelMetrics,
   type ModelResult,
   type ModelTransport,
-  type ModelPreflightResult,
   type ModelWaitReason,
   type ToolCall,
   type ToolSpec,
@@ -77,8 +75,8 @@ export const CALL_ROLES = ['reason', 'memory-search', 'search', 'dispatch', 'rep
 export type CallRole = (typeof CALL_ROLES)[number];
 
 /**
- * First-response timeout auxiliary roles pass to the Gateway (seconds). Main
- * reasoning omits the header and uses the Gateway default (120 s).
+ * Local first-response timeout auxiliary roles use (seconds). Main reasoning
+ * uses the transport default (120 s).
  */
 export const AUXILIARY_FIRST_RESPONSE_TIMEOUT_SEC = 30;
 
@@ -97,12 +95,6 @@ export interface ReasoningRetryPolicy {
   retrySessions?: () => boolean;
   retryBots?: () => boolean;
 }
-
-/**
- * Route health the runner reads: the Gateway's typed route status. A present
- * open status means the route is blocked until `until`.
- */
-export type RouteHealth = GatewayRouteStatus;
 
 /** Output-token allowance for the one next-input suggestion call (384 tokens). */
 export const SUGGESTION_MAX_TOKENS = 384;
@@ -126,9 +118,8 @@ export interface CallErrorFact {
   kind: ModelErrorKind;
   status?: number;
   /**
-   * The earliest instant the failed call may be retried, when the route health
-   * a bounded failover read gives one. It is not an attempt record: a route
-   * that was never called still reports its own retry instant here.
+   * The earliest instant the failed call may be retried, when the upstream
+   * supplied one. It is not an attempt record.
    */
   retryAt?: string;
   /** Supplier's original message. */
@@ -222,10 +213,6 @@ export interface CallRunnerOptions {
   resolveProvider?: (providerId: string) => ProviderDefinition | undefined;
   /** The one unified transport every role calls. */
   transport: ModelTransport;
-  /** Current Gateway state of a route; a provider or pool failure can block sibling routes. */
-  routeStatus?: (model: string) => RouteHealth | undefined;
-  /** Session id, sent to the Gateway for request attribution. */
-  sessionId?: string;
   /**
    * Fresh non-empty ranked routes for each auxiliary invocation. The request's
    * `tool_choice` is forwarded so a forced choice never selects a provider that
@@ -235,8 +222,6 @@ export interface CallRunnerOptions {
     role: AuxiliaryCallRole,
     input?: { toolChoice?: ToolChoice },
   ) => readonly AuxiliaryRoute[] | Promise<readonly AuxiliaryRoute[]>;
-  /** Whether routing.exclude currently names a `provider/model` route. */
-  isRouteExcluded?: (model: string) => boolean;
   /**
    * Fresh ranked routes for a main reasoning turn whose model was chosen
    * automatically, read only when such a turn switches model. Absent means an
@@ -349,13 +334,12 @@ function reasoningRetriesEnabled(automatic: boolean, policy?: ReasoningRetryPoli
  * meaning is unclear — overload or another server error, a connection failure
  * or a first-response timeout, or a rate limit without a stated reset — that
  * happened before any output. An explicit answer (an exhausted quota, a rate
- * limit with a reset, authentication, an unknown model or a caller error), a
- * local admission refusal and anything observed after output started fail at
- * once.
+ * limit with a reset, authentication, an unknown model or a caller error) and
+ * anything observed after output started fail at once.
  */
 function isReasoningCallerRetryable(error: unknown, outputStarted: boolean): boolean {
   if (outputStarted || !isModelError(error)) return false;
-  if (error.outputStarted === true || error.source === 'admission') return false;
+  if (error.outputStarted === true) return false;
   if (error.kind === 'server' || error.kind === 'network') return true;
   if (error.kind === 'rate_limited') return error.retryAt === undefined && error.retryAfterMs === undefined;
   return false;
@@ -412,28 +396,6 @@ function metricsOf(error: unknown): ModelMetrics | undefined {
   return error instanceof Error && 'metrics' in error
     ? (error as { metrics?: ModelMetrics }).metrics
     : undefined;
-}
-
-/**
- * The instant (epoch ms) the main reasoning route admits requests again, or
- * `undefined` when it is callable now. The transport waits it out before
- * sending. An exhausted quota with an upstream-stated reset is not waited for:
- * `final` ends the turn and asks the user to switch models.
- */
-function routeNotBeforeMs(
-  model: string,
-  health: RouteHealth | undefined,
-  nowMs: number,
-): ModelPreflightResult | undefined {
-  if (health === undefined || health.phase !== 'open') return undefined;
-  const parsed = Date.parse(health.until);
-  if (!Number.isFinite(parsed) || parsed <= nowMs) return undefined;
-  if (health.state === 'quota_exhausted' && health.resets === true) {
-    const at = new Date(parsed);
-    const hhmm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
-    return { notBeforeMs: parsed, faultState: health.state, final: `${model} 的额度已用尽，预计 ${hhmm} 恢复；请换一个模型继续` };
-  }
-  return { notBeforeMs: parsed, faultState: health.state };
 }
 
 /** Create the role-aware call runner. */
@@ -574,41 +536,22 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
 
       let result: ModelResult | undefined;
       // Per-attempt evidence in order: a bounded failover merges every route's
-      // attempts so the ledger records exactly what was tried and when the route
-      // may be retried.
+      // attempts so the ledger records exactly what was tried.
       const routeAttempts: ModelAttempt[] = [];
-      /** Merge one route's own attempt records in order, stamped with its retry instant. */
-      const collectAttempts = (metrics: ModelMetrics | undefined, routeUntil: string | undefined): number => {
+      /** Merge one route's own attempt records in order. */
+      const collectAttempts = (metrics: ModelMetrics | undefined): number => {
         let added = 0;
         for (const attempt of metrics?.attempts ?? []) {
-          routeAttempts.push(routeUntil === undefined ? attempt : { ...attempt, routeUntil });
+          routeAttempts.push(attempt);
           added += 1;
         }
         return added;
       };
-      const retryInstantOf = (candidate: string): string | undefined => {
-        const health = options.routeStatus?.(candidate);
-        return health?.until;
-      };
-      /**
-       * Route health handed to the transport for one main reasoning attempt. An
-       * excluded route is reported as unusable so an open wait gives up and the
-       * turn can re-select, even when the Gateway has no fault state for it.
-       */
-      const reasoningPreflight = (routeModel: string): ModelPreflightResult | undefined => {
-        if (options.isRouteExcluded?.(routeModel) === true) {
-          return { notBeforeMs: Number.MAX_SAFE_INTEGER, excluded: true };
-        }
-        return options.routeStatus === undefined
-          ? undefined
-          : routeNotBeforeMs(routeModel, options.routeStatus(routeModel), Date.now());
-      };
       /**
        * The failure detail of one auxiliary exhaustion: every attempt tried so
-       * far, the route's own retry instant, and the kind of the last real
-       * failure. A user cancellation is neutral — it is `aborted` and carries no
-       * retry time — and an all-open set reports the earliest retry it read from
-       * the route health without inventing an attempt that never happened.
+       * far, the upstream retry instant, and the kind of the last real failure.
+       * A user cancellation is neutral — it is `aborted` and carries no retry
+       * time.
        */
       const auxiliaryFailure = (
         message: string,
@@ -629,9 +572,9 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
 
       /**
        * One auxiliary invocation on the selector's first ranked route only.
-       * Route admission and supported reasoning effort are decided before
-       * selection; this path keeps context-budget safety, classified failures,
-       * and per-attempt ledger accounting.
+       * Supported reasoning effort is decided before selection; this path keeps
+       * context-budget safety, classified failures, and per-attempt ledger
+       * accounting.
        */
       const runAuxiliary = async (): Promise<ModelResult> => {
         const all = routes!;
@@ -673,7 +616,6 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         }
 
         const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? maxTokens;
-        const attemptId = randomUUID();
         try {
           const completed = await callModelAttempt({
             transport: options.transport,
@@ -685,24 +627,21 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             signal: controller.signal,
             onEvent,
             cacheKey: options.cacheKey,
-            attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
-            attemptId,
             maxOutputTokens: requestMaxOutputTokens,
             ...(input.tools === undefined ? {} : { tools: input.tools }),
             ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
           });
-          collectAttempts(completed.result.metrics, retryInstantOf(route.model));
+          collectAttempts(completed.result.metrics);
           return completed.result;
         } catch (error) {
           if (error instanceof ModelCallError) throw error;
           const fact = errorFactOf(error);
           const cancelled = abortKind === 'signal';
-          const attemptUntil = retryInstantOf(route.model);
-          collectAttempts(metricsOf(error), attemptUntil);
+          collectAttempts(metricsOf(error));
           if (cancelled || outputStarted) throw error;
           if (fact.kind === 'invalid_request' || fact.kind === 'context_overflow' || fact.kind === 'protocol' || fact.kind === 'aborted') throw error;
           const message = withOverflowPrefix(error);
-          return await fail(message, auxiliaryFailure(message, attemptUntil, fact.kind));
+          return await fail(message, auxiliaryFailure(message, fact.retryAt, fact.kind));
         }
       };
 
@@ -743,9 +682,6 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           const candidate = candidates[index]!;
           const candidateModel = routeKeyOf(candidate.provider, candidate.model);
           if (excludedModels.has(candidateModel)) continue;
-          // A later ladder route is skipped when routing.exclude already names
-          // it; it never spends the turn.
-          if (candidate !== first && options.isRouteExcluded?.(candidateModel) === true) continue;
           const budget = checkContextBudget(candidateModel, messages, options.resolveProvider, maxTokens);
           // A route whose whole ladder is the provider-default sentinel has no
           // selectable level: it accepts any requested effort and is sent at its
@@ -800,22 +736,18 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
                 // preference, including an explicit false; an absent preference
                 // sends no field at all. Auxiliary requests never set it.
                 ...(candidate.fast === undefined ? {} : { fast: candidate.fast }),
-                attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
                 ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
                 maxOutputTokens: requestMaxOutputTokens,
                 ...(input.tools === undefined ? {} : { tools: input.tools }),
                 ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
-                ...(options.routeStatus === undefined && options.isRouteExcluded === undefined
-                  ? {}
-                  : { preflight: () => reasoningPreflight(candidateModel) }),
                 signal: controller.signal,
                 onEvent,
               });
-              collectAttempts(completed.result.metrics, retryInstantOf(candidateModel));
+              collectAttempts(completed.result.metrics);
               return completed.result;
             } catch (error) {
               lastError = error;
-              collectAttempts(metricsOf(error), retryInstantOf(candidateModel));
+              collectAttempts(metricsOf(error));
               const capacityFailure = isModelError(error) && (error.kind === 'quota_exhausted'
                 || (error.kind === 'rate_limited' && (error.retryAt !== undefined || error.retryAfterMs !== undefined)));
               if (!retriesEnabled || controller.signal.aborted || outputStarted

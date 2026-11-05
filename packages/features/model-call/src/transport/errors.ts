@@ -9,9 +9,7 @@
  * shape, so classification reads only the protocol's own status codes and
  * official error codes.
  */
-import { GATEWAY_HEADERS, parseAdmissionRefusal } from '@wrenyard/providers/base';
-
-import { record, stringField, type ModelFailureSource, type ModelMetrics, type RetryAfterHint } from './protocol.ts';
+import { record, stringField, type ModelMetrics, type RetryAfterHint } from './protocol.ts';
 import type { ModelErrorKind } from '@wrenyard/protocol/session';
 
 /** Normalized failure class; declared on the wire layer and re-exported here. */
@@ -32,16 +30,10 @@ export interface ModelErrorOptions {
   /** The adopted upstream hint, kept with its original header value. */
   retryAfter?: RetryAfterHint;
   /**
-   * Where the failure originated. Absent means an upstream fault; `admission`
-   * means the local Gateway circuit refused the request without calling
-   * upstream, so the upstream retry count must not be consumed.
-   */
-  source?: ModelFailureSource;
-  /**
-   * The absolute earliest instant (ISO 8601) the failed call may be retried:
-   * the local admission refusal's probe time, or an adopted recoverable wait.
-   * It is set only when a real instant is known and stays absent otherwise, so
-   * an unknown recovery is never reported with a fabricated time.
+   * The absolute earliest instant (ISO 8601) the failed call may be retried,
+   * from an adopted upstream hint. It is set only when a real instant is known
+   * and stays absent otherwise, so an unknown recovery is never reported with a
+   * fabricated time.
    */
   retryAt?: string;
   upstream?: UpstreamErrorIdentity;
@@ -60,7 +52,6 @@ export class ModelError extends Error {
   readonly status?: number;
   readonly retryAfterMs?: number;
   readonly retryAfter?: RetryAfterHint;
-  readonly source?: ModelFailureSource;
   readonly retryAt?: string;
   readonly upstream?: UpstreamErrorIdentity;
   readonly metrics?: ModelMetrics;
@@ -74,7 +65,6 @@ export class ModelError extends Error {
     if (options.status !== undefined) this.status = options.status;
     if (options.retryAfterMs !== undefined) this.retryAfterMs = options.retryAfterMs;
     if (options.retryAfter !== undefined) this.retryAfter = options.retryAfter;
-    if (options.source !== undefined) this.source = options.source;
     if (options.retryAt !== undefined) this.retryAt = options.retryAt;
     if (options.upstream !== undefined && (options.upstream.type !== undefined || options.upstream.code !== undefined)) {
       this.upstream = options.upstream;
@@ -261,10 +251,6 @@ export function shouldRetryFromHeaders(headers: Headers): boolean | undefined {
  * Build a {@link ModelError} for a non-2xx response. The message keeps the
  * supplier's wording; the status, official identity and retry hints are kept
  * for classification and for the `gateway.request.completed` event.
- *
- * Only the Gateway's own `x-wrenyard-admission` header is read to mark a local
- * admission refusal: it is a structured, Gateway-local marker, never an echoed
- * upstream header, so a real upstream 503 stays an ordinary `upstream` failure.
  */
 export async function httpError(response: Response): Promise<ModelError> {
   const text = (await response.text().catch(() => '')).trim();
@@ -282,16 +268,7 @@ export async function httpError(response: Response): Promise<ModelError> {
   const message = excerpt !== '' ? excerpt : `Model request failed (HTTP ${response.status})`;
   const retryAfter = retryAfterHintFromHeaders(response.headers);
   const shouldRetry = shouldRetryFromHeaders(response.headers);
-  const admission = parseAdmissionRefusal(response.headers.get(GATEWAY_HEADERS.admission));
-  // A local admission refusal carries the absolute probe instant and takes
-  // precedence over any upstream hint. Without a refusal, a genuine upstream
-  // hint still supplies the absolute `retryAt`, so an exhausted upstream retry
-  // budget keeps the recovery instant for the caller instead of dropping it.
-  const retryAt = admission !== undefined
-    ? admission.retryAt
-    : retryAfter === undefined
-      ? undefined
-      : new Date(retryAfter.retryAt).toISOString();
+  const retryAt = retryAfter === undefined ? undefined : new Date(retryAfter.retryAt).toISOString();
   return new ModelError(message, {
     // An official context-overflow code decides before the status, so a 400
     // carrying `context_length_exceeded` still classifies as context overflow.
@@ -299,9 +276,6 @@ export async function httpError(response: Response): Promise<ModelError> {
       ? 'context_overflow'
       : classifyStatus(response.status, identity.code),
     status: response.status,
-    // A local admission refusal is marked as such, so the retry loop never
-    // spends an upstream retry on it.
-    ...(admission === undefined ? {} : { source: 'admission' as const }),
     ...(retryAt === undefined ? {} : { retryAt }),
     ...(retryAfter === undefined ? {} : { retryAfterMs: retryAfter.delayMs, retryAfter }),
     upstream: identity,
@@ -348,9 +322,6 @@ export function normalizeStreamError(error: unknown, signal: AbortSignal, output
       return new ModelError(error.message, {
         kind: 'interrupted', ...(error.status === undefined ? {} : { status: error.status }),
         ...(error.upstream === undefined ? {} : { upstream: error.upstream }), outputStarted: true,
-        // The origin and not-before instant survive the rewrite whether the
-        // failure stays an upstream one or is a local admission refusal.
-        ...(error.source === undefined ? {} : { source: error.source }),
         ...(error.retryAt === undefined ? {} : { retryAt: error.retryAt }),
       });
     }
