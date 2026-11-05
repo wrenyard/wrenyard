@@ -339,20 +339,29 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       const target = { publicModel, provider: resolved.provider.id };
 
       // A resolved public reasoning effort arrives either in the legacy private
-      // header or in the entry protocol's own request field. Either way it is
-      // validated against the public enum and this route's own ladder here,
-      // before any upstream call; the header stays the authority when present.
+      // header or in the entry protocol's own request field. A header value is
+      // validated against the public enum and this route's own ladder here, and
+      // keeps its strict 400 on failure. A body value is a pass-through client's
+      // request: when it is not a public effort or not on this route's ladder it
+      // resolves to no effort and the body is forwarded untouched.
       const rawEffortHeader = request.headers[LEGACY_REASONING_EFFORT_HEADER];
       const effortHeader = Array.isArray(rawEffortHeader) ? rawEffortHeader[0] : rawEffortHeader;
-      const effortValue = effortHeader ?? module.readReasoningEffort(body);
       let reasoningEffort: ReasoningEffort | undefined;
-      if (effortValue !== undefined) {
-        const normalized = normalizeReasoningEffort(effortValue);
-        if (normalized === undefined) return reject(400, `Invalid reasoning effort: ${effortValue}`, target);
+      if (effortHeader !== undefined) {
+        const normalized = normalizeReasoningEffort(effortHeader);
+        if (normalized === undefined) return reject(400, `Invalid reasoning effort: ${effortHeader}`, target);
         if (!resolved.model.reasoningEfforts.includes(normalized)) {
           return reject(400, `Model ${registeredModel} does not support reasoning effort "${normalized}"`, target);
         }
         reasoningEffort = normalized;
+      } else {
+        const bodyEffort = module.readReasoningEffort(body);
+        if (bodyEffort !== undefined) {
+          const normalized = normalizeReasoningEffort(bodyEffort);
+          if (normalized !== undefined && resolved.model.reasoningEfforts.includes(normalized)) {
+            reasoningEffort = normalized;
+          }
+        }
       }
 
       // Fast mode is carried only by the entry protocol's own official body
