@@ -3,7 +3,8 @@
  * produced something, plus one closing call when a turn's reasoning failed
  * without output. Progress invocations may stay silent when they carry nothing
  * new; terminal invocations must deliver one nonempty user message through the
- * reply tool, or through the provider capability-gated plain-text exception.
+ * reply tool, or through the call's own nonempty plain text when it sends no
+ * reply tool call.
  */
 
 import { keepNewestWithinBudget } from '@wrenyard/agent-loop';
@@ -267,6 +268,12 @@ export class ReplyWriter {
       } catch (error) {
         failure = messageOf(error);
       }
+      // Every provider falls back to the call's own text, without a capability
+      // check. A terminal call with neither still fails below.
+      if (text === undefined && failure === undefined && outcome.text.trim() !== '') {
+        text = outcome.text;
+        source = 'reply-text';
+      }
       if (text === undefined && failure === undefined && request.terminal) {
         failure = 'Reply call completed without a non-empty reply tool call';
       }
@@ -290,7 +297,7 @@ export class ReplyWriter {
 
     if (request.terminal) {
       // Only an accepted nonempty reply made through the reply tool may carry
-      // memories; capability-gated plain text and failed replies save nothing.
+      // memories; plain-text replies and failed replies save nothing.
       const memoryCalls = canSave && text !== undefined && source === 'tool' && outcome.ok && failure === undefined
         ? outcome.toolCalls
         : undefined;
