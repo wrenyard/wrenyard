@@ -289,9 +289,10 @@ async function assertGatewayRouteNotCircuitOpen(gateway: string, request: AgentR
     if (!Array.isArray(data))
         return;
     const target = request.canonicalModel?.trim() ?? request.model;
+    const listedId = request.provider === undefined ? target : `${request.provider}/${target}`;
     const matching = data.filter((entry): entry is Record<string, unknown> =>
         entry !== null && typeof entry === 'object' &&
-        (entry as Record<string, unknown>).id === target &&
+        (entry as Record<string, unknown>).id === listedId &&
         (request.provider === undefined || (entry as Record<string, unknown>).owned_by === request.provider));
     if (matching.length === 0)
         return;
