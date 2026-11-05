@@ -25,6 +25,7 @@
     "release": "node ./tools/release/release.mjs",
     "lint": "oxlint && tsc -p tsconfig.json --noEmit && tsc -b apps/desktop",
     "check": "node tools/check.mjs",
+    "test": "vitest run",
     "dev": "node tools/dev.mjs"
   },
   "devDependencies": {
@@ -34,6 +35,7 @@
     "pnpm": "11.19.0",
     "postject": "^1.0.0-alpha.6",
     "tsx": "^4.22.4",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.11"
   }
 }

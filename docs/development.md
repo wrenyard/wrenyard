@@ -53,6 +53,7 @@ enough.
 ```sh
 pnpm lint    # oxlint + tsc (the only CI quality gate)
 pnpm check   # public identifiers, secrets, legal, version consistency
+pnpm test    # vitest unit tests
 ```
 
 ## DSH compatibility

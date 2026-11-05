@@ -37,6 +37,7 @@ Run the root scripts before opening a pull request:
 ```sh
 pnpm lint    # oxlint + repository tsc
 pnpm check   # release gates: public identifiers, secrets, legal, versions
+pnpm test    # vitest unit tests
 ```
 
 ## Commit messages
