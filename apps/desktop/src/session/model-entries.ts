@@ -1,5 +1,5 @@
 /** Projects current daemon route metadata; a defective row never breaks the list. */
-import { REASONING_EFFORTS, isMainstreamModelId } from '@wrenyard/models';
+import { REASONING_EFFORTS } from '@wrenyard/models';
 import type { WrenyardGatewayModel } from '@wrenyard/control';
 import type { ProviderListResult, ProviderQuotaBalance, ProviderQuotaSnapshot } from '@wrenyard/protocol/provider';
 import { chatGptFundingSourceFromSnapshot } from '@wrenyard/providers/chatgpt';
@@ -59,76 +59,67 @@ export function toModelEntries(
   warn: (message: string) => void = console.warn,
   quotaRows?: readonly ProviderQuotaSnapshot[],
 ): SessionBridgeModelEntry[] {
-  // Index the Gateway directory by both the public id and `provider/model`, so
-  // the model's protocols come from the Gateway model row, never the Provider.
-  const gatewayByPublicId = new Map<string, WrenyardGatewayModel>();
-  for (const model of gatewayModels) {
-    gatewayByPublicId.set(model.publicId, model);
-    gatewayByPublicId.set(`${model.provider}/${model.id}`, model);
+  // The endpoint list is the only model directory: each row is emitted once, in
+  // connection order. The provider list still supplies the display label and
+  // display-only facts (free supply, TPS, quota); it never decides membership.
+  const providerByID = new Map(result.providers.map((provider) => [provider.id, provider]));
+  const catalogByPublicId = new Map<string, ProviderListResult['providers'][number]['models'][number]>();
+  for (const provider of result.providers) {
+    for (const model of provider.models) catalogByPublicId.set(`${provider.id}/${model.id}`, model);
   }
   const quotaByProvider = new Map<string, ProviderQuotaSnapshot>();
   for (const row of quotaRows ?? []) quotaByProvider.set(row.provider, row);
-  const entries = new Map<string, SessionBridgeModelEntry>();
-  for (const provider of result.providers) {
-    if (!provider.configured) continue;
-    const quotaProvider = provider.quotaProvider ?? provider.id;
-    const summary = providerQuotaSummary(
-      quotaByProvider.get(quotaProvider) ?? quotaByProvider.get(provider.id),
-    );
-    for (const model of provider.models) {
-      const publicId = `${provider.id}/${model.id}`;
-      // Session inference uses the credential-backed Gateway, not Task client admission.
-      if (model.taskOnly === true
-        || (model.supportedClients?.length ?? 0) > 0 || entries.has(publicId)) continue;
-      // Admission is universal: the picker shows exactly the mainstream
-      // registered identities. There is no provider-specific exception and no
-      // unknown-intelligence fallback — SWE-2 appears only because its
-      // registered identity is mainstream.
-      if (!isMainstreamModelId(model.id)) continue;
-      const gatewayModel = gatewayByPublicId.get(publicId);
-      if (gatewayModel === undefined) continue;
-      const runtime = selectSessionProtocol(gatewayModel.protocols);
-      if (!runtime) continue;
-      // A route that declares no ladder — a CodeBuddy endpoint row naming no
-      // registered model — has UNKNOWN efforts, not invalid ones, so it is still
-      // selectable and is emitted with no effort levels. Only a ladder that is
-      // present but malformed is treated as a defect and dropped.
-      const efforts = Array.isArray(model.reasoningEfforts) ? model.reasoningEfforts : [];
-      if (efforts.some(effort => !REASONING_EFFORTS.includes(effort))
-        || new Set(efforts).size !== efforts.length) {
-        warn(`Catalog model has invalid reasoning efforts: ${publicId}`);
-        continue;
-      }
-      entries.set(publicId, {
-        publicId,
-        provider: provider.id,
-        providerDisplayName: provider.displayName,
-        model: model.id,
-        displayName: model.displayName,
-        runtime,
-        reasoningEfforts: [...efforts],
-        ...(gatewayModel.capabilities === undefined ? {} : { capabilities: gatewayModel.capabilities }),
-        quotaProvider: provider.quotaProvider ?? provider.id,
-        ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
-        ...(model.maxTokens === undefined ? {} : { maxOutputTokens: model.maxTokens }),
-        ...(model.free === undefined ? {} : { free: model.free }),
-        ...(model.effectiveTps === undefined ? {} : { effectiveTps: model.effectiveTps }),
-        ...(model.quotaState === undefined ? {} : { quotaState: model.quotaState }),
-        ...(model.quotaEvidence === undefined ? {} : { quotaEvidence: model.quotaEvidence }),
-        ...(summary === undefined ? {} : { providerQuotaSummary: summary }),
-        // Route health comes from the Gateway row, which already scopes a fault
-        // to its own route/provider/pool — a zero paid balance never marks a free
-        // pool. The row is still emitted while faulted so a selected model that
-        // became unavailable can still be named and explained.
-        ...(gatewayModel.routeState === undefined ? {} : { routeState: gatewayModel.routeState }),
-        ...(gatewayModel.routePhase === undefined ? {} : { routePhase: gatewayModel.routePhase }),
-        ...(gatewayModel.routeUntil === undefined ? {} : { routeUntil: gatewayModel.routeUntil }),
-        ...(gatewayModel.supportsFast === true ? { supportsFast: true } : {}),
-        // Intelligence tier likewise comes from the Gateway row's catalog data;
-        // it is omitted when the catalog genuinely does not know.
-        ...(gatewayModel.intelligence === undefined ? {} : { intelligence: gatewayModel.intelligence }),
-      });
+  const entries: SessionBridgeModelEntry[] = [];
+  const seen = new Set<string>();
+  for (const gatewayModel of gatewayModels) {
+    const publicId = gatewayModel.publicId;
+    if (seen.has(publicId)) continue;
+    const runtime = selectSessionProtocol(gatewayModel.protocols);
+    if (!runtime) continue;
+    // A route that declares no ladder has UNKNOWN efforts, not invalid ones, so
+    // it is still selectable and is emitted with no effort levels. Only a ladder
+    // that is present but malformed is treated as a defect and dropped.
+    const efforts = Array.isArray(gatewayModel.reasoningEfforts) ? gatewayModel.reasoningEfforts : [];
+    if (efforts.some(effort => !REASONING_EFFORTS.includes(effort))
+      || new Set(efforts).size !== efforts.length) {
+      warn(`Endpoint model has invalid reasoning efforts: ${publicId}`);
+      continue;
     }
+    seen.add(publicId);
+    const provider = providerByID.get(gatewayModel.provider);
+    const catalogModel = catalogByPublicId.get(publicId);
+    const quotaProvider = provider?.quotaProvider ?? gatewayModel.provider;
+    const summary = providerQuotaSummary(quotaByProvider.get(quotaProvider) ?? quotaByProvider.get(gatewayModel.provider));
+    const maxOutputTokens = gatewayModel.maxOutputTokens ?? gatewayModel.maxTokens;
+    entries.push({
+      publicId,
+      provider: gatewayModel.provider,
+      providerDisplayName: provider?.displayName ?? gatewayModel.provider,
+      model: gatewayModel.id,
+      displayName: gatewayModel.displayName,
+      runtime,
+      reasoningEfforts: [...efforts],
+      ...(gatewayModel.capabilities === undefined ? {} : { capabilities: gatewayModel.capabilities }),
+      quotaProvider,
+      ...(gatewayModel.contextWindow === undefined ? {} : { contextWindow: gatewayModel.contextWindow }),
+      ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+      ...(catalogModel?.free === undefined ? {} : { free: catalogModel.free }),
+      ...(catalogModel?.effectiveTps === undefined ? {} : { effectiveTps: catalogModel.effectiveTps }),
+      ...(catalogModel?.quotaState === undefined ? {} : { quotaState: catalogModel.quotaState }),
+      ...(catalogModel?.quotaEvidence === undefined ? {} : { quotaEvidence: catalogModel.quotaEvidence }),
+      ...(summary === undefined ? {} : { providerQuotaSummary: summary }),
+      // Route health comes from the Gateway row, which already scopes a fault
+      // to its own route/provider/pool — a zero paid balance never marks a free
+      // pool. The row is still emitted while faulted so a selected model that
+      // became unavailable can still be named and explained.
+      ...(gatewayModel.routeState === undefined ? {} : { routeState: gatewayModel.routeState }),
+      ...(gatewayModel.routePhase === undefined ? {} : { routePhase: gatewayModel.routePhase }),
+      ...(gatewayModel.routeUntil === undefined ? {} : { routeUntil: gatewayModel.routeUntil }),
+      ...(gatewayModel.supportsFast === true ? { supportsFast: true } : {}),
+      // Intelligence tier likewise comes from the Gateway row's catalog data;
+      // it is omitted when the catalog genuinely does not know.
+      ...(gatewayModel.intelligence === undefined ? {} : { intelligence: gatewayModel.intelligence }),
+    });
   }
-  return [...entries.values()];
+  return entries;
 }

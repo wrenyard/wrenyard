@@ -228,7 +228,8 @@ export class TurnRunner {
     turn: TurnRuntime,
     step: number,
   ): Promise<{ ok: true; terminal: boolean } | { ok: false; error: string; failure?: CallFailureSummary }> {
-    const metadata = resolveModelMetadata(turn.publicId, (id) => this.engine.host.resolveInferenceProvider(id));
+    const models = await this.engine.host.gateway().then((connection) => connection.models, () => []);
+    const metadata = resolveModelMetadata(turn.publicId, models);
     const allowImages = metadata.imageInput === true;
     // The step marker is appended before the request is assembled: it renders
     // as this step's `<wy-info>` line, so the request only ever grows at its end.
@@ -283,7 +284,7 @@ export class TurnRunner {
     const budget = contextBudgetOf(
       turn.publicId,
       view.messages,
-      (id) => this.engine.host.resolveInferenceProvider(id),
+      models,
       maxTokens,
     );
     if (!turn.finished && !turn.abort.signal.aborted
@@ -308,7 +309,7 @@ export class TurnRunner {
         const reduced = contextBudgetOf(
           turn.publicId,
           view.messages,
-          (id) => this.engine.host.resolveInferenceProvider(id),
+          models,
           maxTokens,
         );
         compactEstimate = reduced.estimatedInputTokens;
@@ -374,7 +375,7 @@ export class TurnRunner {
         const recheck = () => contextBudgetOf(
           turn.publicId,
           view.messages,
-          (id) => this.engine.host.resolveInferenceProvider(id),
+          models,
           maxTokens,
         );
         const overWindow = (facts: ReturnType<typeof recheck>): boolean => facts.contextWindow !== undefined

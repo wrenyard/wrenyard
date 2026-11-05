@@ -554,24 +554,22 @@ export interface ReplySentEvent extends LedgerEventBase {
    */
   kind?: 'progress' | 'final';
   /**
-   * Where the reply text came from: the reply tool call (`tool`), plain text
-   * from the communication call when the serving provider ignores forced tool
-   * choice (`reply-text`), the native agentTools final output (`agent-text`),
-   * or an explicit interruption message (`interruption`). `agent-text` and
-   * `interruption` are deliberate publication paths, not fallbacks. Records
-   * written before this field existed have an unspecified source; do not infer
-   * `tool` from a missing value. Reasoning output, action results and closing
-   * lines are not reconstructed as reply fallbacks.
+   * Where the reply text came from: the reply tool call (`tool`), the native
+   * agentTools final output (`agent-text`), or an explicit interruption message
+   * (`interruption`). `agent-text` and `interruption` are deliberate
+   * publication paths, not fallbacks. Historical records may still carry
+   * `reply-text`; it is no longer written. Records written before this field
+   * existed have an unspecified source; do not infer `tool` from a missing
+   * value. Reasoning output, action results and closing lines are not
+   * reconstructed as reply fallbacks.
    */
   source?: 'tool' | 'reply-text' | 'agent-text' | 'interruption';
 }
 
 /**
- * Non-tool reply sources the engine may record after a successful communication
- * call. Only `reply-text` is allowed: plain text accepted when the actual
- * serving route's provider declares `ignoresForcedToolChoice`. Desktop reads
- * committed `reply.sent` records only; it does not rebuild reasoning, action
- * output or closing text as substitutes.
+ * Historical non-tool reply source. `reply-text` is no longer written; Desktop
+ * reads committed `reply.sent` records only and does not rebuild reasoning,
+ * action output or closing text as substitutes.
  */
 export const REPLY_FALLBACK_SOURCES = ['reply-text'] as const;
 

@@ -15,7 +15,7 @@
  * switches candidates, strips image content by role, applies a caller's
  * output-cap policy, starts or finishes any span/record, or persists anything.
  */
-import type { ProviderDefinition } from '@wrenyard/providers/base';
+import type { GatewayModel } from '@wrenyard/protocol/gateway';
 import { PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
 import { checkContextBudget, isProviderDefaultReasoningOnly, type ContextBudget } from './budget.ts';
 import {
@@ -55,7 +55,8 @@ export interface ModelCallAttemptInput {
    */
   signal: AbortSignal;
   onEvent?: (event: ModelEvent) => void;
-  resolveProvider?: (providerId: string) => ProviderDefinition | undefined;
+  /** The endpoint model list that supplies this route's metadata. */
+  models?: readonly GatewayModel[];
   /**
    * A budget the caller already resolved for this exact model and messages.
    * Supplying it skips the check inside the attempt, so a caller that needs the
@@ -85,7 +86,7 @@ export interface ModelCallAttemptResult {
  * kind, partial metrics and cancellation identity.
  */
 export async function callModelAttempt(input: ModelCallAttemptInput): Promise<ModelCallAttemptResult> {
-  const budget = input.budget ?? checkContextBudget(input.model, input.messages, input.resolveProvider, input.maxOutputTokens);
+  const budget = input.budget ?? checkContextBudget(input.model, input.messages, input.models ?? [], input.maxOutputTokens);
   if (!budget.ok) {
     throw new ModelError(`context_overflow: ${budget.reason ?? 'context budget exceeded'}`, { kind: 'context_overflow' });
   }

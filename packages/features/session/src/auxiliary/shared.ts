@@ -18,7 +18,7 @@ import type { ActionExecutionOutcome } from '../reasoning/actions.ts';
 /** Reserve for multi-round tool results inside one auxiliary loop. */
 export const AUXILIARY_MULTI_ROUND_TOOL_RESULT_RESERVE = 12_288;
 
-type AuxiliaryHost = Pick<SessionHost, 'selectAuxiliary' | 'resolveInferenceProvider'>;
+type AuxiliaryHost = Pick<SessionHost, 'selectAuxiliary' | 'gateway'>;
 
 function baseAuxiliaryLoopHelpers(): LoopHelpers {
   return {
@@ -67,9 +67,15 @@ export async function computeAuxiliaryConversationTokenBudget(
     return undefined;
   }
   if (routes.length === 0) return undefined;
+  let models: Awaited<ReturnType<SessionHost['gateway']>>['models'];
+  try {
+    models = (await host.gateway()).models;
+  } catch {
+    return undefined;
+  }
   let minBudget: number | undefined;
   for (const route of routes) {
-    const metadata = resolveModelMetadata(route.model, (id) => host.resolveInferenceProvider(id));
+    const metadata = resolveModelMetadata(route.model, models);
     if (metadata.contextWindow === undefined) continue;
     const budget = auxiliaryConversationBudgetFromMetadata(
       metadata.contextWindow,

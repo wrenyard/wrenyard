@@ -6,7 +6,6 @@
 import type { GatewayConnection as WrenyardGatewayConnection } from '@wrenyard/protocol/gateway';
 import type { TaskRunFacts } from '@wrenyard/protocol/task';
 import type { ReasoningEffort } from '@wrenyard/models';
-import type { ProviderDefinition } from '@wrenyard/providers';
 import type { LiveCall } from '@wrenyard/protocol/session';
 import type {
   LedgerEvent,
@@ -53,9 +52,6 @@ export interface SessionHost {
   stateRoot: string;
   deviceName: string;
   gateway(): Promise<WrenyardGatewayConnection>;
-  /** The product-wired provider definitions main inference validates its
-   *  target against. */
-  resolveInferenceProvider(providerId: string): ProviderDefinition | undefined;
   selectAuxiliary(
     role: import('./model/roles.ts').AuxiliaryCallRole,
     input?: { toolChoice?: ToolChoice },

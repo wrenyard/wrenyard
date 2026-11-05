@@ -1,5 +1,4 @@
 import type { WrenyardGatewayConnection } from '@wrenyard/control'
-import type { ProviderDefinition } from '@wrenyard/providers'
 import type { ToolCall, ToolChoice, ToolSpec } from '@wrenyard/agent-loop'
 import type { ReasoningEffort } from '@wrenyard/models'
 import {
@@ -33,7 +32,6 @@ export function createTaskOutputModelCallPort(options: {
     role: 'task-output',
     input?: { toolChoice?: ToolChoice },
   ) => Promise<readonly AuxiliaryRoute[]> | readonly AuxiliaryRoute[]
-  resolveInferenceProvider: (providerId: string) => ProviderDefinition | undefined
 }): TaskOutputModelCallPort {
   const transport = createModelTransport({ gateway: options.gateway })
 
@@ -53,6 +51,7 @@ export function createTaskOutputModelCallPort(options: {
     if (route === undefined) {
       throw new Error('Auxiliary role task-output: no candidate qualified (empty route selection)')
     }
+    const connection = await options.gateway()
     const attempt = await callModelAttempt({
       transport,
       model: route.model,
@@ -62,7 +61,7 @@ export function createTaskOutputModelCallPort(options: {
       ...(request.toolChoice === undefined ? {} : { toolChoice: request.toolChoice }),
       firstResponseTimeoutSec: TASK_OUTPUT_FIRST_RESPONSE_TIMEOUT_SEC,
       signal,
-      resolveProvider: options.resolveInferenceProvider,
+      models: connection.models,
     })
     return { text: attempt.result.text, toolCalls: attempt.result.toolCalls }
   }

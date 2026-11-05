@@ -19,13 +19,12 @@ import {
   type WorkspaceSnapshot,
 } from '../ledger/store.ts';
 import { ModelCallError, resolveModelMetadata, type CallRole } from '../model/request.ts';
+import { admitSessionModel } from '../model/admission.ts';
 import {
   PROVIDER_DEFAULT_REASONING,
   REASONING_EFFORTS,
-  isMainstreamModelId,
   type ReasoningEffort,
 } from '@wrenyard/models';
-import { resolveHistoricalOfferedModelId, type ProviderDefinition } from '@wrenyard/providers';
 import { ContextInspector, findCreated, type ContextInspectRequest, type ContextInspection } from '../context/inspect.ts';
 import { type ToolCall } from '../transport/index.ts';
 import { isInside, type AttachmentInput, type FileStore } from '../media.ts';
@@ -143,7 +142,7 @@ class Engine implements Session, SessionCallHost {
       workspaceRoot: host.workspaceRoot,
       deviceName: host.deviceName,
       ledger: ports.ledger,
-      resolveInferenceProvider: (id) => host.resolveInferenceProvider(id),
+      models: async () => (await host.gateway()).models,
       now: () => this.now(),
       createSnapshot: () => buildSnapshot(this.host),
     });
@@ -251,33 +250,14 @@ class Engine implements Session, SessionCallHost {
     }
   ): Promise<{ turn: number }> {
     this.assertOpen();
-    // Historical identity migration, before admission, deduplication and the
-    // ledger write: a restored or saved selection may still name a legacy model
-    // spelling. Only a verified unique provider-scoped mapping is accepted, so
-    // an unknown or ambiguous selection fails here instead of being guessed.
-    // The provider, effort and Fast preference are preserved exactly and the
-    // registered id is what the new turn persists; historical ledger events are
-    // never rewritten.
-    const providerDefinition = this.host.resolveInferenceProvider(input.model.provider);
-    const registeredModel = providerDefinition === undefined
-      ? undefined
-      : resolveHistoricalOfferedModelId(providerDefinition, input.model.model);
-    if (registeredModel === undefined) {
-      throw new Error(
-        `Model ${input.model.provider}/${input.model.model} is unavailable for sessions: it is not a uniquely registered offering of provider '${input.model.provider}'`,
-      );
-    }
-    const admitted = registeredModel === input.model.model
-      ? input
-      : { ...input, model: { ...input.model, model: registeredModel } };
     // A bot's own session (a host that binds it to a bot tool port) runs on an
     // automatically selected model that may be replaced within the turn. A
     // work session's model is chosen by its caller, a person or a bot sending
     // to it, and never switches inside a running turn.
     const automatic = this.host.agentTools?.(sessionId) !== undefined;
     const modelInput = automatic
-      ? { ...admitted, model: { ...admitted.model, automatic: true } }
-      : admitted;
+      ? { ...input, model: { ...input.model, automatic: true } }
+      : input;
     const model = `${modelInput.model.provider}/${modelInput.model.model}`;
     const effort = modelInput.model.reasoningEffort;
     const fast = modelInput.model.fast;
@@ -366,18 +346,15 @@ class Engine implements Session, SessionCallHost {
     },
     publicId: string
   ): Promise<{ turn: number }> {
-    // Universal application admission, evaluated before the session is even
-    // resolved: every admitted turn — a new session, a resume or a restored
-    // selection — runs on a mainstream registered model identity. There is no
-    // provider exception and no unknown-intelligence fallback, so an unresolved
-    // or non-mainstream selection is refused before any session begin/resume.
-    if (!isMainstreamModelId(input.model.model)) {
-      throw new Error(`Model ${publicId} is not available for sessions; choose a mainstream registered model`);
-    }
+    // Endpoint admission, evaluated before the session is even resolved: every
+    // admitted turn — a new session, a resume or a restored selection — runs on
+    // a model the endpoint lists. No provider catalog lookup participates.
+    const models = (await this.host.gateway()).models;
+    const gatewayModel = admitSessionModel(models, input.model.provider, input.model.model);
     // Resolve (recovering if needed) the session before any import, copy or append.
     const session = await this.ensureSession(sessionId);
     this.assertOpen();
-    const metadata = resolveModelMetadata(publicId, (id) => this.host.resolveInferenceProvider(id));
+    const metadata = resolveModelMetadata(publicId, models);
     const effort = input.model.reasoningEffort;
     if (effort === undefined || !REASONING_EFFORTS.includes(effort)) {
       throw new Error(`reasoningEffort '${effort ?? ''}' is not a valid reasoning effort`);
@@ -391,9 +368,10 @@ class Engine implements Session, SessionCallHost {
         `reasoningEffort '${effort}' is not supported by ${publicId}; expected one of ${metadata.reasoningEfforts.join(', ')}`,
       );
     }
-    // Fast is admitted only for a route that declares a verified Fast mode; the
-    // request must fail before the turn starts rather than silently ignoring it.
-    if (input.model.fast === true && !declaresFast(this.host.resolveInferenceProvider(input.model.provider), input.model.model)) {
+    // Fast is admitted only for a route the endpoint declares as Fast-capable;
+    // the request must fail before the turn starts rather than silently
+    // ignoring it.
+    if (input.model.fast === true && gatewayModel.supportsFast !== true) {
       throw new Error(`Fast is not supported by ${publicId}`);
     }
 
@@ -1385,17 +1363,6 @@ function assertStorageSegment(value: string): void {
   if (value === '.' || value === '..' || value === '' || /[/\\\u0000]/u.test(value)) {
     throw new Error(`invalid storage segment: ${value}`);
   }
-}
-
-/**
- * True only when the resolved model declares a verified Fast mode. An unknown
- * provider or model is not Fast-capable, so a requested Fast is refused instead
- * of being silently dropped.
- */
-function declaresFast(provider: ProviderDefinition | undefined, modelId: string): boolean {
-  if (provider === undefined) return false;
-  const resolved = provider.modelAliases?.[modelId] ?? modelId;
-  return provider.models.find((entry) => entry.id === resolved)?.supportsFast === true;
 }
 
 /** The main model (`provider/model`) of the latest turn before `turn`, if any. */

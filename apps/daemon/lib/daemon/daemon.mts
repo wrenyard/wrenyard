@@ -1457,12 +1457,13 @@ async function createForemanDaemonResources(
     const selectModels = async (): Promise<readonly AgentModelRoute[]> => {
       resetAuxiliaryRouteHealth()
       const routes = await selectRoutesByRequirement(auxiliaryRoutingOptions, BOT_ROUTING_REQUIREMENT, 'bot')
+      const models = (await gateway.connection(gatewayOrigin(boundPort))).models
       return routes.map(route => {
         const separator = route.model.indexOf('/')
         if (separator <= 0) return { provider: route.model, model: route.model, reasoningEffort: route.reasoningEffort }
         const provider = route.model.slice(0, separator)
         const model = route.model.slice(separator + 1)
-        const metadata = resolveModelMetadata(`${provider}/${model}`)
+        const metadata = resolveModelMetadata(`${provider}/${model}`, models)
         return {
           provider,
           model,
@@ -1497,7 +1498,6 @@ async function createForemanDaemonResources(
           role,
           input,
         ),
-        resolveInferenceProvider: id => catalog.provider(id),
       }),
     })
     // Single shared TaskGraphService used by all RPC transports. Task nodes
@@ -1529,10 +1529,6 @@ async function createForemanDaemonResources(
           input,
         )
       },
-      // The session's main inference validates against the same product-wired
-      // catalog already injected into the gateway/provider.list surface, so a
-      // CodeBuddy model is only offered after the daemon read the real install.
-      resolveInferenceProvider: id => catalog.provider(id),
     })
     // A bot turn that fails twice on the same model continues on the next route
     // of the same automatic selection, inside the same turn.

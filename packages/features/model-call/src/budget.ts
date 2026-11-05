@@ -9,7 +9,7 @@
  * rather than fixed here.
  */
 import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
-import type { ProviderDefinition } from '@wrenyard/providers/base';
+import type { GatewayModel } from '@wrenyard/protocol/gateway';
 import { PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
 import { boundedOutputReservation, resolveModelMetadata, type ModelMetadata } from './metadata.ts';
 import type { Message, ModelContentPart } from './transport/index.ts';
@@ -73,50 +73,21 @@ export interface ContextBudget {
  * {@link boundedOutputReservation}: reserving a huge declared maximum verbatim
  * would leave almost no input budget, so a request never reserves more than the
  * shared cap. A per-call cap that is already smaller than that bound still wins.
- * A route whose provider
- * opted out of the canonical metadata fallback therefore resolves its request
- * output cap to the smallest of the per-call cap (or the source maximum when
- * none was requested), the source maximum when known, and the room left after
- * the estimated input:
- *
- *   min(requested cap or source max, source max when known, contextWindow - estimatedInputTokens)
- *
- * Such a route fails only when the estimated input leaves no positive room. Its
- * resolved `requestMaxOutputTokens` is the single cap handed back for both this
- * check and the serialized transport request. Every other route keeps its prior
- * budget semantics: the per-call cap is reserved verbatim (never raised above
- * the source maximum) and, with none, the source maximum is reserved exactly as
- * before.
+ * The resolved `requestMaxOutputTokens` is the single cap handed back for both
+ * this check and the serialized transport request: the per-call cap is reserved
+ * verbatim (never raised above the source maximum) and, with none, the source
+ * maximum is reserved exactly as before.
  */
 export function checkContextBudget(
   publicId: string,
   messages: readonly Message[],
-  resolveProvider?: (providerId: string) => ProviderDefinition | undefined,
+  models: readonly GatewayModel[],
   requestedMaxOutputTokens?: number,
 ): ContextBudget {
-  const metadata = resolveModelMetadata(publicId, resolveProvider);
+  const metadata = resolveModelMetadata(publicId, models);
   const estimatedInputTokens = estimateInputTokens(messages);
   const { contextWindow } = metadata;
   const sourceMax = boundedOutputReservation(metadata.maxOutputTokens);
-
-  if (metadata.skipCanonicalMetadataFallback === true) {
-    const requested = requestedMaxOutputTokens ?? sourceMax;
-    if (requested === undefined) return { metadata, estimatedInputTokens, ok: true };
-    const bounded = sourceMax === undefined ? requested : Math.min(requested, sourceMax);
-    if (contextWindow === undefined) {
-      return { metadata, estimatedInputTokens, requestMaxOutputTokens: bounded, ok: true };
-    }
-    const room = contextWindow - estimatedInputTokens;
-    if (room <= 0) {
-      return {
-        metadata,
-        estimatedInputTokens,
-        ok: false,
-        reason: `Estimated input ${estimatedInputTokens} leaves no room in the context window ${contextWindow}`,
-      };
-    }
-    return { metadata, estimatedInputTokens, requestMaxOutputTokens: Math.min(bounded, room), ok: true };
-  }
 
   // No declared window or maximum: nothing to check, exactly as before.
   if (contextWindow === undefined || sourceMax === undefined) {
@@ -168,23 +139,19 @@ export interface ContextBudgetFacts {
 export function contextBudgetOf(
   publicId: string,
   messages: readonly Message[],
-  resolveProvider?: (providerId: string) => ProviderDefinition | undefined,
+  models: readonly GatewayModel[],
   requestedMaxOutputTokens?: number,
   compactionThresholdCap?: number,
 ): ContextBudgetFacts {
-  const metadata = resolveModelMetadata(publicId, resolveProvider);
+  const metadata = resolveModelMetadata(publicId, models);
   const estimatedInputTokens = estimateInputTokens(messages);
   const { contextWindow } = metadata;
   const sourceMax = boundedOutputReservation(metadata.maxOutputTokens);
-  const outputReservation = metadata.skipCanonicalMetadataFallback === true
-    ? sourceMax === undefined
-      ? requestedMaxOutputTokens
-      : Math.min(requestedMaxOutputTokens ?? sourceMax, sourceMax)
-    : requestedMaxOutputTokens === undefined
-      ? sourceMax
-      : sourceMax === undefined
-        ? undefined
-        : Math.min(requestedMaxOutputTokens, sourceMax);
+  const outputReservation = requestedMaxOutputTokens === undefined
+    ? sourceMax
+    : sourceMax === undefined
+      ? undefined
+      : Math.min(requestedMaxOutputTokens, sourceMax);
   const threshold = contextWindow === undefined || outputReservation === undefined
     ? undefined
     : Math.min(Math.floor(0.5 * (contextWindow - outputReservation)), compactionThresholdCap ?? Number.MAX_SAFE_INTEGER);

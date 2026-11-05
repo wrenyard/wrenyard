@@ -276,7 +276,7 @@ export function createSession(host: SessionHost, options?: CreateSessionOptions)
         ...(options?.retryPolicy === undefined
           ? (host.retryPolicy === undefined ? {} : { retryPolicy: host.retryPolicy })
           : { retryPolicy: options.retryPolicy }),
-        resolveProvider: (id) => host.resolveInferenceProvider(id),
+        models: async () => (await host.gateway()).models,
         cacheKey: sessionId,
         append: recorder.report,
         ...(host.now === undefined ? {} : { now: () => host.now!() }),

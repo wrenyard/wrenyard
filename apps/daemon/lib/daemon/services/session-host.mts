@@ -2,7 +2,6 @@ import { hostname } from 'node:os'
 import { readFileSync } from 'node:fs'
 import type { WrenyardGatewayConnection } from '@wrenyard/control'
 import type { TaskRunFacts } from '@wrenyard/protocol/task'
-import type { ProviderDefinition } from '@wrenyard/providers'
 import { getAuxiliaryDefinition } from '@wrenyard/agent-loop'
 import {
   AUXILIARY_ROLE_ORDER,
@@ -77,9 +76,6 @@ export interface DaemonSessionHostOptions {
   /** The daemon config file `tasks.settings.global` is read from for declared
    *  external execution tools (for example a named MCP server). */
   taskSettingsConfigPath?: string
-  /** The product-wired provider definitions main inference validates its
-   *  target against. */
-  resolveInferenceProvider(providerId: string): ProviderDefinition | undefined
   /** The daemon RPC router the session invokes allowlisted project methods through. */
   router: RpcRouter
 }
@@ -133,18 +129,14 @@ function artifactErrorDescriptors(meta: unknown): string[] {
 }
 
 /**
- * Resolve a canonical `provider/model` route id to its catalog display name and
- * context window, using the same provider catalog `provider.list` reads.
+ * Resolve a public `provider/model` route id to its endpoint display name and
+ * context window.
  */
 function resolveRouteMetadata(
   model: string,
-  resolveProvider: (providerId: string) => ProviderDefinition | undefined,
+  models: Awaited<ReturnType<DaemonSessionHostOptions['gateway']>>['models'],
 ): { modelName?: string; contextWindow?: number } {
-  const separator = model.indexOf('/')
-  if (separator <= 0 || separator === model.length - 1) return {}
-  const definition = resolveProvider(model.slice(0, separator))?.models.find(
-    entry => entry.id === model.slice(separator + 1),
-  )
+  const definition = models.find(entry => entry.publicId === model)
   if (!definition) return {}
   return {
     modelName: definition.displayName,
@@ -254,7 +246,6 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     stateRoot,
     deviceName: hostname(),
     gateway: options.gateway,
-    resolveInferenceProvider: options.resolveInferenceProvider,
     selectAuxiliary: (role, input) => options.selectAuxiliary(role, input),
     // Read at call time, so a switch the user toggles now applies to a turn
     // that is already running without a restart.
@@ -274,6 +265,12 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
      */
     async previewAuxiliaryRoutes(): Promise<AuxiliaryRoutePreview[]> {
       const roles: AuxiliaryRoutePreview[] = []
+      let models: Awaited<ReturnType<DaemonSessionHostOptions['gateway']>>['models'] = []
+      try {
+        models = (await options.gateway()).models
+      } catch {
+        // Display metadata is best-effort; an unavailable endpoint still lists routes.
+      }
       for (const role of AUXILIARY_ROLE_ORDER) {
         try {
           const route = (await options.selectAuxiliary(role))[0]
@@ -285,7 +282,7 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
             role,
             model: route.model,
             reasoningEffort: route.reasoningEffort,
-            ...resolveRouteMetadata(route.model, options.resolveInferenceProvider),
+            ...resolveRouteMetadata(route.model, models),
           })
         } catch (error) {
           roles.push({ role, error: error instanceof Error ? error.message : String(error) })

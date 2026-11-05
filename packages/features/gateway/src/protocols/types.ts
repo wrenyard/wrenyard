@@ -177,6 +177,8 @@ export function modelListEntry(model: PublicGatewayModel): Record<string, unknow
     display_name: model.displayName,
     context_window: model.contextWindow,
     max_tokens: model.maxTokens,
+    reasoning_levels: model.reasoningEfforts,
+    ...(model.capabilities === undefined ? {} : { modalities: { input: model.capabilities } }),
     route_state: model.routeState,
     route_until: model.routeUntil,
     ...(typeof phase === 'string' ? { route_phase: phase } : {}),

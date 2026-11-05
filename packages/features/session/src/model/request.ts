@@ -17,7 +17,7 @@
  * automatic candidate after two consecutive failures on the same model. An
  * auxiliary call uses the route the selector ranked first.
  */
-import type { ProviderDefinition } from '@wrenyard/providers/base';
+import type { GatewayModel } from '@wrenyard/protocol/gateway';
 import { PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
 import {
   abortError,
@@ -210,7 +210,8 @@ function routeKeyOf(provider: string, model: string): string {
 }
 
 export interface CallRunnerOptions {
-  resolveProvider?: (providerId: string) => ProviderDefinition | undefined;
+  /** The endpoint model list that is the only source of model metadata. */
+  models: () => Promise<readonly GatewayModel[]>;
   /** The one unified transport every role calls. */
   transport: ModelTransport;
   /**
@@ -272,10 +273,10 @@ export class ModelCallError extends Error {
 export function contextBudgetOf(
   publicId: string,
   messages: readonly import('../transport/index.ts').Message[],
-  resolveProvider?: (providerId: string) => ProviderDefinition | undefined,
+  models: readonly GatewayModel[],
   requestedMaxOutputTokens?: number,
 ): ContextBudgetFacts {
-  return sharedContextBudgetOf(publicId, messages, resolveProvider, requestedMaxOutputTokens, COMPACTION_THRESHOLD_CAP);
+  return sharedContextBudgetOf(publicId, messages, models, requestedMaxOutputTokens, COMPACTION_THRESHOLD_CAP);
 }
 
 /**
@@ -405,6 +406,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       // Non-reasoning roles never transmit image bytes: image parts become a
       // textual omitted descriptor before the budget check and the driver.
       const messages = sanitizeMessagesForRole(input.role, input.messages);
+      const models = await options.models().catch(() => []);
       // The suggestion role always carries its own tiny output allowance, so a
       // caller cannot spend more than a short hint's worth of tokens on it.
       const maxTokens = input.role === 'suggestion' ? SUGGESTION_MAX_TOKENS : input.maxTokens;
@@ -580,7 +582,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         const all = routes!;
         const route = all[0]!;
         const firstResponseTimeoutSec = auxiliaryFirstResponseTimeoutSec(input.role);
-        const budget = checkContextBudget(route.model, messages, options.resolveProvider, maxTokens);
+        const budget = checkContextBudget(route.model, messages, models, maxTokens);
         estimatedInputTokens = budget.estimatedInputTokens;
         model = route.model;
         selectedRank = 1;
@@ -682,7 +684,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           const candidate = candidates[index]!;
           const candidateModel = routeKeyOf(candidate.provider, candidate.model);
           if (excludedModels.has(candidateModel)) continue;
-          const budget = checkContextBudget(candidateModel, messages, options.resolveProvider, maxTokens);
+          const budget = checkContextBudget(candidateModel, messages, models, maxTokens);
           // A route whose whole ladder is the provider-default sentinel has no
           // selectable level: it accepts any requested effort and is sent at its
           // own default. Every other route keeps the exact support check.

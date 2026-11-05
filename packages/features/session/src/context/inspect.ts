@@ -25,7 +25,8 @@ import {
 } from '../ledger/store.ts';
 import { renderEventText } from './render.ts';
 import { buildReason } from '../reasoning/prompt.ts';
-import type { LedgerPort, SessionHost, SessionViewInfo } from '../ports.ts';
+import type { LedgerPort, SessionViewInfo } from '../ports.ts';
+import type { GatewayModel } from '@wrenyard/protocol/gateway';
 import type {
   ContextInspectCalibration,
   ContextInspectFiles,
@@ -78,7 +79,8 @@ export interface ContextInspectHost {
   workspaceRoot: string;
   deviceName: string;
   ledger: LedgerPort;
-  resolveInferenceProvider: SessionHost['resolveInferenceProvider'];
+  /** The endpoint model list that is the only source of model metadata. */
+  models(): Promise<readonly GatewayModel[]>;
   now(): Date;
   /** Build the workspace snapshot a new session would freeze right now. */
   createSnapshot(): Promise<WorkspaceSnapshot>;
@@ -234,7 +236,7 @@ export class ContextInspector {
       ? await this.host.createSnapshot()
       : this.snapshotOf(sessionId, events);
 
-    const metadata = resolveModelMetadata(request.model, (id) => this.host.resolveInferenceProvider(id));
+    const metadata = resolveModelMetadata(request.model, await this.host.models());
     const allowImages = metadata.imageInput === true;
     const fileCounts = fileCountsOf(events, allowImages);
     const session: SessionViewInfo = {

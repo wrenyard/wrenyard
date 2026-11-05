@@ -267,20 +267,8 @@ export class ReplyWriter {
       } catch (error) {
         failure = messageOf(error);
       }
-      if (text === undefined && failure === undefined) {
-        const toolCalls = outcome.toolCalls ?? [];
-        const providerId = outcome.route?.provider;
-        if (
-          toolCalls.length === 0
-          && providerId !== undefined
-          && outcome.text.trim() !== ''
-          && this.host.host.resolveInferenceProvider(providerId)?.ignoresForcedToolChoice === true
-        ) {
-          text = outcome.text;
-          source = 'reply-text';
-        } else if (request.terminal) {
-          failure = 'Reply call completed without a non-empty reply tool call';
-        }
+      if (text === undefined && failure === undefined && request.terminal) {
+        failure = 'Reply call completed without a non-empty reply tool call';
       }
     } else {
       failure = outcome.error ?? 'reply call failed';

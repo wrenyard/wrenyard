@@ -90,14 +90,11 @@ const PICK_TOOL: ToolSpec = {
 };
 
 /**
- * Read the pick: exactly one `pick` call with integer ids. A provider that
- * ignores a forced tool choice may answer in prose; its `[n]` ids are read
- * from the text instead. Unknown and repeated ids are dropped.
+ * Read the pick: exactly one `pick` call with integer ids. A successful call
+ * without one is not a valid pick. Unknown and repeated ids are dropped.
  */
 function readPick(
   calls: readonly ToolCall[],
-  text: string,
-  proseFallback: boolean,
   catalog: readonly DocCatalogEntry[],
 ): { understanding: string; paths: string[] } | undefined {
   let ids: unknown[];
@@ -113,8 +110,6 @@ function readPick(
     if (!isObject(parsed) || !Array.isArray(parsed.ids)) return undefined;
     ids = parsed.ids;
     if (typeof parsed.understanding === 'string') understanding = parsed.understanding;
-  } else if (calls.length === 0 && proseFallback && text.trim() !== '') {
-    ids = [...text.matchAll(/\[(\d+)\]/gu)].map((match) => Number(match[1]));
   } else {
     return undefined;
   }
@@ -224,9 +219,7 @@ export async function runSearchAction(
       if (result.route !== undefined) route = result.route;
       else if (result.model !== '') route = { model: result.model };
       usage = result.usage;
-      const provider = route?.provider;
-      const proseFallback = provider !== undefined && deps.host.resolveInferenceProvider(provider)?.ignoresForcedToolChoice === true;
-      pick = readPick(result.toolCalls, result.text, proseFallback, catalog);
+      pick = readPick(result.toolCalls, catalog);
     } catch (error) {
       const summary = withMissing(`The model call failed: ${messageOf(error)}`, missing);
       finish('failed', summary);
