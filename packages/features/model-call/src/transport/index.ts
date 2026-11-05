@@ -196,7 +196,6 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
         ...(protocol === 'anthropic_messages'
           ? { 'x-api-key': connection.token, 'anthropic-version': '2023-06-01' }
           : { authorization: `Bearer ${connection.token}` }),
-        [GATEWAY_HEADERS.reasoningEffort]: request.reasoningEffort,
         [GATEWAY_HEADERS.provider]: model.provider,
       };
       if (request.attribution?.role !== undefined) headers[GATEWAY_HEADERS.callRole] = request.attribution.role;

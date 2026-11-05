@@ -121,6 +121,12 @@ const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
  */
 const CORRELATION_HEADER = 'x-wrenyard-gateway-attempt';
 
+/**
+ * Legacy private reasoning-effort header. New callers write the entry protocol's
+ * own body field; the header is still read first for existing callers.
+ */
+const LEGACY_REASONING_EFFORT_HEADER = 'x-wrenyard-reasoning-effort';
+
 /** Default first-response timeout for streaming requests when the caller omits the header (seconds). */
 const DEFAULT_FIRST_RESPONSE_TIMEOUT_SEC = 120;
 const MIN_FIRST_RESPONSE_TIMEOUT_SEC = 1;
@@ -332,16 +338,17 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       const registeredModel = resolved.model.id;
       const target = { publicModel, provider: resolved.provider.id };
 
-      // A resolved public reasoning effort arrives in a request header, never as
-      // a raw body field. When present it is validated against the public enum
-      // and this route's own ladder here, before any upstream call; a request
-      // without the header keeps its body exactly as delivered.
-      const rawEffortHeader = request.headers[GATEWAY_HEADERS.reasoningEffort];
+      // A resolved public reasoning effort arrives either in the legacy private
+      // header or in the entry protocol's own request field. Either way it is
+      // validated against the public enum and this route's own ladder here,
+      // before any upstream call; the header stays the authority when present.
+      const rawEffortHeader = request.headers[LEGACY_REASONING_EFFORT_HEADER];
       const effortHeader = Array.isArray(rawEffortHeader) ? rawEffortHeader[0] : rawEffortHeader;
+      const effortValue = effortHeader ?? module.readReasoningEffort(body);
       let reasoningEffort: ReasoningEffort | undefined;
-      if (effortHeader !== undefined) {
-        const normalized = normalizeReasoningEffort(effortHeader);
-        if (normalized === undefined) return reject(400, `Invalid reasoning effort: ${effortHeader}`, target);
+      if (effortValue !== undefined) {
+        const normalized = normalizeReasoningEffort(effortValue);
+        if (normalized === undefined) return reject(400, `Invalid reasoning effort: ${effortValue}`, target);
         if (!resolved.model.reasoningEfforts.includes(normalized)) {
           return reject(400, `Model ${registeredModel} does not support reasoning effort "${normalized}"`, target);
         }
@@ -387,9 +394,9 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       const upstreamModel = options.providers.resolveUpstreamModel(resolved.provider, resolved.upstreamModel, credential);
       body.model = upstreamModel;
 
-      // The header is the sole authority for reasoning: strip every raw body
-      // spelling and merge the owning provider's exact protocol fields. Without
-      // the header the body is left untouched (existing forwarding behavior).
+      // The resolved effort is the sole authority for reasoning: strip every raw
+      // body spelling and merge the owning provider's exact protocol fields.
+      // Without any resolved effort the body is left untouched.
       if (reasoningEffort !== undefined) {
         module.stripReasoningFields(body);
         const fields = resolved.provider.convertReasoningEffort(resolved.model.id, reasoningEffort, protocol);

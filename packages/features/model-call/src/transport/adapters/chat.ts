@@ -38,11 +38,7 @@ export const chatAdapter: ProtocolAdapter = {
   read: readChat,
 };
 
-/**
- * Serialize the exact chat body. The resolved reasoning effort is deliberately
- * absent: it travels in the Gateway reasoning-effort header, never as a raw
- * body field.
- */
+/** Serialize the exact chat body, including the protocol's own reasoning field. */
 export function serializeChatRequest(request: ModelRequest): string {
   const body: Record<string, unknown> = {
     model: request.model,
@@ -50,6 +46,7 @@ export function serializeChatRequest(request: ModelRequest): string {
     stream: true,
     stream_options: { include_usage: true },
   };
+  if (request.reasoningEffort !== 'default') body.reasoning_effort = request.reasoningEffort;
   if (request.maxOutputTokens !== undefined) body.max_tokens = request.maxOutputTokens;
   // An explicit Fast preference maps onto the official service tier. An absent
   // preference leaves the body untouched so the upstream default applies.

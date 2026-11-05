@@ -137,7 +137,7 @@ export interface ModelRequest {
   /** Gateway public id, always exactly `provider/model`. */
   model: string;
   messages: readonly Message[];
-  /** Required public reasoning level; forwarded as a Gateway request header. */
+  /** Required public reasoning level; each protocol adapter writes its own standard field. */
   reasoningEffort: ReasoningEffort;
   /**
    * Explicit Fast preference: true requests Fast on, false requests Fast off,

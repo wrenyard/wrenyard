@@ -1,5 +1,6 @@
 import type { GatewayProtocol } from '@wrenyard/providers/catalog';
 import type { PublicGatewayModel } from '@wrenyard/providers/catalog';
+import type { ReasoningEffort } from '@wrenyard/providers/catalog';
 import type { GatewayUsage } from '../response-usage.ts';
 
 export type { GatewayUsage };
@@ -99,6 +100,12 @@ export interface GatewayProtocolModule {
    * forwarded unmodified.
    */
   readFast(body: Record<string, unknown>): boolean | undefined;
+  /**
+   * The standard reasoning-effort value carried by this protocol's own request
+   * body, when present. The pipeline validates it against the public enum and
+   * the route's ladder exactly like the legacy private header.
+   */
+  readReasoningEffort(body: Record<string, unknown>): ReasoningEffort | undefined;
   /** Remove every raw reasoning spelling from a request body. */
   stripReasoningFields(body: Record<string, unknown>): void;
   createObserver(): ResponseObserver;
@@ -203,6 +210,11 @@ export function stripReasoningFields(body: Record<string, unknown>): void {
 export function applyReasoningFields(body: Record<string, unknown>, fields: Record<string, unknown>): void {
   if (fields.output_config !== null && typeof fields.output_config === 'object' && !Array.isArray(fields.output_config)) {
     fields.output_config = { ...object(body.output_config), ...fields.output_config as Record<string, unknown> };
+  }
+  // Responses carries the caller's summary request in the same object as the
+  // provider's effort spelling, so merge that object rather than replacing it.
+  if (fields.reasoning !== null && typeof fields.reasoning === 'object' && !Array.isArray(fields.reasoning)) {
+    fields.reasoning = { ...object(body.reasoning), ...fields.reasoning as Record<string, unknown> };
   }
   Object.assign(body, fields);
 }

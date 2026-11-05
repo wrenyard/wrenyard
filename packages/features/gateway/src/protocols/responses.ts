@@ -1,4 +1,4 @@
-import type { PublicGatewayModel } from '@wrenyard/providers/catalog';
+import type { PublicGatewayModel, ReasoningEffort } from '@wrenyard/providers/catalog';
 import { ResponseUsageObserver, type UsageAdapter } from '../response-usage.ts';
 import {
   completeUsage,
@@ -54,6 +54,17 @@ function isResponsesFailure(row: Record<string, unknown>): boolean {
  * envelope, the response `model` position (top level and inside `response`),
  * and usage / completion parsing.
  */
+/**
+ * Strip the raw effort spellings while retaining the caller's reasoning summary
+ * request. The summary is not an effort and must survive so the thinking channel
+ * is still populated after the provider's exact effort fields are merged in.
+ */
+function stripResponsesReasoningFields(body: Record<string, unknown>): void {
+  const summary = object(body.reasoning)?.summary;
+  stripReasoningFields(body);
+  if (typeof summary === 'string' && summary !== '') body.reasoning = { summary };
+}
+
 const adapter: UsageAdapter = {
   input: (raw) => count(raw.input_tokens),
   output: (raw) => count(raw.output_tokens),
@@ -163,7 +174,12 @@ export const responsesProtocol: GatewayProtocolModule = {
     return undefined;
   },
 
-  stripReasoningFields,
+  readReasoningEffort(body) {
+    const effort = object(body.reasoning)?.effort;
+    return typeof effort === 'string' ? effort as ReasoningEffort : undefined;
+  },
+
+  stripReasoningFields: stripResponsesReasoningFields,
 
   createObserver(): ResponseObserver {
     return new ResponseUsageObserver(adapter);

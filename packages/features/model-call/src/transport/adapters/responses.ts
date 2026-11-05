@@ -70,8 +70,12 @@ function buildResponsesBody(request: ModelRequest): Record<string, unknown> {
   if (request.fast !== undefined) body.service_tier = request.fast ? 'priority' : 'default';
   // The summary is the only reasoning text the protocol exposes; request it so
   // the thinking channel is filled whenever the model reasons. The reasoning
-  // level itself travels in the request header, never as a body `effort`.
-  body.reasoning = { summary: 'auto' };
+  // level itself travels in this same standard field, except for the
+  // provider-default sentinel which writes no effort.
+  body.reasoning = {
+    summary: 'auto',
+    ...(request.reasoningEffort === 'default' ? {} : { effort: request.reasoningEffort }),
+  };
   if (request.cacheKey) body.prompt_cache_key = request.cacheKey;
   if (request.maxOutputTokens !== undefined) body.max_output_tokens = request.maxOutputTokens;
   if (request.tools !== undefined && request.tools.length > 0) {

@@ -1,4 +1,4 @@
-import type { PublicGatewayModel } from '@wrenyard/providers/catalog';
+import type { PublicGatewayModel, ReasoningEffort } from '@wrenyard/providers/catalog';
 import { ResponseUsageObserver, type UsageAdapter } from '../response-usage.ts';
 import {
   count,
@@ -161,6 +161,13 @@ export const messagesProtocol: GatewayProtocolModule = {
     if (body.speed === 'fast') return true;
     if (body.speed === 'standard') return false;
     return undefined;
+  },
+
+  readReasoningEffort(body) {
+    const effort = object(body.output_config)?.effort;
+    if (typeof effort === 'string') return effort as ReasoningEffort;
+    // The standard disabled-thinking spelling carries no effort of its own.
+    return object(body.thinking)?.type === 'disabled' ? 'none' : undefined;
   },
 
   stripReasoningFields,

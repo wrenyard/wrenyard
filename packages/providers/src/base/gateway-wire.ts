@@ -8,8 +8,6 @@
  * request apart from a real upstream fault without parsing text.
  */
 export const GATEWAY_HEADERS = {
-  /** Request: unified public reasoning effort the Gateway translates per provider. */
-  reasoningEffort: 'x-wrenyard-reasoning-effort',
   /**
    * Request: exact provider selector. The body's `model` field is always the
    * bare registered model id; the provider is a separate dimension. When absent

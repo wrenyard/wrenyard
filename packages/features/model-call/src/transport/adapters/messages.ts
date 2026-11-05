@@ -68,6 +68,17 @@ function buildMessagesBody(request: ModelRequest): Record<string, unknown> {
     stream: true,
   };
   if (systemText.length > 0) body.system = systemText.join('\n\n');
+  // Reasoning travels in the protocol's own thinking/effort fields. The
+  // provider-default sentinel writes none; `none` disables thinking because it
+  // is not an effort level in the Messages enum.
+  if (request.reasoningEffort !== 'default') {
+    if (request.reasoningEffort === 'none') {
+      body.thinking = { type: 'disabled' };
+    } else {
+      body.thinking = { type: 'enabled' };
+      body.output_config = { effort: request.reasoningEffort };
+    }
+  }
   // An explicit Fast preference maps onto the official speed. An absent
   // preference leaves the body untouched, including thinking and effort fields.
   if (request.fast !== undefined) body.speed = request.fast ? 'fast' : 'standard';

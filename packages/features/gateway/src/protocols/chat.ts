@@ -1,4 +1,4 @@
-import type { PublicGatewayModel } from '@wrenyard/providers/catalog';
+import type { PublicGatewayModel, ReasoningEffort } from '@wrenyard/providers/catalog';
 import { ResponseUsageObserver, type UsageAdapter } from '../response-usage.ts';
 import {
   completeUsage,
@@ -183,6 +183,11 @@ export const chatProtocol: GatewayProtocolModule = {
     if (body.service_tier === 'priority' || body.service_tier === 'fast') return true;
     if (body.service_tier === 'default') return false;
     return undefined;
+  },
+
+  readReasoningEffort(body) {
+    const effort = body.reasoning_effort;
+    return typeof effort === 'string' ? effort as ReasoningEffort : undefined;
   },
 
   stripReasoningFields,
