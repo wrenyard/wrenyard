@@ -114,10 +114,11 @@ export function checkContextBudget(
  * The budget facts compaction and the turn need, resolved exactly as
  * {@link checkContextBudget} resolves them: `outputReservation` is the per-call
  * cap (or source maximum) bounded by the source maximum and the room left after
- * the estimated input. `threshold` is the input size above which a request
- * compacts before sending: the lower of half the room left after the output
- * reservation and the caller-supplied `compactionThresholdCap`; the cap is
- * caller policy, so a caller without a compaction threshold simply omits it.
+ * the estimated input, never negative. `threshold` is the input size above
+ * which a request compacts before sending: the lower of half the room left after
+ * the output reservation and the caller-supplied `compactionThresholdCap`; the
+ * cap is caller policy, so a caller without a compaction threshold simply omits
+ * it.
  */
 export interface ContextBudgetFacts {
   contextWindow?: number;
@@ -151,7 +152,7 @@ export function contextBudgetOf(
     ? undefined
     : room === undefined
       ? bounded
-      : Math.min(bounded, room);
+      : Math.max(0, Math.min(bounded, room));
   const threshold = contextWindow === undefined || outputReservation === undefined
     ? undefined
     : Math.min(Math.floor(0.5 * (contextWindow - outputReservation)), compactionThresholdCap ?? Number.MAX_SAFE_INTEGER);

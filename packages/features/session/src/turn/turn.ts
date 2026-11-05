@@ -379,7 +379,7 @@ export class TurnRunner {
           maxTokens,
         );
         const overWindow = (facts: ReturnType<typeof recheck>): boolean => facts.contextWindow !== undefined
-          && facts.estimatedInputTokens + (facts.outputReservation ?? 0) > facts.contextWindow;
+          && facts.estimatedInputTokens >= facts.contextWindow;
 
         const compacted = await compact(source, compactEstimate);
         if (compacted.throughSeq > 0) {
@@ -399,7 +399,7 @@ export class TurnRunner {
           if (overWindow(after)) {
             return {
               ok: false,
-              error: `context_overflow: estimated input ${after.estimatedInputTokens} + output reservation ${after.outputReservation ?? 0} exceeds the context window ${after.contextWindow}`,
+              error: `context_overflow: estimated input ${after.estimatedInputTokens} exceeds the context window ${after.contextWindow}`,
             };
           }
         }
