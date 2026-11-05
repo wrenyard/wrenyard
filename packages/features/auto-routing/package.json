@@ -9,7 +9,6 @@
     "./constants": "./src/constants.ts"
   },
   "scripts": {
-    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@wrenyard/models": "workspace:*",

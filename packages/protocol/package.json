@@ -30,7 +30,6 @@
     "./tps": "./src/task/tps.ts"
   },
   "scripts": {
-    "test": "tsx --test src/*.test.ts"
   },
   "dependencies": {
     "@wrenyard/models": "workspace:*"

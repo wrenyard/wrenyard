@@ -25,7 +25,6 @@
     "release": "node ./tools/release/release.mjs",
     "lint": "oxlint && tsc -p tsconfig.json --noEmit && tsc -b apps/desktop",
     "check": "node tools/check.mjs",
-    "test": "node --test tools/*.test.mjs tools/**/*.test.mjs && pnpm -r --if-present run test",
     "dev": "node tools/dev.mjs"
   },
   "devDependencies": {

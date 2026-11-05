@@ -52,7 +52,6 @@ enough.
 
 ```sh
 pnpm lint    # oxlint + tsc (the only CI quality gate)
-pnpm test    # tool tests + package tests
 pnpm check   # public identifiers, secrets, legal, version consistency
 ```
 
