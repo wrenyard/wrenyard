@@ -29,6 +29,17 @@ import { zhipuModels } from './definitions/zhipu.ts';
 const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const INTELLIGENCE_SET: ReadonlySet<string> = new Set(INTELLIGENCE_TIERS);
 
+export type ModelMetadataGap = 'maxInputTokens' | 'maxOutputTokens' | 'reasoningEfforts' | 'inputModalities';
+
+/**
+ * Registered identities whose source does not establish a field. The field
+ * stays absent instead of being filled with a default, and the completeness
+ * test reports the same gap instead of accepting a placeholder.
+ */
+export const MODEL_METADATA_GAPS: Readonly<Record<string, readonly ModelMetadataGap[]>> = {
+  'swe-2': ['maxInputTokens', 'maxOutputTokens', 'reasoningEfforts', 'inputModalities'],
+};
+
 function freezeDeep<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value);
@@ -80,12 +91,21 @@ function validateModel(model: RegisteredModel, seen: Set<string>): void {
   if (model.defaults.capabilities.length === 0) {
     throw new Error(`registered model ${model.id} capabilities must not be empty`);
   }
+  const gaps = MODEL_METADATA_GAPS[model.id] ?? [];
   const maxInputTokens = model.defaults.maxInputTokens;
-  if (maxInputTokens === undefined || !Number.isSafeInteger(maxInputTokens) || maxInputTokens <= 0) {
+  if (maxInputTokens === undefined) {
+    if (!gaps.includes('maxInputTokens')) {
+      throw new Error(`registered model ${model.id} must declare a positive input token limit`);
+    }
+  } else if (!Number.isSafeInteger(maxInputTokens) || maxInputTokens <= 0) {
     throw new Error(`registered model ${model.id} must declare a positive input token limit`);
   }
   const inputModalities = model.defaults.inputModalities;
-  if (!Array.isArray(inputModalities) || inputModalities.length === 0
+  if (inputModalities === undefined) {
+    if (!gaps.includes('inputModalities')) {
+      throw new Error(`registered model ${model.id} must declare unique non-empty input modalities`);
+    }
+  } else if (!Array.isArray(inputModalities) || inputModalities.length === 0
     || inputModalities.some((modality) => typeof modality !== 'string' || modality.trim() === '')
     || new Set(inputModalities).size !== inputModalities.length) {
     throw new Error(`registered model ${model.id} must declare unique non-empty input modalities`);

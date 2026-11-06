@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { models, REASONING_EFFORTS } from '../src/index.ts'
+import { MODEL_METADATA_GAPS, models, REASONING_EFFORTS } from '../src/index.ts'
 
 // Exact values that catch a present-but-wrong field, not only a missing one.
 const EXPECTED = {
@@ -28,6 +28,24 @@ const EXPECTED = {
     reasoningEfforts: ['low', 'high', 'max'],
     inputModalities: ['text', 'image', 'video'],
   },
+  'hunyuan-hy4-preview': {
+    maxInputTokens: 1_024_000,
+    maxOutputTokens: 64_000,
+    reasoningEfforts: ['none', 'high'],
+    inputModalities: ['text'],
+  },
+  'hunyuan-hy4': {
+    maxInputTokens: 983_010,
+    maxOutputTokens: 65_535,
+    reasoningEfforts: ['none', 'high'],
+    inputModalities: ['text', 'image'],
+  },
+  'deepseek-v4-pro': {
+    maxInputTokens: 1_048_576,
+    maxOutputTokens: 393_216,
+    reasoningEfforts: ['low', 'high', 'max'],
+    inputModalities: ['text'],
+  },
 } as const
 
 // Source: docs/specs/2026-11-05-standard-protocol-access.md (R4, approved registry case).
@@ -36,15 +54,28 @@ describe('model catalog metadata', () => {
     expect(model.id).toBe(model.id.trim())
     expect(model.displayName.trim()).not.toBe('')
     expect(model.lab.trim()).not.toBe('')
+    const gaps = MODEL_METADATA_GAPS[model.id] ?? []
     expect(model.defaults.contextWindow).toBeGreaterThan(0)
-    expect(model.defaults.maxInputTokens).toBeGreaterThan(0)
-    expect(model.defaults.inputModalities?.length).toBeGreaterThan(0)
+    if (gaps.includes('maxInputTokens')) {
+      expect(model.defaults.maxInputTokens).toBeUndefined()
+    } else {
+      expect(model.defaults.maxInputTokens).toBeGreaterThan(0)
+    }
+    if (gaps.includes('inputModalities')) {
+      expect(model.defaults.inputModalities).toBeUndefined()
+    } else {
+      expect(model.defaults.inputModalities?.length).toBeGreaterThan(0)
+    }
     expect(model.defaults.intelligence).toMatch(/^(low|mid|high|premium)$/u)
     expect(model.defaults.speed).toBeGreaterThan(0)
-    if (model.defaults.maxOutputTokens !== undefined) {
+    if (gaps.includes('maxOutputTokens')) {
+      expect(model.defaults.maxOutputTokens).toBeUndefined()
+    } else if (model.defaults.maxOutputTokens !== undefined) {
       expect(model.defaults.maxOutputTokens).toBeGreaterThan(0)
     }
-    if (model.defaults.reasoningEfforts !== undefined) {
+    if (gaps.includes('reasoningEfforts')) {
+      expect(model.defaults.reasoningEfforts).toBeUndefined()
+    } else if (model.defaults.reasoningEfforts !== undefined) {
       for (const effort of model.defaults.reasoningEfforts) {
         expect(REASONING_EFFORTS).toContain(effort)
       }

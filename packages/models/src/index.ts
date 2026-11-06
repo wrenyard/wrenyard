@@ -15,8 +15,10 @@ export {
   reasoningEffortRank,
   resolveReasoningEffort,
 } from './types.ts';
+export type { ModelMetadataGap } from './registry.ts';
 export {
   ModelRegistry,
+  MODEL_METADATA_GAPS,
   builtinModelDisplayName,
   models,
 } from './registry.ts';

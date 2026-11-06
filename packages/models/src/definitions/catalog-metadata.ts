@@ -6,8 +6,8 @@
  * `maxOutputTokens` is never derived from the context window. Reasoning
  * efforts keep only levels in the public vocabulary, and input modalities
  * keep every modality the source lists. A field a source does not establish
- * is omitted instead of guessed; the registry rejects an entry without an
- * input limit or input modalities.
+ * is omitted instead of guessed. The registry rejects a missing input limit or
+ * input modalities unless the identity is declared in its metadata-gap list.
  */
 import type { ModelDefaults } from '../types.ts';
 
@@ -53,6 +53,15 @@ export const CATALOG_METADATA: Readonly<Record<string, CatalogMetadata>> = {
     maxOutputTokens: 64_000,
     reasoningEfforts: ['none', 'high'],
     inputModalities: ['text'],
+  },
+  // models.dev: tencent-tokenhub/hy4; output 65,535 is the user-specified
+  // value (2026-11-06), not the 65,536 models.dev reports.
+  'hunyuan-hy4': {
+    contextWindow: 1_048_576,
+    maxInputTokens: 983_010,
+    maxOutputTokens: 65_535,
+    reasoningEfforts: ['none', 'high'],
+    inputModalities: ['text', 'image'],
   },
   // models.dev: 302ai/kimi-k2.5
   'kimi-k2.5': {
@@ -594,12 +603,6 @@ export const CATALOG_METADATA: Readonly<Record<string, CatalogMetadata>> = {
     maxInputTokens: 1_048_576,
     maxOutputTokens: 131_072,
     reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    inputModalities: ['text'],
-  },
-  // models.dev: no current public row; existing catalog limits retained
-  'swe-2': {
-    contextWindow: 262_144,
-    maxInputTokens: 262_144,
     inputModalities: ['text'],
   },
   // models.dev: google-vertex/gemini-3.1-pro-preview

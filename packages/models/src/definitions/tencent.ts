@@ -19,4 +19,13 @@ export const tencentModels = [
     pricing: [0.042, 0.834, 2.501],
     speed: 38,
   }, { lab: 'tencent', family: 'hunyuan' }),
+  // Registry-only GA identity. Metadata comes from models.dev
+  // tencent-tokenhub/hy4; no provider route or default selection is declared.
+  // Intelligence and speed mirror the existing HY4 Preview registration.
+  defineModel('hunyuan-hy4', 'HY4', {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    contextWindow: 1_048_576,
+    speed: 38,
+  }, { lab: 'tencent', family: 'hunyuan' }),
 ];
