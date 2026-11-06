@@ -1,6 +1,7 @@
 export type {
   ConfigRecord,
   ForemanAuxiliaryModelConfig,
+  ForemanBotsModelConfig,
   ForemanEndpointConfig,
   ForemanGatewayConfig,
   ForemanModelsConfig,
@@ -21,6 +22,7 @@ export {
   createDefaultForemanConfigData,
   mergeForemanConfigData,
   type AuxiliaryModelConfigData,
+  type BotsModelConfigData,
   type EndpointConfigData,
   type ForemanConfigData,
   type GatewayConfigData,

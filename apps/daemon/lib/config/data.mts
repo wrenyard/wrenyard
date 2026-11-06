@@ -46,9 +46,17 @@ export type WorkerModelConfigData = ConfigRecord & {
   reasoningEffort?: string
 }
 
+export type BotsModelConfigData = ConfigRecord & {
+  /** The endpoint's own model id, sent unchanged. */
+  model?: string
+  /** Reasoning level bot turns request. */
+  reasoningEffort?: string
+}
+
 export type ModelsConfigData = ConfigRecord & {
   auxiliary?: AuxiliaryModelConfigData
   worker?: WorkerModelConfigData
+  bots?: BotsModelConfigData
 }
 
 /** Persisted task settings layer. Mirrors the canonical TaskSettingsLayer while

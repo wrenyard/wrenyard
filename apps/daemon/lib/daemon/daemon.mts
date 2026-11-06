@@ -1483,9 +1483,30 @@ async function createForemanDaemonResources(
     }
     // Bot agents select through the bot requirement key (high/premium at a high
     // reasoning level); each ranked `provider/model` route is split into the
-    // explicit model session.send needs.
+    // explicit model session.send needs. A configured standard endpoint names
+    // the one bot model directly in `models.bots` and that id is sent unchanged;
+    // the internal catalog path runs only without an endpoint.
     const selectModels = async (): Promise<readonly AgentModelRoute[]> => {
       resetAuxiliaryRouteHealth()
+      const serviceConfig = loadForemanServiceConfig(authoritativeConfigPath)
+      if (serviceConfig.endpoint !== undefined) {
+        const bots = serviceConfig.models?.bots
+        if (bots === undefined) {
+          throw new Error('The configured endpoint requires models.bots')
+        }
+        const separator = bots.model.indexOf('/')
+        const provider = separator > 0 ? bots.model.slice(0, separator) : bots.model
+        const model = separator > 0 ? bots.model.slice(separator + 1) : bots.model
+        const models = (await gatewayConnectionSnapshot()).models
+        const metadata = resolveModelMetadata(`${provider}/${model}`, models)
+        return [{
+          provider,
+          model,
+          reasoningEffort: bots.reasoningEffort,
+          ...(metadata.contextWindow === undefined ? {} : { contextWindow: metadata.contextWindow }),
+          ...(metadata.maxOutputTokens === undefined ? {} : { maxOutputTokens: metadata.maxOutputTokens }),
+        }]
+      }
       const routes = await selectRoutesByRequirement(auxiliaryRoutingOptions, BOT_ROUTING_REQUIREMENT, 'bot')
       const models = (await gateway.connection(gatewayOrigin(boundPort))).models
       return routes.map(route => {

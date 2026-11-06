@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from 'node:path'
 import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models'
-import type { ConfigRecord, ForemanAuxiliaryModelConfig, ForemanEndpointConfig, ForemanGatewayConfig, ForemanModelsConfig, ForemanServiceConfig, ForemanWorkerModelConfig, GatewayPortMode } from './types.mts'
+import type { ConfigRecord, ForemanAuxiliaryModelConfig, ForemanBotsModelConfig, ForemanEndpointConfig, ForemanGatewayConfig, ForemanModelsConfig, ForemanServiceConfig, ForemanWorkerModelConfig, GatewayPortMode } from './types.mts'
 
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return typeof value === 'string' && (REASONING_EFFORTS as readonly string[]).includes(value)
@@ -55,22 +55,24 @@ export function normalizeForemanEndpointConfig(value: unknown): ForemanEndpointC
 }
 
 /**
- * Normalize the optional auxiliary and worker models beside the endpoint. A
- * missing model id or an unknown reasoning level reads back as absent, so an
+ * Normalize the optional auxiliary, worker and bot models beside the endpoint.
+ * A missing model id or an unknown reasoning level reads back as absent, so an
  * incomplete entry never becomes a callable route.
  */
 export function normalizeForemanModelsConfig(value: unknown): ForemanModelsConfig | undefined {
   const raw = record(value)
   const auxiliary = normalizeDeterminedModelConfig(raw.auxiliary)
   const worker = normalizeDeterminedModelConfig(raw.worker)
-  if (auxiliary === undefined && worker === undefined) return undefined
+  const bots = normalizeDeterminedModelConfig(raw.bots)
+  if (auxiliary === undefined && worker === undefined && bots === undefined) return undefined
   return {
     ...(auxiliary === undefined ? {} : { auxiliary }),
     ...(worker === undefined ? {} : { worker }),
+    ...(bots === undefined ? {} : { bots }),
   }
 }
 
-function normalizeDeterminedModelConfig(value: unknown): ForemanAuxiliaryModelConfig | ForemanWorkerModelConfig | undefined {
+function normalizeDeterminedModelConfig(value: unknown): ForemanAuxiliaryModelConfig | ForemanWorkerModelConfig | ForemanBotsModelConfig | undefined {
   const raw = record(value)
   const model = stringValue(raw.model, '')
   const reasoningEffort = raw.reasoningEffort
