@@ -388,10 +388,11 @@ const devinModels: readonly RegisteredModel[] = [
   defineModel('swe-2', 'SWE 2', {
     intelligence: 'high',
     capabilities: ['text'],
-    contextWindow: 262_144,
-    // Source: 2026-11-06 SWE 2 measurement report. 48,128 is the observed
-    // lower bound; the attempted upper bound was not reached. Reasoning levels
-    // remain a gap because the measurement could not distinguish them.
+    // Source: 2026-11-06 SWE 2 measurement report. 500,412 is the measured
+    // lower bound of the context window; the attempted upper bound was not
+    // reached. 48,128 is the observed lower bound of one output. Reasoning
+    // levels remain a gap because the measurement could not distinguish them.
+    contextWindow: 500_412,
     maxOutputTokens: 48_128,
     speed: 185,
   }, { lab: 'cognition', family: 'swe' }),
