@@ -25,6 +25,7 @@ import type { OperationHost } from '../core/operations/types.mts'
 import type { ForemanServiceConfig, GatewayPortMode } from '../config/index.mts'
 import { loadForemanGatewayConfig } from '../config/reader.mts'
 import { updateForemanConfigData, updateForemanGatewayConfig } from '../config/writer.mts'
+import { loadForemanServiceConfig } from '../config/reader.mts'
 import { RpcRouter } from '../server/rpc-router.mts'
 import { startEventLoopDelayMonitor } from '../server/event-loop-monitor.mts'
 import { registerCoreHandlers, readProcessIdentity, type CoreRpcHandlerOptions, type DaemonActiveWorkCounts } from '../server/handlers/core.mts'
@@ -388,7 +389,11 @@ export class ForemanDaemon implements RunningForemanDaemon {
     let runtime: ForemanDaemonRuntime | undefined
     try {
       await mkdir(foremanStateRoot(), { recursive: true })
-      runtime = await bootstrapForemanDaemonRuntime({ endpoint: this.config.endpoint })
+      runtime = await bootstrapForemanDaemonRuntime({
+        // Read the current config at each launch: a newly added or changed
+        // endpoint takes effect without restarting the daemon.
+        endpoint: () => loadForemanServiceConfig(this.configPath).endpoint,
+      })
       await this.sampleLowDisk()
       this.lowDiskTimer = setInterval(() => { void this.sampleLowDisk() }, 30_000)
       this.lowDiskTimer.unref?.()
@@ -3242,7 +3247,7 @@ const latestEffectiveQuotaPools = new Map<string, EffectiveQuotaPoolEntry>()
 // guard rather than republishing the previous account's effective pools.
 let effectiveQuotaPoolsGeneration = 0
 
-async function bootstrapForemanDaemonRuntime(options?: { endpoint?: ForemanServiceConfig['endpoint'] }): Promise<ForemanDaemonRuntime> {
+async function bootstrapForemanDaemonRuntime(options?: { endpoint?: () => ForemanServiceConfig['endpoint'] }): Promise<ForemanDaemonRuntime> {
   // Startup-only migration: convert a legacy auto_vacuum=NONE database to
   // INCREMENTAL on a worker thread before initDb opens it and before IPC
   // serves clients. A failure is logged and never blocks startup.

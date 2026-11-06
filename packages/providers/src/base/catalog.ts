@@ -931,7 +931,10 @@ export function parseRunSyntax(input: string): RunSyntaxRef {
   const provider = input.slice(0, slash);
   if (provider.includes(':')) throw new Error('provider must not contain ":"');
   const model = input.slice(slash + 1, colon);
-  if (model.includes(':') && !/^[^:]+:free$/.test(model)) {
+  // The `wrenyard` worker provider forwards any endpoint model id unchanged,
+  // including ids containing a colon; the last colon already found above is
+  // the client separator. Other providers keep the strict :free-only rule.
+  if (provider !== 'wrenyard' && model.includes(':') && !/^[^:]+:free$/.test(model)) {
     throw new Error(`model ":" is only supported in a trailing :free variant: ${JSON.stringify(input)}`);
   }
   const rawClient = input.slice(colon + 1);

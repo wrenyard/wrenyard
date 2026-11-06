@@ -103,11 +103,12 @@ export interface AgentExecutionSupervisorOptions {
   isProcessLiveImpl?: (pid: number) => boolean
   catalog?: ReturnType<typeof createBuiltinCatalog>
   /**
-   * Configured standard Chat endpoint. When set, a `wrenyard`-provider launch
-   * re-points the gateway URL/token env at this endpoint for that one child;
-   * every other launch keeps the built-in gateway environment.
+   * Reader of the current configured standard Chat endpoint, consulted at each
+   * launch. When it returns a config, a `wrenyard`-provider launch re-points
+   * the gateway URL/token env at that endpoint for that one child; every other
+   * launch keeps the built-in gateway environment.
    */
-  endpoint?: ForemanEndpointConfig
+  endpoint?: () => ForemanEndpointConfig | undefined
   /**
    * Shared raw prompt-execution service. When supplied, every task attempt is
    * lowered onto `ExecService.start` instead of calling the agent client
@@ -262,7 +263,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private readonly killProcessTreeFn: (pid: number, pgid?: number) => Promise<void>
   private readonly isProcessLiveFn: (pid: number) => boolean
   private readonly catalog: ReturnType<typeof createBuiltinCatalog>
-  private readonly endpoint?: ForemanEndpointConfig
+  private readonly endpoint?: () => ForemanEndpointConfig | undefined
   private readonly execService: ExecService
   private readonly operations?: OperationAdapter
   private readonly onExecutionCompleted?: (executionId: string) => void
@@ -869,10 +870,15 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       )
       // A worker on the `wrenyard` provider talks to the configured standard
       // endpoint directly: its base URL and bearer token replace the built-in
-      // gateway values for this one child's environment only.
-      if (plan.provider === WRENYARD_PROVIDER && this.endpoint !== undefined) {
-        baseEnv.WRENYARD_GATEWAY_OPENAI_CHAT_URL = this.endpoint.url
-        baseEnv.WRENYARD_GATEWAY_TOKEN = this.endpoint.token
+      // gateway values for this one child's environment only. The config is
+      // read at launch so an endpoint added or changed after startup applies
+      // to the next run.
+      if (plan.provider === WRENYARD_PROVIDER) {
+        const endpoint = this.endpoint?.()
+        if (endpoint !== undefined) {
+          baseEnv.WRENYARD_GATEWAY_OPENAI_CHAT_URL = endpoint.url
+          baseEnv.WRENYARD_GATEWAY_TOKEN = endpoint.token
+        }
       }
       const laneWatch = setInterval(() => {
         if (entry.cancelRequested || entry.terminalIntent) laneAbort.abort()
