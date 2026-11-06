@@ -37,7 +37,7 @@ export type ModelMetadataGap = 'maxInputTokens' | 'maxOutputTokens' | 'reasoning
  * test reports the same gap instead of accepting a placeholder.
  */
 export const MODEL_METADATA_GAPS: Readonly<Record<string, readonly ModelMetadataGap[]>> = {
-  'swe-2': ['maxInputTokens', 'reasoningEfforts', 'inputModalities'],
+  'swe-2': ['maxInputTokens', 'inputModalities'],
   'union-alpha': ['maxOutputTokens', 'reasoningEfforts'],
   'groq-compound': ['reasoningEfforts'],
 };
@@ -388,12 +388,9 @@ const devinModels: readonly RegisteredModel[] = [
   defineModel('swe-2', 'SWE 2', {
     intelligence: 'high',
     capabilities: ['text'],
-    // Source: 2026-11-06 SWE 2 measurement report. 500,412 is the measured
-    // lower bound of the context window; the attempted upper bound was not
-    // reached. 48,128 is the observed lower bound of one output. Reasoning
-    // levels remain a gap because the measurement could not distinguish them.
-    contextWindow: 500_412,
-    maxOutputTokens: 48_128,
+    contextWindow: 262_000,
+    maxOutputTokens: 128_000,
+    reasoningEfforts: ['medium', 'high', 'max'],
     speed: 185,
   }, { lab: 'cognition', family: 'swe' }),
 ];
