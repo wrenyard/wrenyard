@@ -47,6 +47,7 @@ import { Ledger, createSession, createWorkspaceMemory, resolveModelMetadata, typ
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
 import { withCatalogMetadata } from './services/endpoint-models.mts'
+import { endpointConnection } from './services/endpoint-connection.mts'
 import { createScheduler, type Scheduler } from './services/scheduler.mts'
 import { migrateDeviceBots } from './services/bot-agents/device-migration.mts'
 import { createBotAgentKernel, type AgentModelRoute, type BotAgentKernel } from './services/bot-agents/kernel.mts'
@@ -1230,9 +1231,27 @@ async function createForemanDaemonResources(
   })
   const sessionStateRoot = foremanStateRoot()
   const ipcPath = resolveWrenyardIpcPath(process.env, { config })
-  // The single shared gateway connection snapshot, used by the session gateway,
-  // the IPC gateway.connection surface and the environment injection below.
+  // The single downstream connection snapshot, used by the session gateway and
+  // the IPC gateway.connection surface. A configured standard endpoint replaces
+  // the built-in gateway connection for every downstream consumer; otherwise
+  // the built-in gateway connection is used unchanged.
+  let endpointConnectionSnapshot: Promise<DaemonGatewayConnection> | undefined
   const gatewayConnectionSnapshot = async (): Promise<DaemonGatewayConnection> => {
+    if (config.endpoint !== undefined) {
+      endpointConnectionSnapshot ??= endpointConnection(config.endpoint, globalThis.fetch)
+        .then((connection) => ({
+          ...connection,
+          models: connection.models.map((model) => withCatalogMetadata(
+            // Endpoint models carry every catalog field withCatalogMetadata reads.
+            model as Parameters<typeof withCatalogMetadata>[0],
+          )),
+        }))
+        .catch((error: unknown) => {
+          endpointConnectionSnapshot = undefined
+          throw error
+        })
+      return endpointConnectionSnapshot
+    }
     const connection = await gateway.connection(gatewayOrigin(boundPort))
     return {
       ...connection,
@@ -3011,7 +3030,7 @@ function blockedSharedTaskRoute(
   return shared?.phase === 'open' ? shared : undefined
 }
 
-type DaemonGatewayConnection = import('@wrenyard/gateway').GatewayConnection & { token: string }
+type DaemonGatewayConnection = import('@wrenyard/protocol/gateway').GatewayConnection & { token: string }
 
 function installGatewayEnvironment(
   connection: DaemonGatewayConnection,

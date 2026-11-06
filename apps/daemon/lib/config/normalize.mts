@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from 'node:path'
-import type { ConfigRecord, ForemanGatewayConfig, ForemanServiceConfig, GatewayPortMode } from './types.mts'
+import type { ConfigRecord, ForemanEndpointConfig, ForemanGatewayConfig, ForemanServiceConfig, GatewayPortMode } from './types.mts'
 
 export interface NormalizeForemanConfigOptions {
   configDir: string
@@ -19,6 +19,7 @@ export function normalizeForemanServiceConfig(
   const workspace = record(config.workspace)
   const workspaceRoot = resolveWorkspaceRoot(workspace.root, options.configDir, env)
   const gateway = normalizeForemanGatewayConfig(config.gateway)
+  const endpoint = normalizeForemanEndpointConfig(config.endpoint)
 
   // Legacy delivery/principal/grants/message fields are ignored on purpose so an
   // existing config keeps loading after the message subsystem was removed.
@@ -28,8 +29,22 @@ export function normalizeForemanServiceConfig(
       ...(serviceIpc ? { ipc: serviceIpc } : {}),
     },
     gateway,
+    ...(endpoint === undefined ? {} : { endpoint }),
     workspaceRoot,
   }
+}
+
+/**
+ * Normalize the optional standard endpoint. Both fields are required for a
+ * usable connection; an incomplete or malformed entry reads back as absent so
+ * startup keeps the built-in gateway connection.
+ */
+export function normalizeForemanEndpointConfig(value: unknown): ForemanEndpointConfig | undefined {
+  const raw = record(value)
+  const url = stringValue(raw.url, '')
+  const token = stringValue(raw.token, '')
+  if (!url || !token) return undefined
+  return { url, token }
 }
 
 /**

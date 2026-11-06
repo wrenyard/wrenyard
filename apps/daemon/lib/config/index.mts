@@ -1,5 +1,6 @@
 export type {
   ConfigRecord,
+  ForemanEndpointConfig,
   ForemanGatewayConfig,
   ForemanServiceConfig,
   GatewayPortMode,
@@ -7,6 +8,7 @@ export type {
 
 export {
   normalizeForemanServiceConfig,
+  normalizeForemanEndpointConfig,
   normalizeForemanGatewayConfig,
   type NormalizeForemanConfigOptions,
 } from './normalize.mts'
@@ -14,6 +16,7 @@ export {
 export {
   createDefaultForemanConfigData,
   mergeForemanConfigData,
+  type EndpointConfigData,
   type ForemanConfigData,
   type GatewayConfigData,
   type ServiceConfigData,

@@ -25,6 +25,13 @@ export type WorkspaceConfigData = ConfigRecord & {
   root?: string
 }
 
+export type EndpointConfigData = ConfigRecord & {
+  /** Complete Chat Base URL. */
+  url?: string
+  /** Bearer credential for that endpoint. */
+  token?: string
+}
+
 /** Persisted task settings layer. Mirrors the canonical TaskSettingsLayer while
  *  staying open to unknown/forward-compatible keys. */
 export type TaskSettingsLayerData = ConfigRecord & TaskSettingsLayer
@@ -76,6 +83,7 @@ export type RemoteConfigData = ConfigRecord & {
 export type ForemanConfigData = {
   service?: ServiceConfigData
   gateway?: GatewayConfigData
+  endpoint?: EndpointConfigData
   workspace?: WorkspaceConfigData
   tasks?: TasksConfigData
   remote?: RemoteConfigData

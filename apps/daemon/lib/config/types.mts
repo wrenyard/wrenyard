@@ -17,6 +17,16 @@ export type ForemanGatewayConfig = {
   token?: string
 }
 
+/**
+ * One standard Chat endpoint. `url` is the complete Chat Base URL; `token` is
+ * the bearer credential sent to it. When configured, the daemon builds its
+ * connection from this endpoint instead of the built-in gateway.
+ */
+export type ForemanEndpointConfig = {
+  url: string
+  token: string
+}
+
 export interface ForemanServiceConfig {
   service: {
     enabled: boolean
@@ -25,5 +35,6 @@ export interface ForemanServiceConfig {
     }
   }
   gateway: ForemanGatewayConfig
+  endpoint?: ForemanEndpointConfig
   workspaceRoot: string
 }
