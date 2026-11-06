@@ -1488,13 +1488,15 @@ async function createForemanDaemonResources(
     // the internal catalog path runs only without an endpoint.
     const selectModels = async (): Promise<readonly AgentModelRoute[]> => {
       resetAuxiliaryRouteHealth()
-      const serviceConfig = loadForemanServiceConfig(authoritativeConfigPath)
-      if (serviceConfig.endpoint !== undefined) {
-        const bots = serviceConfig.models?.bots
+      if (config.endpoint !== undefined) {
+        const bots = config.models?.bots
         if (bots === undefined) {
           throw new Error('The configured endpoint requires models.bots')
         }
-        const separator = bots.model.indexOf('/')
+        // The session route contract requires a slash-free model id, so every
+        // separator but the last belongs to the provider; `provider/model`
+        // rejoins to the exact configured id the transport sends unchanged.
+        const separator = bots.model.lastIndexOf('/')
         const provider = separator > 0 ? bots.model.slice(0, separator) : bots.model
         const model = separator > 0 ? bots.model.slice(separator + 1) : bots.model
         const models = (await gatewayConnectionSnapshot()).models
