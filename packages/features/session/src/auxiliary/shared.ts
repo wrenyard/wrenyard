@@ -18,7 +18,7 @@ import type { ActionExecutionOutcome } from '../reasoning/actions.ts';
 /** Reserve for multi-round tool results inside one auxiliary loop. */
 export const AUXILIARY_MULTI_ROUND_TOOL_RESULT_RESERVE = 12_288;
 
-type AuxiliaryHost = Pick<SessionHost, 'selectAuxiliary' | 'gateway'>;
+type AuxiliaryHost = Pick<SessionHost, 'resolveAuxiliaryModel' | 'gateway'>;
 
 function baseAuxiliaryLoopHelpers(): LoopHelpers {
   return {
@@ -53,40 +53,33 @@ export function auxiliaryConversationBudgetFromMetadata(
   return budget > 0 ? budget : undefined;
 }
 
-/** Minimum conversation budget across every auxiliary route for one role. */
+/** Conversation budget of the one model an auxiliary role uses. */
 export async function computeAuxiliaryConversationTokenBudget(
   host: AuxiliaryHost,
   role: AuxiliaryCallRole,
   systemPromptTokens: number,
   requestedMaxOutputTokens?: number,
 ): Promise<number | undefined> {
-  let routes;
+  let route;
   try {
-    routes = await host.selectAuxiliary(role);
+    route = await host.resolveAuxiliaryModel(role);
   } catch {
     return undefined;
   }
-  if (routes.length === 0) return undefined;
   let models: Awaited<ReturnType<SessionHost['gateway']>>['models'];
   try {
     models = (await host.gateway()).models;
   } catch {
     return undefined;
   }
-  let minBudget: number | undefined;
-  for (const route of routes) {
-    const metadata = resolveModelMetadata(route.model, models);
-    if (metadata.contextWindow === undefined) continue;
-    const budget = auxiliaryConversationBudgetFromMetadata(
-      metadata.contextWindow,
-      metadata.maxOutputTokens,
-      systemPromptTokens,
-      requestedMaxOutputTokens,
-    );
-    if (budget === undefined) continue;
-    minBudget = minBudget === undefined ? budget : Math.min(minBudget, budget);
-  }
-  return minBudget;
+  const metadata = resolveModelMetadata(route.model, models);
+  if (metadata.contextWindow === undefined) return undefined;
+  return auxiliaryConversationBudgetFromMetadata(
+    metadata.contextWindow,
+    metadata.maxOutputTokens,
+    systemPromptTokens,
+    requestedMaxOutputTokens,
+  );
 }
 
 /** Shared route-aware helpers for document, todo, vcs and project auxiliaries. */

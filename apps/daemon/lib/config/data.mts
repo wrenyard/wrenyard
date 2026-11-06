@@ -32,6 +32,17 @@ export type EndpointConfigData = ConfigRecord & {
   token?: string
 }
 
+export type AuxiliaryModelConfigData = ConfigRecord & {
+  /** The endpoint's own model id, sent unchanged. */
+  model?: string
+  /** Reasoning level auxiliary calls request. */
+  reasoningEffort?: string
+}
+
+export type ModelsConfigData = ConfigRecord & {
+  auxiliary?: AuxiliaryModelConfigData
+}
+
 /** Persisted task settings layer. Mirrors the canonical TaskSettingsLayer while
  *  staying open to unknown/forward-compatible keys. */
 export type TaskSettingsLayerData = ConfigRecord & TaskSettingsLayer
@@ -84,6 +95,7 @@ export type ForemanConfigData = {
   service?: ServiceConfigData
   gateway?: GatewayConfigData
   endpoint?: EndpointConfigData
+  models?: ModelsConfigData
   workspace?: WorkspaceConfigData
   tasks?: TasksConfigData
   remote?: RemoteConfigData

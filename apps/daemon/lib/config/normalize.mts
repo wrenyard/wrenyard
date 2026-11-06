@@ -1,5 +1,10 @@
 import { isAbsolute, resolve } from 'node:path'
-import type { ConfigRecord, ForemanEndpointConfig, ForemanGatewayConfig, ForemanServiceConfig, GatewayPortMode } from './types.mts'
+import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models'
+import type { ConfigRecord, ForemanAuxiliaryModelConfig, ForemanEndpointConfig, ForemanGatewayConfig, ForemanModelsConfig, ForemanServiceConfig, GatewayPortMode } from './types.mts'
+
+function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return typeof value === 'string' && (REASONING_EFFORTS as readonly string[]).includes(value)
+}
 
 export interface NormalizeForemanConfigOptions {
   configDir: string
@@ -20,6 +25,7 @@ export function normalizeForemanServiceConfig(
   const workspaceRoot = resolveWorkspaceRoot(workspace.root, options.configDir, env)
   const gateway = normalizeForemanGatewayConfig(config.gateway)
   const endpoint = normalizeForemanEndpointConfig(config.endpoint)
+  const models = normalizeForemanModelsConfig(config.models)
 
   // Legacy delivery/principal/grants/message fields are ignored on purpose so an
   // existing config keeps loading after the message subsystem was removed.
@@ -30,6 +36,7 @@ export function normalizeForemanServiceConfig(
     },
     gateway,
     ...(endpoint === undefined ? {} : { endpoint }),
+    ...(models === undefined ? {} : { models }),
     workspaceRoot,
   }
 }
@@ -45,6 +52,24 @@ export function normalizeForemanEndpointConfig(value: unknown): ForemanEndpointC
   const token = stringValue(raw.token, '')
   if (!url || !token) return undefined
   return { url, token }
+}
+
+/**
+ * Normalize the optional auxiliary model beside the endpoint. A missing model
+ * id or an unknown reasoning level reads back as absent, so an incomplete entry
+ * never becomes a callable route.
+ */
+export function normalizeForemanModelsConfig(value: unknown): ForemanModelsConfig | undefined {
+  const auxiliary = normalizeAuxiliaryModelConfig(record(value).auxiliary)
+  return auxiliary === undefined ? undefined : { auxiliary }
+}
+
+function normalizeAuxiliaryModelConfig(value: unknown): ForemanAuxiliaryModelConfig | undefined {
+  const raw = record(value)
+  const model = stringValue(raw.model, '')
+  const reasoningEffort = raw.reasoningEffort
+  if (!model || !isReasoningEffort(reasoningEffort)) return undefined
+  return { model, reasoningEffort }
 }
 
 /**

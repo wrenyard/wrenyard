@@ -8,7 +8,7 @@
  *   ledger.ts         `Ledger` (init/append/read/listSessions/subscribe/close)
  *                     and the `LedgerEvent` union plus the snapshot types.
  *   workspace.ts      `WorkspaceFileSource` and the document catalogue.
- *   calls.ts          `createCallRunner({ transport, selectAuxiliary, append, now })`.
+ *   calls.ts          `createCallRunner({ transport, resolveAuxiliaryModel, append, now })`.
  *   transport/        `createModelTransport({ gateway })`, the one unified call
  *                     protocol, the three protocol adapters and the sole
  *                     same-route retry.
@@ -269,7 +269,7 @@ export function createSession(host: SessionHost, options?: CreateSessionOptions)
       const recorder = new SpanRecorder((draft) => ledger.append(sessionId, draft).then(() => undefined));
       const executor = createCallRunner({
         transport: createModelTransport({ gateway: () => host.gateway() }),
-        selectAuxiliary: (role, input) => host.selectAuxiliary(role, input),
+        resolveAuxiliaryModel: (role, input) => host.resolveAuxiliaryModel(role, input),
         ...(options?.selectAutomaticRoutes === undefined
           ? {}
           : { selectAutomaticRoutes: () => options.selectAutomaticRoutes!() }),

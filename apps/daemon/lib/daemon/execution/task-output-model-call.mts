@@ -28,10 +28,10 @@ export type TaskOutputModelCallPort = (
 
 export function createTaskOutputModelCallPort(options: {
   gateway: () => Promise<WrenyardGatewayConnection>
-  selectAuxiliary: (
+  resolveAuxiliaryModel: (
     role: 'task-output',
     input?: { toolChoice?: ToolChoice },
-  ) => Promise<readonly AuxiliaryRoute[]> | readonly AuxiliaryRoute[]
+  ) => Promise<AuxiliaryRoute> | AuxiliaryRoute
 }): TaskOutputModelCallPort {
   const transport = createModelTransport({ gateway: options.gateway })
 
@@ -41,16 +41,12 @@ export function createTaskOutputModelCallPort(options: {
     const signal = request.signal ?? AbortSignal.timeout(120_000)
     // Route selection is raced against the same signal so a cancellation
     // settles promptly and no model request is issued after it fires.
-    const routes = await settleWithAbort(
-      options.selectAuxiliary('task-output', {
+    const route = await settleWithAbort(
+      options.resolveAuxiliaryModel('task-output', {
         ...(request.toolChoice === undefined ? {} : { toolChoice: request.toolChoice }),
       }),
       signal,
     )
-    const route = routes[0]
-    if (route === undefined) {
-      throw new Error('Auxiliary role task-output: no candidate qualified (empty route selection)')
-    }
     const connection = await options.gateway()
     const attempt = await callModelAttempt({
       transport,

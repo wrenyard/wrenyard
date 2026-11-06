@@ -52,10 +52,10 @@ export interface SessionHost {
   stateRoot: string;
   deviceName: string;
   gateway(): Promise<WrenyardGatewayConnection>;
-  selectAuxiliary(
+  resolveAuxiliaryModel(
     role: import('./model/roles.ts').AuxiliaryCallRole,
     input?: { toolChoice?: ToolChoice },
-  ): Promise<readonly import('./model/request.ts').AuxiliaryRoute[]>;
+  ): Promise<import('./model/request.ts').AuxiliaryRoute>;
   /**
    * Live global retry switches for main reasoning, read at call time: an absent
    * policy or an absent getter means retries are on.

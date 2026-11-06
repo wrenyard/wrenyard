@@ -48,6 +48,7 @@ import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
 import { withCatalogMetadata } from './services/endpoint-models.mts'
 import { endpointConnection } from './services/endpoint-connection.mts'
+import { resolveAuxiliaryModel } from './services/auxiliary-model.mts'
 import { createScheduler, type Scheduler } from './services/scheduler.mts'
 import { migrateDeviceBots } from './services/bot-agents/device-migration.mts'
 import { createBotAgentKernel, type AgentModelRoute, type BotAgentKernel } from './services/bot-agents/kernel.mts'
@@ -1516,11 +1517,13 @@ async function createForemanDaemonResources(
       taskService,
       modelCall: createTaskOutputModelCallPort({
         gateway: gatewayConnectionSnapshot,
-        selectAuxiliary: (role, input) => selectRoutesByRequirement(
-          auxiliaryRoutingOptions,
-          TASK_OUTPUT_ROUTE_REQUIREMENT,
-          role,
-          input,
+        resolveAuxiliaryModel: (role, input) => resolveAuxiliaryModel(config, () =>
+          selectRoutesByRequirement(
+            auxiliaryRoutingOptions,
+            TASK_OUTPUT_ROUTE_REQUIREMENT,
+            role,
+            input,
+          ),
         ),
       }),
     })
@@ -1544,7 +1547,7 @@ async function createForemanDaemonResources(
       operationComponents: runtime.operationComponents,
       taskSettingsConfigPath: taskSettingsService.authoritativeConfigPath,
       router: rpcRouter,
-      selectAuxiliary: (role, input) => {
+      resolveAuxiliaryModel: (role, input) => resolveAuxiliaryModel(config, () => {
         resetAuxiliaryRouteHealth()
         return selectRoutesByRequirement(
           auxiliaryRoutingOptions,
@@ -1552,7 +1555,7 @@ async function createForemanDaemonResources(
           role,
           input,
         )
-      },
+      }),
     })
     // A bot turn that fails twice on the same model continues on the next route
     // of the same automatic selection, inside the same turn.

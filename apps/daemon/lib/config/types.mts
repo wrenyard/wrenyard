@@ -1,3 +1,5 @@
+import type { ReasoningEffort } from '@wrenyard/models'
+
 export type ConfigRecord = Record<string, unknown>
 
 /** How the gateway chooses the loopback port it binds. */
@@ -27,6 +29,20 @@ export type ForemanEndpointConfig = {
   token: string
 }
 
+/**
+ * One determined auxiliary model. `model` is the endpoint's own model id, sent
+ * unchanged; `reasoningEffort` is the level auxiliary calls request.
+ */
+export type ForemanAuxiliaryModelConfig = {
+  model: string
+  reasoningEffort: ReasoningEffort
+}
+
+/** Model-purpose settings that apply beside a configured endpoint. */
+export type ForemanModelsConfig = {
+  auxiliary?: ForemanAuxiliaryModelConfig
+}
+
 export interface ForemanServiceConfig {
   service: {
     enabled: boolean
@@ -36,5 +52,6 @@ export interface ForemanServiceConfig {
   }
   gateway: ForemanGatewayConfig
   endpoint?: ForemanEndpointConfig
+  models?: ForemanModelsConfig
   workspaceRoot: string
 }

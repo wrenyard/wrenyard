@@ -69,7 +69,7 @@ export interface DaemonSessionHostOptions {
   workspaceRoot: string
   stateRoot: string
   gateway(): Promise<WrenyardGatewayConnection>
-  selectAuxiliary: SessionHost['selectAuxiliary']
+  resolveAuxiliaryModel: SessionHost['resolveAuxiliaryModel']
   taskService: TaskService
   /** Operation-component snapshots used to report the environment's tools. */
   operationComponents?: Pick<OperationComponents, 'list'>
@@ -246,7 +246,7 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     stateRoot,
     deviceName: hostname(),
     gateway: options.gateway,
-    selectAuxiliary: (role, input) => options.selectAuxiliary(role, input),
+    resolveAuxiliaryModel: (role, input) => options.resolveAuxiliaryModel(role, input),
     // Read at call time, so a switch the user toggles now applies to a turn
     // that is already running without a restart.
     ...(options.taskSettingsConfigPath === undefined
@@ -273,11 +273,7 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
       }
       for (const role of AUXILIARY_ROLE_ORDER) {
         try {
-          const route = (await options.selectAuxiliary(role))[0]
-          if (!route) {
-            roles.push({ role, error: 'no candidate route' })
-            continue
-          }
+          const route = await options.resolveAuxiliaryModel(role)
           roles.push({
             role,
             model: route.model,

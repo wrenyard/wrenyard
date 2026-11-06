@@ -216,14 +216,15 @@ export interface CallRunnerOptions {
   /** The one unified transport every role calls. */
   transport: ModelTransport;
   /**
-   * Fresh non-empty ranked routes for each auxiliary invocation. The request's
-   * `tool_choice` is forwarded so a forced choice never selects a provider that
-   * cannot honour it.
+   * The one model an auxiliary invocation uses. The request's `tool_choice` is
+   * forwarded so a forced choice never selects a provider that cannot honour
+   * it. An endpoint-configured daemon names that model directly; otherwise the
+   * gateway's route ranking picks its first route.
    */
-  selectAuxiliary: (
+  resolveAuxiliaryModel: (
     role: AuxiliaryCallRole,
     input?: { toolChoice?: ToolChoice },
-  ) => readonly AuxiliaryRoute[] | Promise<readonly AuxiliaryRoute[]>;
+  ) => AuxiliaryRoute | Promise<AuxiliaryRoute>;
   /**
    * Fresh ranked routes for a main reasoning turn whose model was chosen
    * automatically, read only when such a turn switches model. Absent means an
@@ -417,7 +418,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       let actualReasoningEffort: ReasoningEffort | undefined;
       let requestedReasoningEffort: string | undefined;
       let auxiliaryRole: AuxiliaryCallRole | undefined;
-      let routes: readonly AuxiliaryRoute[] | undefined;
+      let auxiliaryRoute: AuxiliaryRoute | undefined;
       let selectedRank: number | undefined;
       let partialUsage: Usage | undefined;
       let emitted = false;
@@ -574,14 +575,13 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       };
 
       /**
-       * One auxiliary invocation on the selector's first ranked route only.
+       * One auxiliary invocation on the one model the selector resolved.
        * Supported reasoning effort is decided before selection; this path keeps
        * context-budget safety, classified failures, and per-attempt ledger
        * accounting.
        */
       const runAuxiliary = async (): Promise<ModelResult> => {
-        const all = routes!;
-        const route = all[0]!;
+        const route = auxiliaryRoute!;
         const firstResponseTimeoutSec = auxiliaryFirstResponseTimeoutSec(input.role);
         const budget = checkContextBudget(route.model, messages, models, maxTokens);
         estimatedInputTokens = budget.estimatedInputTokens;
@@ -609,7 +609,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             },
             inputEstimate: estimatedInputTokens,
             layers: input.layers,
-            route: { candidates: all, rank: selectedRank },
+            route: { candidates: [route], rank: selectedRank },
           },
         });
 
@@ -792,11 +792,10 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           requestedReasoningEffort = selection.reasoningEffort;
         } else {
           auxiliaryRole = input.role;
-          routes = await settleWithAbort(
-            options.selectAuxiliary(input.role, { toolChoice: input.toolChoice }),
+          auxiliaryRoute = await settleWithAbort(
+            options.resolveAuxiliaryModel(input.role, { toolChoice: input.toolChoice }),
             controller.signal,
           );
-          if (!routes.length) throw new Error(`Auxiliary role ${input.role}: no candidate qualified (empty route selection)`);
         }
         if (controller.signal.aborted) {
           return await fail(abortMessage(abortKind), { status: 'aborted' });
