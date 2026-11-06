@@ -32,7 +32,6 @@ export interface WorktreeInfo {
   path: string
   branch: string | null
   clean: boolean
-  owner?: string
 }
 
 export interface ProjectOverview {
@@ -97,8 +96,6 @@ export interface ProjectWorktreeCreateParams {
   project: string
   worktree_id?: string
   branch?: string
-  /** Lock required to remove or merge the worktree; sessions get their own id. */
-  lock?: string
 }
 
 export interface ProjectWorktreeCreateResult {
@@ -111,9 +108,6 @@ export interface ProjectWorktreeCreateResult {
 export interface ProjectWorktreeMergeParams {
   project: string
   worktree_id: string
-  lock?: string
-  /** Escape hatch: merge a worktree locked by another creator. */
-  force?: boolean
 }
 
 export interface ProjectWorktreeMergeResult {
@@ -161,9 +155,6 @@ export interface ProjectWorktreeRebaseResult {
 export interface ProjectWorktreeRemoveParams {
   worktree_id: string
   project?: string
-  lock?: string
-  /** Escape hatch: remove a worktree locked by another creator. */
-  force?: boolean
 }
 
 export interface ProjectWorktreeRemoveResult {

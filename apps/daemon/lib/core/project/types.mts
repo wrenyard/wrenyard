@@ -36,8 +36,6 @@ export interface WorktreeInfo {
   path: string
   branch: string | null
   clean: boolean
-  /** Owning bot (`bot:<botId>/<itemId>`) recorded in the worktree metadata, when present. */
-  owner?: string
 }
 
 export interface ProjectOverview {

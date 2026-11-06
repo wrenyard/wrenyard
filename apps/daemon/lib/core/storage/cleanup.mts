@@ -1180,7 +1180,6 @@ interface WorktreeMetadata {
   id?: unknown
   project?: unknown
   path?: unknown
-  owner?: unknown
 }
 
 async function readWorktreeMetadata(metadataPath: string): Promise<WorktreeMetadata | undefined> {
@@ -1292,7 +1291,7 @@ async function assessWorktree(
   if (!pm.worktreeIsMergedIntoTarget(project, id)) {
     return protectedAt('worktree HEAD is not merged into the project default branch; protected')
   }
-  return protectedAt('worktree owner is not recognized; protected')
+  return protectedAt('worktree cleanup is unsupported; protected')
 }
 
 async function assessUnrecognized(
@@ -1963,7 +1962,7 @@ async function removeEligible(
         if (worktree === undefined || !worktree.clean) {
           return protectedOutcome('worktree is no longer clean and registered; protected')
         }
-        return protectedOutcome('worktree owner is not recognized; protected')
+        return protectedOutcome('worktree cleanup is unsupported; protected')
       }
       case 'clients': {
         if (candidate.subtype !== 'run-home') {

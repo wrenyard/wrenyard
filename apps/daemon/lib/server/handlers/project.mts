@@ -83,17 +83,17 @@ export function registerProjectHandlers(router: RpcRouter, options: ProjectRpcHa
           idGenerator: () => params.worktree_id as string,
         })
         : manager
-      return createManager.createWorktree(params.project, params.branch, { ...(params.lock ? { lock: params.lock } : {}) })
+      return createManager.createWorktree(params.project, params.branch)
     })
   })
   router.register('project.worktree.remove', async (params) => {
     return projectJsonResult<ProjectWorktreeRemoveResult>(() => {
       if (params.project) manager.getProject(params.project)
-      return manager.removeWorktree(params.worktree_id, { lock: params.lock, force: params.force === true })
+      return manager.removeWorktree(params.worktree_id)
     })
   })
   router.register('project.worktree.merge', async (params) => {
-    return projectJsonResult<ProjectWorktreeMergeResult>(() => manager.mergeWorktree(params.project, params.worktree_id, { lock: params.lock, force: params.force === true }))
+    return projectJsonResult<ProjectWorktreeMergeResult>(() => manager.mergeWorktree(params.project, params.worktree_id))
   })
   router.register('project.worktree.rebase', async (params) => {
     return projectJsonResult<ProjectWorktreeRebaseResult>(() => manager.rebaseWorktree(params.project, params.worktree_id))

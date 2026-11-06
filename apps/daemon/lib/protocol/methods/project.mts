@@ -138,7 +138,6 @@ export const worktreeInfoSchema = {
     path: { type: 'string', minLength: 1, description: 'Absolute filesystem path of the worktree.' },
     branch: { ...nullableStringSchema, description: 'Branch the worktree is on, or null on a detached HEAD.' },
     clean: { type: 'boolean', description: 'True when the worktree has no uncommitted changes.' },
-    owner: { type: 'string', description: 'Owning bot (bot:<botId>/<itemId>) recorded in the worktree metadata, when present.' },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -265,7 +264,6 @@ export const projectWorktreeMergeParamsSchema = {
   properties: {
     project: { type: 'string', minLength: 1, description: 'Project that owns the worktree to merge.' },
     worktree_id: { type: 'string', minLength: 1, description: 'Managed worktree to rebase, merge, and remove.' },
-    force: { type: 'boolean', description: 'Override the lock of a worktree created by another session.' },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -349,7 +347,6 @@ export const projectWorktreeRemoveParamsSchema = {
   properties: {
     worktree_id: { type: 'string', minLength: 1, description: 'Managed worktree id to remove.' },
     project: { type: 'string', minLength: 1, description: 'Optional owning project to validate before removing.' },
-    force: { type: 'boolean', description: 'Override the lock of a worktree created by another session.' },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

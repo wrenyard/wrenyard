@@ -48,9 +48,6 @@ const SESSION_CALLABLE_METHODS = new Set([
   'todo.get',
 ])
 
-/** Worktree methods whose lock a session carries automatically. */
-const LOCKED_WORKTREE_METHODS = new Set(['project.worktree.create', 'project.worktree.remove', 'project.worktree.merge'])
-
 /**
  * The method allowlist of the auxiliary definition currently running, or
  * undefined for an ordinary session call. The loop's catalog adapter sets
@@ -422,20 +419,12 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
       if (!allowlist.has(method)) {
         throw new ProtocolError(METHOD_NOT_FOUND, { method })
       }
-      // A session's worktrees carry its own lock: it is set on create and
-      // required to remove or merge, so one session can never delete another's
-      // worktree. Sessions never get the force escape hatch.
-      let effective = params
-      if (LOCKED_WORKTREE_METHODS.has(method) && params !== null && typeof params === 'object') {
-        const { lock: _lock, force: _force, ...rest } = params as Record<string, unknown>
-        effective = context?.sessionId ? { ...rest, lock: `session:${context.sessionId}` } : rest
-      }
       try {
         if (method.startsWith('workspace.doc.') && !['workspace.doc.read', 'workspace.doc.list'].includes(method)
           && (!context?.sessionId || !context.actionId || !context.turn || !context.step)) {
           throw new Error('Document writes require session provenance')
         }
-        return await options.router.invoke(method, effective, { transport: 'session',
+        return await options.router.invoke(method, params, { transport: 'session',
           document: context?.sessionId && context.actionId && context.turn && context.step
             ? { sessionId: context.sessionId, parent: context.actionId, turn: context.turn, step: context.step } : undefined })
       } catch (error) {
