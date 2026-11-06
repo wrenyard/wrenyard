@@ -34,6 +34,8 @@ import { basename, isAbsolute, relative, resolve } from 'node:path'
 import { discoverProjects } from '../../core/project/loader.mts'
 import type { ForemanConfigStore } from '../../config/manager.mts'
 import { JsonForemanConfigStore } from '../../config/manager.mts'
+import { normalizeForemanEndpointConfig, normalizeForemanModelsConfig } from '../../config/normalize.mts'
+import type { ForemanWorkerModelConfig } from '../../config/types.mts'
 import {
   TASK_DISPATCH_FIELDS,
   taskDefaultsToSettingsLayer,
@@ -767,6 +769,39 @@ export function taskInstructionTemplate(
 // remove once routing avoids rate-limited providers by itself.
 const TEMPORARY_ONLY_MODEL = 'gpt-6.1-sol'
 
+const ENDPOINT_WORKER_PROVIDER = 'wrenyard'
+const ENDPOINT_WORKER_CLIENT = 'pi'
+const ENDPOINT_WORKER_PROTOCOL = 'openai_chat'
+
+function endpointWorkerRuntime(worker: ForemanWorkerModelConfig): string {
+  return `${ENDPOINT_WORKER_PROVIDER}/${worker.model}:${ENDPOINT_WORKER_CLIENT}`
+}
+
+/** The resolved dispatch for the one configured worker model. It mirrors the
+ *  launch plan built later by the execution layer and never consults the catalog. */
+function endpointWorkerDispatch(worker: ForemanWorkerModelConfig): TaskResolvedDispatch {
+  const runtime = endpointWorkerRuntime(worker)
+  return {
+    requested_agent_runtime: runtime,
+    profile: runtime,
+    client: ENDPOINT_WORKER_CLIENT,
+    provider: ENDPOINT_WORKER_PROVIDER,
+    model: worker.model,
+    model_id: `${ENDPOINT_WORKER_PROVIDER}/${worker.model}`,
+    mode: 'gateway',
+    protocol: ENDPOINT_WORKER_PROTOCOL,
+    reasoningEffort: worker.reasoningEffort,
+    speed: {
+      effective_tps: 0,
+      source: 'catalog_default',
+      sample_count: 0,
+      expected_tps_met: true,
+    },
+    intelligence: 'mid',
+    reference_pricing: { source: 'endpoint' },
+  }
+}
+
 export class TaskSettingsService {
   private readonly configPath: string
   private readonly resolver: TaskDispatchResolver
@@ -981,6 +1016,21 @@ export class TaskSettingsService {
       })
     } catch (error) {
       throw new TaskSettingsInvalidSettingsError(undefined, messageOf(error))
+    }
+
+    // A configured standard endpoint names the one worker model directly; no
+    // automatic catalog selection, readiness probe or ranking runs for this run.
+    if (normalizeForemanEndpointConfig(record.endpoint) !== undefined) {
+      const worker = normalizeForemanModelsConfig(record.models)?.worker
+      if (worker === undefined) {
+        throw new Error('The configured endpoint requires models.worker')
+      }
+      return {
+        exactAgentRuntime: endpointWorkerRuntime(worker),
+        dispatch: endpointWorkerDispatch(worker),
+        runTimeLimitMinutes: effective.runTimeLimitMinutes,
+        sources: toRunSources(effective.sources),
+      }
     }
 
     // Automatic selection only: the effective dispatch is forwarded to the

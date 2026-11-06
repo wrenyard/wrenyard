@@ -24,6 +24,7 @@ function summaryFromTerminalOutput(output: string | null | undefined): string | 
   return undefined
 }
 import { parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
+import { resolvePlan } from './worker-plan.mts'
 import { createBuiltinCatalog } from '@wrenyard/providers'
 import type {
   AgentExecutionHost,
@@ -812,7 +813,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       const client = clientId ? this.clients.get(clientId) : undefined;
       if (!client?.capabilities.run) throw new Error('Execution requires a resolved agent client');
       if (!syntax?.model) throw new Error('Execution requires a resolved model');
-      const plan = this.buildReasoningEffortPlanEnv(entry.executionId, opts.dispatchSnapshot?.fast)?.plan ?? this.catalog.resolveRun(syntax.client, syntax.provider, syntax.model, opts.dispatchSnapshot?.reasoningEffort, opts.dispatchSnapshot?.fast);
+      const plan = this.buildReasoningEffortPlanEnv(entry.executionId, opts.dispatchSnapshot?.fast)?.plan ?? resolvePlan(this.catalog, syntax, opts.dispatchSnapshot?.reasoningEffort, opts.dispatchSnapshot?.fast);
       // A native dispatch must hand the CLI the exact wire spelling the
       // installed product/login declares. The admission binding carries that wire id for
       // this exact execution (resolved from the current product snapshot when
@@ -1858,7 +1859,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     // A queued execution promoted later has no in-memory snapshot, so the
     // persisted Fast preference is authoritative unless this launch carries one.
     const effectiveFast = fast !== undefined ? fast : toPersistedFast(row.fast)
-    const plan = this.catalog.resolveRun(row.client, row.provider, row.model, reasoningEffort, effectiveFast)
+    const plan = resolvePlan(this.catalog, { client: row.client, provider: row.provider, model: row.model }, reasoningEffort, effectiveFast)
     return { profile: row.profile, plan }
   }
 

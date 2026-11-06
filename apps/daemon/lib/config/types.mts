@@ -38,9 +38,19 @@ export type ForemanAuxiliaryModelConfig = {
   reasoningEffort: ReasoningEffort
 }
 
+/**
+ * One determined worker model. `model` is the endpoint's own model id, sent
+ * unchanged; `reasoningEffort` is the level worker runs request.
+ */
+export type ForemanWorkerModelConfig = {
+  model: string
+  reasoningEffort: ReasoningEffort
+}
+
 /** Model-purpose settings that apply beside a configured endpoint. */
 export type ForemanModelsConfig = {
   auxiliary?: ForemanAuxiliaryModelConfig
+  worker?: ForemanWorkerModelConfig
 }
 
 export interface ForemanServiceConfig {

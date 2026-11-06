@@ -5,6 +5,7 @@ export type {
   ForemanGatewayConfig,
   ForemanModelsConfig,
   ForemanServiceConfig,
+  ForemanWorkerModelConfig,
   GatewayPortMode,
 } from './types.mts'
 
@@ -25,6 +26,7 @@ export {
   type GatewayConfigData,
   type ModelsConfigData,
   type ServiceConfigData,
+  type WorkerModelConfigData,
   type WorkspaceConfigData,
   type TasksConfigData,
 } from './data.mts'
