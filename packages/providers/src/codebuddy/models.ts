@@ -21,8 +21,6 @@ const CODEBUDDY_GATEWAY_PROTOCOLS: readonly GatewayProtocol[] = ['openai_chat', 
 const CODEBUDDY_PRODUCT_MODEL_IDS: Readonly<Record<string, string>> = {
   'hy3': 'hunyuan-hy3',
   'hy3-ioa': 'hunyuan-hy3',
-  'hy4-preview': 'hunyuan-hy4-preview',
-  'hy4-preview-ioa': 'hunyuan-hy4-preview',
   'MiniMax-M3': 'minimax-m3',
   'MiniMax-M3.1-Flash': 'minimax-m3.1-flash',
   'MiniMax-M3.1-Flash-Preview': 'minimax-m3.1-flash',
@@ -75,7 +73,6 @@ const REGISTERED_BY_NORMALIZED_ID: ReadonlyMap<string, string> = new Map(
 const CODEBUDDY_HISTORICAL_ALIASES: Readonly<Record<string, string>> = {
   'deepseek-v4.1-flash-ioa': 'deepseek-v4.1-flash',
   'deepseek-v4-pro-ioa': 'deepseek-v4-pro',
-  'hy4-preview-ioa': 'hunyuan-hy4-preview',
   'hy3-ioa': 'hunyuan-hy3',
   'minimax-m3-ioa': 'minimax-m3',
 };

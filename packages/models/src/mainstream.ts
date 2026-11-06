@@ -8,7 +8,6 @@ export const MAINSTREAM_MODEL_IDS = [
   // Distinct native-only OpenCode free identity; not an alias of the paid row.
   'deepseek-v4.1-flash-free',
   'deepseek-v4-pro',
-  'hunyuan-hy4-preview',
   'hunyuan-hy3',
   'kimi-k3.1-pro',
   'kimi-k3',

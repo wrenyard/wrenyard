@@ -46,20 +46,11 @@ export const CATALOG_METADATA: Readonly<Record<string, CatalogMetadata>> = {
     reasoningEfforts: ['none', 'high'],
     inputModalities: ['text'],
   },
-  // models.dev: tencent-tokenhub/hy4-preview
-  'hunyuan-hy4-preview': {
-    contextWindow: 1_024_000,
-    maxInputTokens: 1_024_000,
-    maxOutputTokens: 64_000,
-    reasoningEfforts: ['none', 'high'],
-    inputModalities: ['text'],
-  },
-  // models.dev: tencent-tokenhub/hy4; output 65,535 is the user-specified
-  // value (2026-11-06), not the 65,536 models.dev reports.
+  // models.dev: tencent-tokenhub/hy4
   'hunyuan-hy4': {
     contextWindow: 1_048_576,
     maxInputTokens: 983_010,
-    maxOutputTokens: 65_535,
+    maxOutputTokens: 65_536,
     reasoningEfforts: ['none', 'high'],
     inputModalities: ['text', 'image'],
   },

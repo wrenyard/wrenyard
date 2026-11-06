@@ -28,15 +28,9 @@ const EXPECTED = {
     reasoningEfforts: ['low', 'high', 'max'],
     inputModalities: ['text', 'image', 'video'],
   },
-  'hunyuan-hy4-preview': {
-    maxInputTokens: 1_024_000,
-    maxOutputTokens: 64_000,
-    reasoningEfforts: ['none', 'high'],
-    inputModalities: ['text'],
-  },
   'hunyuan-hy4': {
     maxInputTokens: 983_010,
-    maxOutputTokens: 65_535,
+    maxOutputTokens: 65_536,
     reasoningEfforts: ['none', 'high'],
     inputModalities: ['text', 'image'],
   },
