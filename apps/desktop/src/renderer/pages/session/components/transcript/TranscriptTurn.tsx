@@ -1,32 +1,24 @@
 /**
  * The pieces of one session turn: the right-aligned user-message component and
  * the body component: replies as plain prose, each stretch of agent work
- * folded into one muted summary line, visible errors, the running line and a
- * per-message hover footer.
+ * folded into one muted summary row, visible errors, the open block's single
+ * working row and a per-message hover footer.
  */
 import type { ReactNode } from 'react';
-import { Activity, TriangleAlert } from 'lucide-react';
+import { TriangleAlert } from 'lucide-react';
 import { cn } from 'cn';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
 import { MessageFooter } from '@/renderer/components/chat/MessageFooter';
-import { Elapsed } from '@/renderer/components/elapsed';
-import { openSidePanel } from '@/renderer/lib/side-panel';
-import { formatTokenCount } from '@/renderer/lib/format';
 import {
   DISPATCH_TERMINAL_LABEL,
   dispatchTerminal,
-  runningStepName,
-  thinkingVerb,
-  turnTokenTotal,
   userSpeakerLabel,
-  waitingStatusText,
+  workingTitle,
 } from '../../model/describe.js';
 import type { TurnWaitingState } from '../../model/describe.js';
-import type { ActionModel, ContextItem, ErrorItem, ModelEntry, ReplyModel, TurnModel } from '../../model/types.js';
+import type { ContextItem, ErrorItem, ModelEntry, ReplyModel, TurnModel } from '../../model/types.js';
 import { MediaAttachments, fromSessionFile } from '../MediaAttachments.js';
 import { splitReplyQuote } from '../conversation/UserMessage.js';
-import { Ellipsis, WorkingDots } from '../live-indicators.js';
-import { MorphText } from '../morph-text.js';
 import { ActivityGroup, groupId, type GroupActivityItem } from './ActivityGroup.js';
 import type { TranscriptEntry } from './transcript-timeline.js';
 
@@ -102,63 +94,10 @@ type BodyBlock =
 
 
 /** Dispatched task runs of the turn that are still running. */
-function runningTasks(turn: TurnModel): ActionModel[] {
-  return turn.actions.filter((action) => action.kind === 'dispatch' && action.status === 'running' && action.taskRunId !== undefined);
-}
-
-/**
- * Muted chip `≣ N 个任务` at the right end of the live line or the last
- * turn's footer; opens the activity side panel scoped to this session's tasks.
- */
-function RunningTasks({ tasks, sessionId }: { tasks: readonly ActionModel[]; sessionId?: string }) {
-  if (tasks.length === 0) return null;
-  return (
-    <button
-      type="button"
-      className="ml-auto inline-flex shrink-0 items-center gap-1 rounded text-muted-foreground hover:text-foreground"
-      onClick={() => openSidePanel('tasks', { sessionId })}
-    >
-      <Activity className="size-3.5" aria-hidden />
-      {tasks.length} 个任务
-    </button>
-  );
-}
-
-/**
- * The running turn's bottom line on one row: accent working dots, the step
- * being run (or the waiting or interrupting notice), its elapsed time and token
- * total, and the count of task runs still working.
- */
-function LiveLine({ turn, sessionId, waiting }: { turn: TurnModel; sessionId?: string; waiting?: TurnWaitingState }) {
-  const thinking = turn.calls.find((call) => call.role === 'reason' && call.status === 'running');
-  const step = runningStepName(turn);
-  const total = turnTokenTotal(turn);
-  return (
-    <div className="wy-rise-in flex items-center gap-2 text-sm text-muted-foreground">
-      <WorkingDots />
-      {waiting !== undefined ? (
-        <MorphText className="min-w-0 truncate" text={waitingStatusText(waiting)} />
-      ) : turn.interrupting ? (
-        <span>正在中断<Ellipsis /></span>
-      ) : step !== undefined ? (
-        <MorphText className="shimmer min-w-0 truncate" text={step} />
-      ) : null}
-      <span className="shrink-0">
-        <Elapsed start={turn.startedAt} className="tabular-nums" />
-        {total !== undefined && ` · ${formatTokenCount(total)} tokens`}
-      </span>
-      {waiting === undefined && !turn.interrupting && step === undefined && thinking !== undefined && (
-        <>
-          <span>·</span>
-          <span className="inline-flex items-baseline text-primary">
-            <MorphText className="shimmer" text={thinkingVerb(thinking.cycle ?? turn.cycle)} />
-            <Ellipsis />
-          </span>
-        </>
-      )}
-      <RunningTasks tasks={runningTasks(turn)} sessionId={sessionId} />
-    </div>
-  );
+function runningTaskCount(turn: TurnModel): number {
+  return turn.actions.filter(
+    (action) => action.kind === 'dispatch' && action.status === 'running' && action.taskRunId !== undefined,
+  ).length;
 }
 
 /** The right-aligned user message that opens a transcript turn. */
@@ -194,11 +133,11 @@ export interface TranscriptBodyProps {
   waiting?: TurnWaitingState;
   /** Chronological entries the body is built from. */
   entries: readonly TranscriptEntry[];
-  /** Whether the running line is shown under the body. */
+  /** Whether this is a running turn's open block, whose last group is the working row. */
   live: boolean;
 }
 
-/** The body of a transcript turn: folded activity, replies, errors and the running line. */
+/** The body of a transcript turn: folded activity, replies, errors, and the open block's working row. */
 export function TranscriptBody({ turn, sessionId, models, botNames, onCancelTask, waiting, entries, live }: TranscriptBodyProps) {
   // Terminal states are told apart only for a turn that dispatched: a compile
   // that never opened a task run reads as 编译失败, not as a running task.
@@ -223,6 +162,20 @@ export function TranscriptBody({ turn, sessionId, models, botNames, onCancelTask
   }
   flush();
 
+  // The live open block ends in its one working row: the last activity group,
+  // appended empty when the block's last stretch is not a group, so the row is
+  // always the block's bottommost line.
+  const working = live
+    ? {
+        title: workingTitle(turn, waiting),
+        start: turn.replies.at(-1)?.at ?? turn.startedAt,
+        tasks: runningTaskCount(turn),
+      }
+    : undefined;
+  if (working !== undefined && (body.length === 0 || body.at(-1)!.kind !== 'group')) {
+    body.push({ kind: 'group', items: [] });
+  }
+
   // Every context item of the turn, including ones scoped to a span (memory
   // recalls fold onto action.outputs while unscoped ones stay on the cycle);
   // step naming looks memory-search hits up by their actionId.
@@ -233,15 +186,20 @@ export function TranscriptBody({ turn, sessionId, models, botNames, onCancelTask
 
   return (
     <>
-      {body.map((block) => {
+      {body.map((block, index) => {
         if (block.kind === 'group') {
+          // Only the open block's last group is the working row; its fixed key
+          // keeps the row mounted while its first steps arrive.
+          const row = working !== undefined && index === body.length - 1 ? working : undefined;
           return (
             <ActivityGroup
-              key={groupId(block.items[0]!)}
+              key={row !== undefined ? 'working-row' : groupId(block.items[0]!)}
               items={block.items}
               contextItems={contextItems}
               sessionId={sessionId}
               onCancelTask={onCancelTask}
+              working={row !== undefined ? { title: row.title, start: row.start } : undefined}
+              runningTaskCount={row?.tasks}
             />
           );
         }
@@ -267,8 +225,6 @@ export function TranscriptBody({ turn, sessionId, models, botNames, onCancelTask
         }
         return <ErrorRow key={`${block.error.at}:${block.error.stage}`} error={block.error} />;
       })}
-
-      {live && <LiveLine turn={turn} sessionId={sessionId} waiting={waiting} />}
     </>
   );
 }

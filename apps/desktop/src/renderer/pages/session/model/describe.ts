@@ -28,20 +28,6 @@ export const PHASE_TONE: Record<Phase, TimelineTone> = {
   replying: 'warning',
 };
 
-/**
- * Short label of the implementation (task-run) phase. A dispatch whose task run
- * is executing is shown with this label and its own elapsed time, never as the
- * compile stage that produced its input.
- */
-export const TASK_RUN_PHASE_LABEL = '实施中';
-
-/** The running dispatch action whose task run has already opened, if any. */
-export function runningTaskAction(turn: TurnModel): ActionModel | undefined {
-  return turn.actions.find(
-    (action) => action.kind === 'dispatch' && action.status === 'running' && action.taskRunId !== undefined,
-  );
-}
-
 /** Display name of every model call role. */
 export const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
   reason: '主推理',
@@ -99,7 +85,7 @@ export const ACTION_KIND_LABEL: Record<ActionModel['kind'], string> = {
   'parse-failed': '操作',
 };
 
-/** Thinking verbs of the live line, picked by reasoning step so each step keeps one. */
+/** Thinking verbs of the working row, picked by reasoning step so each step keeps one. */
 export const THINKING_VERBS = ['思考中', '斟酌中', '推敲中', '琢磨中', '梳理中'] as const;
 
 /** The thinking verb of one reasoning step. */
@@ -192,42 +178,15 @@ export function userSpeakerLabel(
 }
 
 /**
- * One-line status for a running turn, shown under the streaming assistant
- * message. Kept exact so both session views and screenshots agree.
+ * Title of the working row: the header of a running turn's open block while
+ * the turn works. Waiting and interrupting notices win over the running
+ * step, and the thinking verb keeps the row present between steps, right
+ * after a send and while only reasoning runs.
  */
-export function turnStatusText(turn: TurnModel): string {
-  if (turn.interrupting) return '正在中断…';
-  switch (turn.phase) {
-    case 'reasoning':
-      return `第 ${Math.max(1, turn.cycle)} 次推理…`;
-    case 'acting': {
-      const running = turn.actions.filter((action) => action.status === 'running');
-      if (running.length === 1) {
-        const action = running[0]!;
-        // A dispatch is only executing once its task run exists; before that it
-        // is still being prepared, so say so instead of claiming execution.
-        if (action.kind === 'dispatch') {
-          return action.taskRunId === undefined
-            ? `准备任务 ${action.title}…`
-            : `执行任务 ${action.title}…`;
-        }
-        return `执行 ${action.title}…`;
-      }
-      if (running.length > 1) {
-        const preparing = running.every(
-          (action) => action.kind === 'dispatch' && action.taskRunId === undefined,
-        );
-        if (preparing) return `准备 ${running.length} 个任务…`;
-        return `执行 ${running.length} 个行动…`;
-      }
-      return '执行行动…';
-    }
-    case 'replying':
-      return '撰写回复…';
-    case 'preparing':
-    default:
-      return '准备上下文…';
-  }
+export function workingTitle(turn: TurnModel, waiting?: TurnWaitingState): string {
+  if (waiting !== undefined) return waitingStatusText(waiting);
+  if (turn.interrupting) return '正在中断';
+  return runningStepName(turn) ?? thinkingVerb(turn.cycle);
 }
 
 /**
@@ -243,20 +202,6 @@ export function runningStepName(turn: TurnModel): string | undefined {
   );
   if (call !== undefined) return `正在${CALL_ROLE_LABEL[call.role] ?? call.role}`;
   return undefined;
-}
-
-/**
- * Tokens the turn has spent so far: its settled input and output totals plus
- * the in-flight usage of every running call. Undefined when nothing counted.
- */
-export function turnTokenTotal(turn: TurnModel): number | undefined {
-  const { expensive, cheap } = turn.stats;
-  let total = (expensive.input ?? 0) + (expensive.output ?? 0) + (cheap.input ?? 0) + (cheap.output ?? 0);
-  for (const call of turn.calls) {
-    if (call.status !== 'running') continue;
-    total += (call.usage?.input ?? 0) + (call.usage?.output ?? 0);
-  }
-  return total > 0 ? total : undefined;
 }
 
 /**

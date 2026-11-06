@@ -1,10 +1,11 @@
 /**
  * One collapsed stretch of agent work: a muted header line over the bordered
  * list of its step rows. The header's icon is the step kind when the group
- * holds one step and a list when it holds several. While a step runs, the
- * header names it as plain muted text (the animated name lives on the live
- * line); once settled it summarises the steps by kind, with a warning when some
- * failed. A new group rises in.
+ * holds one step and a list when it holds several. The open block's last
+ * group is the working row: animated dots, the turn's working title and its
+ * elapsed time. Ordinary groups name a still-running step as plain muted
+ * text; once settled they summarise the steps by kind, with a warning when
+ * some failed.
  */
 import { useState, type ComponentType } from 'react';
 import {
@@ -24,6 +25,8 @@ import {
   Wrench,
 } from 'lucide-react';
 import { cn } from 'cn';
+import { Elapsed } from '@/renderer/components/elapsed';
+import { openSidePanel } from '@/renderer/lib/side-panel';
 import {
   Collapsible,
   CollapsibleContent,
@@ -40,6 +43,7 @@ import { ActionRow } from './ActionCard.js';
 import { ActivityRow } from './ActivityRow.js';
 import { AuxiliaryCallRow, ReasoningRow } from './CallRow.js';
 import { ContextItemBody } from './ToolCard.js';
+import { WorkingDots } from '../live-indicators.js';
 
 /** Re-exported from the model layer: the step union this group renders. */
 export type { ActivityItem } from '../../model/types.js';
@@ -118,21 +122,6 @@ function summary(items: readonly ActivityItem[]): string {
   return [...counts.values()].map(({ count, phrase }) => phrase(count)).join('，');
 }
 
-/**
- * The label of the group's running tool step, without the trailing ellipsis.
- * Reasoning in progress is told by the turn's live line, never here.
- */
-function runningLabel(items: readonly ActivityItem[]): string | undefined {
-  for (const item of items) {
-    if (item.kind === 'call' && item.call.status === 'running') return `正在${CALL_ROLE_LABEL[item.call.role] ?? item.call.role}`;
-    if (item.kind === 'action' && item.action.status === 'running') {
-      // A step still waiting for its generated name reads as running.
-      return item.action.title === '' ? '运行中' : item.action.title;
-    }
-  }
-  return undefined;
-}
-
 /** How many items of the group reached a failed state. */
 function failedCount(items: readonly ActivityItem[]): number {
   let failed = 0;
@@ -197,12 +186,15 @@ export interface ActivityGroupProps {
   sessionId?: string;
   /** Cancel one dispatched task run; rejects when the daemon refuses. */
   onCancelTask: (taskRunId: string) => Promise<void>;
+  /** Present only on the open block's last group: the one working row. */
+  working?: { title: string; start: string };
+  /** Dispatched task runs of the turn still working; shown beside the working row's elapsed time. */
+  runningTaskCount?: number;
 }
 
 /** One collapsed stretch of agent work. */
-export function ActivityGroup({ items, contextItems, sessionId, onCancelTask }: ActivityGroupProps) {
+export function ActivityGroup({ items, contextItems, sessionId, onCancelTask, working, runningTaskCount }: ActivityGroupProps) {
   const [open, setOpen] = useState(false);
-  const running = runningLabel(items);
   const failed = failedCount(items);
   const actionTitleById = new Map(items.flatMap((item) => {
     if (item.kind !== 'action' || item.action.title.trim() === '') return [];
@@ -212,38 +204,73 @@ export function ActivityGroup({ items, contextItems, sessionId, onCancelTask }: 
   const nameOf = (item: GroupActivityItem): string => stepName(item, naming);
   // A reasoning step joins the summary once it settled.
   const settled = items.filter((item) => !(item.kind === 'reason' && item.call.status === 'running'));
-  if (running === undefined && settled.length === 0) return null;
-  const HeaderIcon = items.length === 1 ? itemIcon(items[0]!) : List;
+  const runningStep = items.find((item) =>
+    (item.kind === 'reason' || item.kind === 'call') && item.call.status === 'running'
+    || item.kind === 'action' && item.action.status === 'running');
+  if (working === undefined && runningStep === undefined && settled.length === 0) return null;
+  const SettledIcon = items.length === 1 ? itemIcon(items[0]!) : List;
   // A group holding one settled step names that step; a multi-step group keeps
   // its kind-count summary.
   const settledLabel = settled.length === 1 && items.length === 1
     ? nameOf(settled[0]!)
     : `${summary(settled)}${failed > 0 ? `（${failed} 项失败）` : ''}`;
-  const runningStep = items.find((item) =>
-    (item.kind === 'reason' || item.kind === 'call') && item.call.status === 'running'
-    || item.kind === 'action' && item.action.status === 'running');
-  const runningText = runningStep === undefined ? running : nameOf(runningStep);
+  // The working row is told its title from the turn; an ordinary group keeps
+  // its running step's name until it settles.
+  const label = working !== undefined
+    ? working.title
+    : runningStep !== undefined ? nameOf(runningStep) : settledLabel;
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="wy-rise-in">
-      <CollapsibleTrigger
-        render={(
+    <Collapsible open={open} onOpenChange={setOpen}>
+      {/* Buttons cannot nest, so the row is three segments side by side: the
+          label trigger, the task-count button and the chevron trigger. */}
+      <div className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+        <CollapsibleTrigger
+          render={(
+            <button
+              type="button"
+              className="group/act inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-0.5 transition-colors hover:text-foreground"
+            />
+          )}
+        >
+          {working !== undefined ? (
+            <WorkingDots />
+          ) : (
+            <SettledIcon className="size-3.5 shrink-0" aria-hidden />
+          )}
+          <span className="truncate">{label}</span>
+          {working !== undefined && (
+            <>
+              <span className="shrink-0">·</span>
+              <Elapsed start={working.start} className="shrink-0 tabular-nums" />
+            </>
+          )}
+        </CollapsibleTrigger>
+        {working !== undefined && (runningTaskCount ?? 0) > 0 && (
           <button
             type="button"
-            className="group/act inline-flex max-w-full items-center gap-1.5 rounded-md py-0.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-          />
+            className="inline-flex shrink-0 items-center rounded py-0.5 transition-colors hover:text-foreground"
+            onClick={() => openSidePanel('tasks', { sessionId })}
+          >
+            · {runningTaskCount} 个任务
+          </button>
         )}
-      >
-        <HeaderIcon className="size-3.5 shrink-0" aria-hidden />
-        {runningText !== undefined ? (
-          <span className="truncate">{runningText}</span>
-        ) : (
-          <>
-            <span className="truncate">{settledLabel}</span>
-            {failed > 0 && <TriangleAlert className="size-3.5 shrink-0" aria-label="有失败的步骤" />}
-          </>
+        {working === undefined && failed > 0 && (
+          <TriangleAlert className="size-3.5 shrink-0" aria-label="有失败的步骤" />
         )}
-        <ChevronRight className={cn('size-3.5 shrink-0 transition-transform', open && 'rotate-90')} />
-      </CollapsibleTrigger>
+        {(working === undefined || items.length > 0) && (
+          <CollapsibleTrigger
+            render={(
+              <button
+                type="button"
+                aria-label={open ? '收起步骤' : '展开步骤'}
+                className="inline-flex shrink-0 items-center rounded-md py-0.5 transition-colors hover:text-foreground"
+              />
+            )}
+          >
+            <ChevronRight className={cn('size-3.5 shrink-0 transition-transform', open && 'rotate-90')} />
+          </CollapsibleTrigger>
+        )}
+      </div>
       <CollapsibleContent className="h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-fast data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0">
         <div className="mt-1.5 overflow-hidden rounded-xl border bg-card/40">
           <div className="divide-y divide-border/60">
