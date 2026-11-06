@@ -1,5 +1,6 @@
 import { hostname } from 'node:os'
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import type { WrenyardGatewayConnection } from '@wrenyard/control'
 import type { TaskRunFacts } from '@wrenyard/protocol/task'
 import { getAuxiliaryDefinition } from '@wrenyard/agent-loop'
@@ -11,7 +12,6 @@ import {
   type TaskArtifact,
 } from '@wrenyard/session'
 import { ProjectManager } from '../../core/project/manager.mts'
-import { runGitSync } from '../../core/vcs/index.mts'
 import { getDb } from '../../db/connection.mts'
 import { AuxiliaryRunStore } from '../../db/stores/auxiliary-run-store.mts'
 import { readGlobalTaskSettings, toAuxiliaryRunRecord, type TaskContext } from '@wrenyard/task'
@@ -145,13 +145,16 @@ function resolveRouteMetadata(
 }
 
 function readGitHead(checkoutPath: string): { branch?: string; head?: string } {
-  const read = (args: string[]): string => {
-    const result = runGitSync(checkoutPath, ['rev-parse', ...args])
-    if (result.code !== 0) {
-      throw new Error(result.stderr.trim() || result.stdout.trim() || `git rev-parse exited with code ${result.code}`)
-    }
-    return result.stdout.trim()
-  }
+  const read = (args: string[]): string =>
+    // A hung git must not block IPC indefinitely; SIGKILL prevents ignoring the timeout.
+    execFileSync('git', ['rev-parse', ...args], {
+      cwd: checkoutPath,
+      encoding: 'utf8',
+      timeout: 1000,
+      killSignal: 'SIGKILL',
+      windowsHide: true,
+      maxBuffer: 64 * 1024 * 1024,
+    }).trim()
   try {
     const branch = read(['--abbrev-ref', 'HEAD'])
     const head = read(['--short', 'HEAD'])
