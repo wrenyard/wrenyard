@@ -25,6 +25,7 @@ export {
   estimateContentTokens,
   estimateInputTokens,
   estimateTokens,
+  hasSelectableReasoningEfforts,
   isProviderDefaultReasoningOnly,
   isReasoningEffortSupported,
   type ContextBudget,

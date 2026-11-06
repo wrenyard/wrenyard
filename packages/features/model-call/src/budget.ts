@@ -165,11 +165,25 @@ export function contextBudgetOf(
 }
 
 /**
- * True only when the route declares the level as a legal reasoning effort. An
- * undeclared list is not a licence to accept an arbitrary level.
+ * True when the route offers at least one selectable level. A missing or empty
+ * ladder offers none, and the singleton provider-default sentinel offers no
+ * selectable weak-to-strong level either.
+ */
+export function hasSelectableReasoningEfforts(metadata: ModelMetadata): boolean {
+  const efforts = metadata.reasoningEfforts;
+  return efforts !== undefined && efforts.length > 0 && !isProviderDefaultReasoningOnly(metadata);
+}
+
+/**
+ * True when the route accepts the level. A missing or empty ladder has no
+ * declared levels, so any requested level is treated as off and does not fail,
+ * matching Pi. The singleton provider-default sentinel likewise accepts any
+ * level. A declared non-empty ladder still rejects a level outside it.
  */
 export function isReasoningEffortSupported(metadata: ModelMetadata, effort: ReasoningEffort): boolean {
-  return metadata.reasoningEfforts?.includes(effort) ?? false;
+  const efforts = metadata.reasoningEfforts;
+  if (efforts === undefined || efforts.length === 0 || isProviderDefaultReasoningOnly(metadata)) return true;
+  return efforts.includes(effort);
 }
 
 /**

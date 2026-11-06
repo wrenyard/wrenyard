@@ -21,6 +21,8 @@ const CODEBUDDY_GATEWAY_PROTOCOLS: readonly GatewayProtocol[] = ['openai_chat', 
 const CODEBUDDY_PRODUCT_MODEL_IDS: Readonly<Record<string, string>> = {
   'hy3': 'hunyuan-hy3',
   'hy3-ioa': 'hunyuan-hy3',
+  // `hy4std` is the wire id CodeBuddy CLI 2.179.1 accepts for HY4 GA.
+  'hy4std': 'hunyuan-hy4',
   'MiniMax-M3': 'minimax-m3',
   'MiniMax-M3.1-Flash': 'minimax-m3.1-flash',
   'MiniMax-M3.1-Flash-Preview': 'minimax-m3.1-flash',
@@ -304,7 +306,7 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     credentialResolver: 'codebuddy',
     classifyUpstreamError: codeBuddyRouteFailure,
     nativeClients: ['codebuddy'],
-    defaultModel: 'hunyuan-hy3',
+    defaultModel: 'hunyuan-hy4',
     useClientBinary: true,
     // Measured 2026-10-19: no event for about 9 s, then the whole response in
     // about 2.5 s (visible text near 640 tok/s).

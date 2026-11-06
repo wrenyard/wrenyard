@@ -25,17 +25,20 @@ export interface ModelMetadata {
 
 export { CONTEXT_OUTPUT_RESERVATION_CAP, boundedOutputReservation } from '@wrenyard/models';
 
+/** Pi 1.5.0's output cap when neither the endpoint nor the registry defines one. */
+const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
+
 /**
  * Model metadata for one `provider/model` public id, read only from the
  * endpoint's model list. A model the endpoint does not list has no metadata;
- * fields the listing omits stay undefined, so the budget check is skipped
- * instead of being invented.
+ * fields the listing omits stay undefined, except the output cap, which falls
+ * back to the client default so the window check and compaction still run.
  */
 export function resolveModelMetadata(publicId: string, models: readonly GatewayModel[]): ModelMetadata {
   const definition = models.find((entry) => entry.publicId === publicId);
   if (definition === undefined) return {};
   const contextWindow = definition.contextWindow;
-  const maxOutputTokens = definition.maxOutputTokens ?? definition.maxTokens;
+  const maxOutputTokens = definition.maxOutputTokens ?? definition.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
   const reasoningEfforts = definition.reasoningEfforts;
   const imageInput = definition.capabilities?.some((capability) => capability === 'image');
   return {

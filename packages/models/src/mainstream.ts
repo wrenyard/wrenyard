@@ -9,6 +9,7 @@ export const MAINSTREAM_MODEL_IDS = [
   'deepseek-v4.1-flash-free',
   'deepseek-v4-pro',
   'hunyuan-hy3',
+  'hunyuan-hy4',
   'kimi-k3.1-pro',
   'kimi-k3',
   'kimi-k2.8',

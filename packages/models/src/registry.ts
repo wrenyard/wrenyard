@@ -37,7 +37,7 @@ export type ModelMetadataGap = 'maxInputTokens' | 'maxOutputTokens' | 'reasoning
  * test reports the same gap instead of accepting a placeholder.
  */
 export const MODEL_METADATA_GAPS: Readonly<Record<string, readonly ModelMetadataGap[]>> = {
-  'swe-2': ['maxInputTokens', 'maxOutputTokens', 'reasoningEfforts', 'inputModalities'],
+  'swe-2': ['maxInputTokens', 'reasoningEfforts', 'inputModalities'],
 };
 
 function freezeDeep<T>(value: T): T {
@@ -381,12 +381,16 @@ const modelsDevCanonicalModels: readonly RegisteredModel[] = [
 const devinModels: readonly RegisteredModel[] = [
   // Speed 185 is the median generation throughput after the first token of
   // three streaming runs (239.1, 185.0 and 166.7 TPS). Provenance: coordinator
-  // measurement 2026-10-17, Devin, 3 streaming runs, median. Pricing and
-  // maxOutputTokens stay absent because they were not established.
+  // measurement 2026-10-17, Devin, 3 streaming runs, median. Pricing stays
+  // absent because it was not established.
   defineModel('swe-2', 'SWE 2', {
     intelligence: 'high',
     capabilities: ['text'],
     contextWindow: 262_144,
+    // Source: 2026-11-06 SWE 2 measurement report. 48,128 is the observed
+    // lower bound; the attempted upper bound was not reached. Reasoning levels
+    // remain a gap because the measurement could not distinguish them.
+    maxOutputTokens: 48_128,
     speed: 185,
   }, { lab: 'cognition', family: 'swe' }),
 ];

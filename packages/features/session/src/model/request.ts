@@ -42,7 +42,7 @@ import {
   checkContextBudget,
   contextBudgetOf as sharedContextBudgetOf,
   estimateInputTokens,
-  isProviderDefaultReasoningOnly,
+  hasSelectableReasoningEfforts,
   isReasoningEffortSupported,
   type ContextBudgetFacts,
 } from '@wrenyard/model-call';
@@ -62,6 +62,7 @@ export {
   estimateContentTokens,
   estimateInputTokens,
   estimateTokens,
+  hasSelectableReasoningEfforts,
   isProviderDefaultReasoningOnly,
   isReasoningEffortSupported,
   IMAGE_INPUT_TOKEN_ESTIMATE,
@@ -590,8 +591,8 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           const message = `context_overflow: ${budget.reason}`;
           return await fail(message, auxiliaryFailure(message, undefined, 'context_overflow'));
         }
-        const providerDefaultOnly = isProviderDefaultReasoningOnly(budget.metadata);
-        actualReasoningEffort = providerDefaultOnly ? PROVIDER_DEFAULT_REASONING : route.reasoningEffort;
+        const selectableEffort = hasSelectableReasoningEfforts(budget.metadata);
+        actualReasoningEffort = selectableEffort ? route.reasoningEffort : PROVIDER_DEFAULT_REASONING;
         await options.append({
           type: 'span.started',
           id: input.spanId,
@@ -685,11 +686,11 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           const candidateModel = routeKeyOf(candidate.provider, candidate.model);
           if (excludedModels.has(candidateModel)) continue;
           const budget = checkContextBudget(candidateModel, messages, models, maxTokens);
-          // A route whose whole ladder is the provider-default sentinel has no
-          // selectable level: it accepts any requested effort and is sent at its
-          // own default. Every other route keeps the exact support check.
-          const providerDefaultOnly = isProviderDefaultReasoningOnly(budget.metadata);
-          if (!providerDefaultOnly && !isReasoningEffortSupported(budget.metadata, candidate.reasoningEffort)) {
+          // A route with no selectable level accepts any requested effort and is
+          // sent at its own default. A route that declares real levels keeps the
+          // exact support check.
+          const selectableEffort = hasSelectableReasoningEfforts(budget.metadata);
+          if (selectableEffort && !isReasoningEffortSupported(budget.metadata, candidate.reasoningEffort)) {
             if (candidate === first) {
               return await fail(`Model ${candidateModel} does not support reasoning effort "${candidate.reasoningEffort ?? ''}"`);
             }
@@ -701,7 +702,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           }
           model = candidateModel;
           estimatedInputTokens = budget.estimatedInputTokens;
-          actualReasoningEffort = providerDefaultOnly ? PROVIDER_DEFAULT_REASONING : candidate.reasoningEffort;
+          actualReasoningEffort = selectableEffort ? candidate.reasoningEffort : PROVIDER_DEFAULT_REASONING;
           const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? maxTokens;
           // One invocation writes exactly one started span, whichever route
           // ends up answering it.

@@ -17,7 +17,7 @@
  */
 import type { GatewayModel } from '@wrenyard/protocol/gateway';
 import { PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
-import { checkContextBudget, isProviderDefaultReasoningOnly, type ContextBudget } from './budget.ts';
+import { checkContextBudget, hasSelectableReasoningEfforts, type ContextBudget } from './budget.ts';
 import {
   abortError,
   ModelError,
@@ -90,9 +90,9 @@ export async function callModelAttempt(input: ModelCallAttemptInput): Promise<Mo
   if (!budget.ok) {
     throw new ModelError(`context_overflow: ${budget.reason ?? 'context budget exceeded'}`, { kind: 'context_overflow' });
   }
-  const sentEffort = isProviderDefaultReasoningOnly(budget.metadata)
-    ? PROVIDER_DEFAULT_REASONING
-    : input.reasoningEffort;
+  const sentEffort = hasSelectableReasoningEfforts(budget.metadata)
+    ? input.reasoningEffort
+    : PROVIDER_DEFAULT_REASONING;
   const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? input.maxOutputTokens;
   const request: ModelRequest = {
     model: input.model,
