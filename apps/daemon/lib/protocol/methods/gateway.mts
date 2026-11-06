@@ -37,6 +37,8 @@ export const gatewayConnectionResultSchema = {
           id: { type: 'string' }, publicId: { type: 'string' }, provider: { type: 'string' },
           protocols: { type: 'array', minItems: 1, uniqueItems: true, items: { enum: ['openai_chat', 'openai_responses', 'anthropic_messages'] } },
           displayName: { type: 'string' }, contextWindow: { type: 'integer', minimum: 1 }, maxTokens: { type: 'integer', minimum: 1 },
+          maxInputTokens: { type: 'integer', minimum: 1 },
+          inputModalities: { type: 'array', items: { type: 'string' } },
           taskOnly: { type: 'boolean' }, family: { const: 'claude' },
           claudeTier: { enum: ['haiku', 'sonnet', 'opus'] }, supports1MContext: { type: 'boolean' },
           supportsFast: { type: 'boolean' },
