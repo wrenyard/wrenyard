@@ -304,7 +304,7 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     credentialResolver: 'codebuddy',
     classifyUpstreamError: codeBuddyRouteFailure,
     nativeClients: ['codebuddy'],
-    defaultModel: 'hunyuan-hy4-preview',
+    defaultModel: 'hunyuan-hy3',
     useClientBinary: true,
     // Measured 2026-10-19: no event for about 9 s, then the whole response in
     // about 2.5 s (visible text near 640 tok/s).
