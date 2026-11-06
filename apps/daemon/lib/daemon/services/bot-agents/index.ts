@@ -31,6 +31,8 @@ export {
 export {
   BotAgentError,
   createBotAgentKernel,
+  defineBotAgent,
+  type BotAgentDefinition,
   type AgentBotSummary,
   type BotAgentKernel,
   type CreateBotAgentKernelOptions,

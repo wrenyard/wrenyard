@@ -1,7 +1,7 @@
 /**
- * session turn loop: the work-turn state machine and the step loop over the
- * session runtime. `engine.ts` owns the session lifecycle and calls into this
- * runner for everything a turn does.
+ * session turn loop: the shared work-turn state machine and step loop over the
+ * session runtime, plus the built-in runner. `engine.ts` owns the session
+ * lifecycle and calls into a loop for everything a turn does.
  */
 
 import {
@@ -18,6 +18,7 @@ import { runMemorySearch } from '../auxiliary/memory.ts';
 import type { ReplyWriter } from '../auxiliary/reply.ts';
 import { startInitialTitle } from '../auxiliary/title.ts';
 import type { CallFailureSummary, SessionCallHost, SessionViewInfo } from '../ports.ts';
+import type { ToolSpec } from '../transport/index.ts';
 import type { SessionRuntime, TurnRuntime } from './runtime.ts';
 import { messageOf } from '../errors.ts';
 import type { ActionRunner } from './actions.ts';
@@ -26,17 +27,27 @@ import type { Compaction } from './compaction.ts';
 /** Step 1 blocks on memory search only up to this long before reasoning starts. */
 const MEMORY_SEARCH_STEP1_WAIT_MS = 8000;
 
+/** The prompt and tools one turn runs on, plus facts kept across compaction. */
+export interface LoopAgent {
+  tools: readonly ToolSpec[];
+  system?: string;
+  kernelFacts?: () => string | undefined;
+}
+
 /** Run the turn and step loop over the session runtime. */
-export class NativeLoop {
+export abstract class TurnLoop {
   /** At most one memory-search invocation per turn; cleared when it settles. */
   private readonly memorySearchFlights = new WeakMap<TurnRuntime, Promise<void>>();
 
   constructor(
-    private readonly engine: SessionCallHost,
+    protected readonly engine: SessionCallHost,
     private readonly replies: ReplyWriter,
     private readonly actions: ActionRunner,
     private readonly compaction: Compaction,
   ) {}
+
+  /** The agent surface this loop's turns run on. */
+  protected abstract agent(session: SessionRuntime): LoopAgent;
 
   async runTurn(session: SessionRuntime, turn: TurnRuntime): Promise<void> {
     try {
@@ -252,11 +263,10 @@ export class NativeLoop {
       : {};
 
     const maxTokens = metadata.maxOutputTokens;
-    // An agent tool port, when the host provides one for this session, owns the
-    // whole system prompt and the native tool set; absent keeps the built-in
-    // orchestrator prompt and the single wy_action tool.
-    const port = this.engine.host.agentTools?.(session.sessionId);
-    const tools = port === undefined ? [ACTION_TOOL] : port.tools;
+    // The loop owns the system prompt and tool set for this session; the built-in
+    // loop keeps the single wy_action tool, while a bot loop supplies its port.
+    const agent = this.agent(session);
+    const tools = agent.tools;
     const buildView = (currentEvents: LedgerEvent[]) => buildReason({
       deviceName: this.engine.host.deviceName,
       snapshot: session.snapshot,
@@ -265,7 +275,7 @@ export class NativeLoop {
       session: this.sessionInfo(session, turn),
       images,
       allowImages,
-      ...(port === undefined ? {} : { systemOverride: port.system }),
+      ...(agent.system === undefined ? {} : { systemOverride: agent.system }),
     });
     let view = buildView(events);
 
@@ -281,13 +291,13 @@ export class NativeLoop {
       metadata,
       maxTokens,
       view,
-      port,
+      kernelFacts: agent.kernelFacts,
       buildView,
     });
     if (!compaction.ok) return { ok: false, error: compaction.error };
     view = compaction.view;
 
-    // The reason call declares the wy_action tool; completed calls are started
+    // The reason call declares this loop's tools; completed calls are started
     // as they arrive, while the visible text keeps streaming to the UI. Their
     // raw intents/questions are captured in order for the worker output.
     turn.stepText = '';
@@ -463,6 +473,15 @@ export class NativeLoop {
       deviceName: this.engine.host.deviceName,
       ...(turn.contextWindow === undefined ? {} : { contextWindow: turn.contextWindow }),
     };
+  }
+}
+
+// ─── built-in loop ─────────────────────────────────────────────────────────
+
+/** The ordinary session loop: the built-in orchestrator prompt and wy_action. */
+export class NativeLoop extends TurnLoop {
+  protected agent(_session: SessionRuntime): LoopAgent {
+    return { tools: [ACTION_TOOL] };
   }
 }
 

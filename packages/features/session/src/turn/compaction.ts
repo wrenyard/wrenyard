@@ -9,7 +9,7 @@ import { contextBudgetOf } from '../model/request.ts';
 import type { ModelMetadata } from '../model/metadata.ts';
 import { compactContext, renderKernelFactsBlock, type CompactionResult } from '../context/compaction.ts';
 import { computeReduction } from '../context/reduction.ts';
-import type { AgentToolPort, BuiltView, SessionCallHost } from '../ports.ts';
+import type { BuiltView, SessionCallHost } from '../ports.ts';
 import type { SessionRuntime, TurnRuntime } from './runtime.ts';
 
 export class Compaction {
@@ -25,10 +25,10 @@ export class Compaction {
     metadata: ModelMetadata;
     maxTokens: number | undefined;
     view: BuiltView;
-    port: AgentToolPort | undefined;
+    kernelFacts?: () => string | undefined;
     buildView: (events: LedgerEvent[]) => BuiltView;
   }): Promise<{ ok: true; view: BuiltView } | { ok: false; error: string }> {
-    const { session, turn, step, stepKey, events, models, metadata, maxTokens, port, buildView } = input;
+    const { session, turn, step, stepKey, events, models, metadata, maxTokens, kernelFacts, buildView } = input;
     let view = input.view;
 
     // A request that would cross the compaction threshold is reduced first and
@@ -72,7 +72,7 @@ export class Compaction {
         overThreshold = reduced.threshold === undefined
           || reduced.estimatedInputTokens > reduced.threshold;
         if (!overThreshold) {
-          const facts = port?.kernelFacts?.();
+          const facts = kernelFacts?.();
           if (facts !== undefined && facts.trim() !== '') {
             view.messages.splice(view.messages.length - 1, 0, { role: 'user', content: renderKernelFactsBlock(facts) });
           }
@@ -122,9 +122,9 @@ export class Compaction {
           });
           const freshEvents = this.engine.ledger.read(session.sessionId);
           view = buildView(freshEvents);
-          const kernelFacts = port?.kernelFacts?.();
-          if (kernelFacts !== undefined && kernelFacts.trim() !== '') {
-            view.messages.splice(view.messages.length - 1, 0, { role: 'user', content: renderKernelFactsBlock(kernelFacts) });
+          const facts = kernelFacts?.();
+          if (facts !== undefined && facts.trim() !== '') {
+            view.messages.splice(view.messages.length - 1, 0, { role: 'user', content: renderKernelFactsBlock(facts) });
           }
           return freshEvents;
         };

@@ -24,12 +24,14 @@ import { errorTooltip } from '@wrenyard/session/session-status'
 import {
   createSession,
   createWorkspaceMemory,
+  type ActionType,
   type AgentToolPort,
   type LedgerEvent,
   type ReplySentEvent,
   type Session,
   type SessionHost,
   type SessionSummary,
+  type ToolSpec,
   type TurnStatus,
   type WorkspaceMemoryPort,
 } from '@wrenyard/session'
@@ -640,6 +642,29 @@ function visibleTurnAnswerOf(session: Session, sessionId: string, turn: number):
   return final ?? reasoning ?? last
 }
 
+/** The definition of one bot as a tool-using agent. */
+export interface BotAgentDefinition {
+  system: string
+  tools: ToolSpec[]
+  auxiliaryTools: Readonly<Record<string, ActionType>>
+}
+
+/**
+ * Define one runnable bot as an agent: its system prompt, its configured tools
+ * in order, and the built-in actions those tools map onto. Bots have no
+ * wy_action tool.
+ */
+export function defineBotAgent(
+  entry: BotAgentEntry,
+  peers: Iterable<BotAgentEntry>,
+): BotAgentDefinition {
+  return {
+    system: botSystemPrompt(entry, peers),
+    tools: agentToolSpecs(entry.config?.tools ?? []),
+    auxiliaryTools: { workspace: 'vcs' },
+  }
+}
+
 export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotAgentKernel {
   const log = options.log
   const statePath = join(options.stateDir, 'kernel.json')
@@ -785,11 +810,12 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   function portFor(botId: string): AgentToolPort | undefined {
     const entry = entries.get(botId)
     if (entry?.config === undefined || entry.identity === undefined) return undefined
+    const agent = defineBotAgent(entry, entries.values())
     return {
-      system: botSystemPrompt(entry, entries.values()),
-      tools: agentToolSpecs(entry.config.tools),
+      system: agent.system,
+      tools: agent.tools,
       kernelFacts: () => kernelFactsFor(entry),
-      auxiliaryTools: { workspace: 'vcs' },
+      auxiliaryTools: agent.auxiliaryTools,
       run: (call) => runTools(call, toolContext(botId)),
     }
   }

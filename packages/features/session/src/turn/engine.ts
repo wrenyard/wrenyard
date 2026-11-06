@@ -2,7 +2,8 @@
  * session engine: the session lifecycle and composition of the turn loop.
  *
  * The engine owns session creation, on-demand timeline recovery, deletion, media and the
- * observability reads; every work turn runs in {@link TurnRunner}. `index.ts`
+ * observability reads; a work turn runs in {@link TurnRunner}, a bot turn in
+ * {@link BotLoop}. `index.ts`
  * is the only composition root: it builds the ports and hands them to
  * {@link createEngine}. There is no compatibility mechanism and no legacy role.
  */
@@ -46,6 +47,7 @@ import { ReplyWriter } from '../auxiliary/reply.ts';
 import { suggestNextInput } from '../auxiliary/prompt-suggestion.ts';
 import { regenerateTitle } from '../auxiliary/title.ts';
 import { TurnRunner } from './turn.ts';
+import { BotLoop } from './bot-loop.ts';
 import type { SessionRuntime, TurnRuntime } from './runtime.ts';
 import { buildSnapshot } from '../snapshot.ts';
 
@@ -77,6 +79,7 @@ class Engine implements Session, SessionCallHost {
   private readonly live = new LiveCalls();
   private readonly replies: ReplyWriter;
   private readonly turnRunner: TurnRunner;
+  private readonly botLoop: BotLoop;
   private readonly ensuring = new Map<string, Promise<SessionRuntime>>();
   /**
    * Per-session count of in-flight attachment imports/admissions. A plain Set
@@ -148,6 +151,7 @@ class Engine implements Session, SessionCallHost {
     });
     // Startup is metadata-only: session bodies are read only on first touch.
     this.turnRunner = new TurnRunner(this, this.replies);
+    this.botLoop = new BotLoop(this, this.replies);
     this.ready = this.initialize();
     void this.ready.catch(() => undefined);
     // An unref'd sweep releases runtimes whose session has been idle long
@@ -451,7 +455,8 @@ class Engine implements Session, SessionCallHost {
       });
     }
 
-    this.track(this.turnRunner.runTurn(session, turn));
+    const runner = this.host.agentTools?.(sessionId) !== undefined ? this.botLoop : this.turnRunner;
+    this.track(runner.runTurn(session, turn));
     return { turn: turnNumber };
   }
 

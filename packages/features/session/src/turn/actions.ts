@@ -21,7 +21,7 @@ import { messageOf } from '../errors.ts';
 
 /** Run the turn's tool calls and action executions over the session runtime. */
 export class ActionRunner {
-  constructor(private readonly engine: SessionCallHost) {}
+  constructor(protected readonly engine: SessionCallHost) {}
 
   async cancelRunningWork(turn: TurnRuntime): Promise<void> {
     await Promise.allSettled([...turn.taskRunIds].map((id) => this.engine.safeCancelTask(id)));
@@ -41,37 +41,6 @@ export class ActionRunner {
     workerLines: string[],
   ): Promise<void> {
     turn.toolCallsThisStep += 1;
-    // An agent tool port dispatches its own native tools by name: an unknown
-    // name forces the same correction an invalid built-in call does, and ask
-    // does not exist for a port.
-    const port = this.engine.host.agentTools?.(session.sessionId);
-    if (port !== undefined) {
-      const tool = port.tools.find((candidate) => candidate.name === call.name);
-      if (tool === undefined) {
-        turn.correctionRequired = true;
-        await this.engine.appendError(session.sessionId, 'reason', `unknown tool: ${call.name}`, turn, step);
-        return;
-      }
-      const auxiliary = port.auxiliaryTools?.[call.name];
-      if (auxiliary !== undefined) {
-        const request = auxiliaryToolRequest(call.arguments);
-        if (request === undefined) {
-          turn.correctionRequired = true;
-          await this.engine.appendError(
-            session.sessionId,
-            'reason',
-            `invalid arguments for tool ${call.name}: expected a non-empty "request" string`,
-            turn,
-            step,
-          );
-          return;
-        }
-        await this.startAction(session, turn, step, { type: auxiliary, intent: request, name: call.name });
-        return;
-      }
-      await this.startAction(session, turn, step, { type: 'tool', name: call.name, intent: call.arguments });
-      return;
-    }
     const parsed = parseActionCall(call);
     if ('error' in parsed) {
       turn.correctionRequired = true;
@@ -88,7 +57,7 @@ export class ActionRunner {
   }
 
   /** Start one parsed action, exactly as a valid block once did. */
-  private async startAction(
+  protected async startAction(
     session: SessionRuntime,
     turn: TurnRuntime,
     step: number,
@@ -220,21 +189,13 @@ export class ActionRunner {
     );
   }
 
-  /** Execute one agent-tool-port call. The port is re-read from the host. */
-  private async runToolAction(
-    session: SessionRuntime,
-    turn: TurnRuntime,
+  /** Execute a native tool action; a loop with a port overrides this. */
+  protected async runToolAction(
+    _session: SessionRuntime,
+    _turn: TurnRuntime,
     action: ParsedAction,
   ): Promise<ActionExecutionOutcome> {
-    const port = this.engine.host.agentTools?.(session.sessionId);
-    if (port === undefined) {
-      return { status: 'failed', result: `unknown tool: ${action.name ?? ''}`, deferred: [] };
-    }
-    const result = await port.run(
-      { name: action.name ?? '', arguments: action.intent },
-      { sessionId: session.sessionId, turn: turn.turn },
-    );
-    return { status: result.status === 'done' ? 'done' : 'failed', result: result.result, deferred: [] };
+    return { status: 'failed', result: `unknown tool: ${action.name ?? ''}`, deferred: [] };
   }
 
   async awaitParses(turn: TurnRuntime): Promise<void> {
@@ -340,7 +301,7 @@ function isReadDraft(draft: LedgerEventDraft): boolean {
 }
 
 /** The trimmed `request` argument of one tool call, or undefined when it is not a non-empty string. */
-function auxiliaryToolRequest(args: string): string | undefined {
+export function auxiliaryToolRequest(args: string): string | undefined {
   try {
     const parsed: unknown = JSON.parse(args);
     if (parsed === null || typeof parsed !== 'object') return undefined;
