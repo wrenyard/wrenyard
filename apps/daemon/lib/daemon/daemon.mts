@@ -388,7 +388,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
     let runtime: ForemanDaemonRuntime | undefined
     try {
       await mkdir(foremanStateRoot(), { recursive: true })
-      runtime = await bootstrapForemanDaemonRuntime()
+      runtime = await bootstrapForemanDaemonRuntime({ endpoint: this.config.endpoint })
       await this.sampleLowDisk()
       this.lowDiskTimer = setInterval(() => { void this.sampleLowDisk() }, 30_000)
       this.lowDiskTimer.unref?.()
@@ -3242,7 +3242,7 @@ const latestEffectiveQuotaPools = new Map<string, EffectiveQuotaPoolEntry>()
 // guard rather than republishing the previous account's effective pools.
 let effectiveQuotaPoolsGeneration = 0
 
-async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
+async function bootstrapForemanDaemonRuntime(options?: { endpoint?: ForemanServiceConfig['endpoint'] }): Promise<ForemanDaemonRuntime> {
   // Startup-only migration: convert a legacy auto_vacuum=NONE database to
   // INCREMENTAL on a worker thread before initDb opens it and before IPC
   // serves clients. A failure is logged and never blocks startup.
@@ -3403,6 +3403,7 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
       execService,
       operations: operationAdapter,
       canStartExecution: () => lowDiskStateForProcess,
+      ...(options?.endpoint === undefined ? {} : { endpoint: options.endpoint }),
       // A committed `done` execution refreshes exactly its own sample in the
       // in-memory local speed window.
       onExecutionCompleted: (executionId) => updateLocalSpeedSample(executionId, db),

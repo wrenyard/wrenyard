@@ -24,8 +24,9 @@ function summaryFromTerminalOutput(output: string | null | undefined): string | 
   return undefined
 }
 import { parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
-import { resolvePlan } from './worker-plan.mts'
+import { resolvePlan, WRENYARD_PROVIDER } from './worker-plan.mts'
 import { createBuiltinCatalog } from '@wrenyard/providers'
+import type { ForemanEndpointConfig } from '../../config/types.mts'
 import type {
   AgentExecutionHost,
   ClientFamily,
@@ -101,6 +102,12 @@ export interface AgentExecutionSupervisorOptions {
    */
   isProcessLiveImpl?: (pid: number) => boolean
   catalog?: ReturnType<typeof createBuiltinCatalog>
+  /**
+   * Configured standard Chat endpoint. When set, a `wrenyard`-provider launch
+   * re-points the gateway URL/token env at this endpoint for that one child;
+   * every other launch keeps the built-in gateway environment.
+   */
+  endpoint?: ForemanEndpointConfig
   /**
    * Shared raw prompt-execution service. When supplied, every task attempt is
    * lowered onto `ExecService.start` instead of calling the agent client
@@ -255,6 +262,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private readonly killProcessTreeFn: (pid: number, pgid?: number) => Promise<void>
   private readonly isProcessLiveFn: (pid: number) => boolean
   private readonly catalog: ReturnType<typeof createBuiltinCatalog>
+  private readonly endpoint?: ForemanEndpointConfig
   private readonly execService: ExecService
   private readonly operations?: OperationAdapter
   private readonly onExecutionCompleted?: (executionId: string) => void
@@ -270,7 +278,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private promoting = false
   private readonly canStartExecution?: AgentExecutionSupervisorOptions['canStartExecution']
 
-  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, clients, execService, operations, canStartExecution, onExecutionCompleted, onExecutionStarted, onExecutionTerminal }: AgentExecutionSupervisorOptions) {
+  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, clients, execService, operations, canStartExecution, onExecutionCompleted, onExecutionStarted, onExecutionTerminal, endpoint }: AgentExecutionSupervisorOptions) {
     this.db = db
     this.repoWriteLocks = repoWriteLocks
     this.logger = logger
@@ -278,6 +286,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     this.killProcessTreeFn = killProcessTreeImpl ?? killProcessTree
     this.isProcessLiveFn = isProcessLiveImpl ?? defaultIsProcessLive
     this.catalog = catalog ?? createBuiltinCatalog()
+    this.endpoint = endpoint
     // A standalone supervisor (isolated tests, library use) always runs through
     // an ExecService. It builds one over its own client map when the daemon does
     // not supply the shared configured service, so the supervisor never has a
@@ -858,6 +867,13 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         this.buildReasoningEffortPlanEnv(entry.executionId, opts.dispatchSnapshot?.fast),
         entry.executionId,
       )
+      // A worker on the `wrenyard` provider talks to the configured standard
+      // endpoint directly: its base URL and bearer token replace the built-in
+      // gateway values for this one child's environment only.
+      if (plan.provider === WRENYARD_PROVIDER && this.endpoint !== undefined) {
+        baseEnv.WRENYARD_GATEWAY_OPENAI_CHAT_URL = this.endpoint.url
+        baseEnv.WRENYARD_GATEWAY_TOKEN = this.endpoint.token
+      }
       const laneWatch = setInterval(() => {
         if (entry.cancelRequested || entry.terminalIntent) laneAbort.abort()
       }, 250)
