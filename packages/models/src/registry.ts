@@ -38,6 +38,8 @@ export type ModelMetadataGap = 'maxInputTokens' | 'maxOutputTokens' | 'reasoning
  */
 export const MODEL_METADATA_GAPS: Readonly<Record<string, readonly ModelMetadataGap[]>> = {
   'swe-2': ['maxInputTokens', 'reasoningEfforts', 'inputModalities'],
+  'union-alpha': ['maxOutputTokens', 'reasoningEfforts'],
+  'groq-compound': ['reasoningEfforts'],
 };
 
 function freezeDeep<T>(value: T): T {

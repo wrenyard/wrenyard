@@ -100,6 +100,8 @@ export function toModelEntries(
       runtime,
       reasoningEfforts: [...efforts],
       ...(gatewayModel.capabilities === undefined ? {} : { capabilities: gatewayModel.capabilities }),
+      ...(gatewayModel.maxInputTokens === undefined ? {} : { maxInputTokens: gatewayModel.maxInputTokens }),
+      ...(gatewayModel.inputModalities === undefined ? {} : { inputModalities: gatewayModel.inputModalities }),
       quotaProvider,
       ...(gatewayModel.contextWindow === undefined ? {} : { contextWindow: gatewayModel.contextWindow }),
       ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),

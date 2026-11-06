@@ -3,10 +3,10 @@
  *
  * These helpers are business-neutral: they estimate one request's input with
  * `o200k_base`, apply the shared output-reservation cap, and decide whether the
- * request fits the model's context window. Caller policy — which roles may
- * carry images, per-role output caps, compaction thresholds — stays with the
- * caller: the compaction threshold cap is supplied as `compactionThresholdCap`
- * rather than fixed here.
+ * request fits the model's input limit and context window. Caller policy —
+ * which roles may carry images, per-role output caps, compaction thresholds —
+ * stays with the caller: the compaction threshold cap is supplied as
+ * `compactionThresholdCap` rather than fixed here.
  */
 import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
 import type { GatewayModel } from '@wrenyard/protocol/gateway';
@@ -65,8 +65,9 @@ export interface ContextBudget {
 
 /**
  * Context budget check. The model maximum is the only limit — there is no
- * extra soft budget — and a call is refused when the estimate plus the output
- * the request reserves would exceed its window.
+ * extra soft budget — and a call is refused when the input exceeds
+ * `maxInputTokens`, or when the estimate plus the output the request reserves
+ * would exceed its context window.
  *
  * The declared `metadata.maxOutputTokens` is the model's source maximum — a
  * capability, not a mandatory per-request reservation. It is reserved only up to
@@ -89,7 +90,15 @@ export function checkContextBudget(
 ): ContextBudget {
   const metadata = resolveModelMetadata(publicId, models);
   const estimatedInputTokens = estimateInputTokens(messages);
-  const { contextWindow } = metadata;
+  const { contextWindow, maxInputTokens } = metadata;
+  if (maxInputTokens !== undefined && estimatedInputTokens > maxInputTokens) {
+    return {
+      metadata,
+      estimatedInputTokens,
+      ok: false,
+      reason: `Estimated input ${estimatedInputTokens} exceeds the model input limit ${maxInputTokens}`,
+    };
+  }
   const sourceMax = boundedOutputReservation(metadata.maxOutputTokens);
 
   const requested = requestedMaxOutputTokens ?? sourceMax;
@@ -116,9 +125,9 @@ export function checkContextBudget(
  * cap (or source maximum) bounded by the source maximum and the room left after
  * the estimated input, never negative. `threshold` is the input size above
  * which a request compacts before sending: the lower of half the room left after
- * the output reservation and the caller-supplied `compactionThresholdCap`; the
- * cap is caller policy, so a caller without a compaction threshold simply omits
- * it.
+ * the output reservation, the caller-supplied `compactionThresholdCap`, and the
+ * model's `maxInputTokens`; the cap is caller policy, so a caller without a
+ * compaction threshold simply omits it.
  */
 export interface ContextBudgetFacts {
   contextWindow?: number;
@@ -139,7 +148,7 @@ export function contextBudgetOf(
 ): ContextBudgetFacts {
   const metadata = resolveModelMetadata(publicId, models);
   const estimatedInputTokens = estimateInputTokens(messages);
-  const { contextWindow } = metadata;
+  const { contextWindow, maxInputTokens } = metadata;
   const sourceMax = boundedOutputReservation(metadata.maxOutputTokens);
   const requested = requestedMaxOutputTokens ?? sourceMax;
   const bounded = sourceMax === undefined
@@ -155,7 +164,11 @@ export function contextBudgetOf(
       : Math.max(0, Math.min(bounded, room));
   const threshold = contextWindow === undefined || outputReservation === undefined
     ? undefined
-    : Math.min(Math.floor(0.5 * (contextWindow - outputReservation)), compactionThresholdCap ?? Number.MAX_SAFE_INTEGER);
+    : Math.min(
+      Math.floor(0.5 * (contextWindow - outputReservation)),
+      compactionThresholdCap ?? Number.MAX_SAFE_INTEGER,
+      maxInputTokens ?? Number.MAX_SAFE_INTEGER,
+    );
   return {
     ...(contextWindow === undefined ? {} : { contextWindow }),
     estimatedInputTokens,

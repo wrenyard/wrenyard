@@ -166,23 +166,29 @@ export function parseModelList(body: unknown): NormalizedModelMetadata[] {
 
 /**
  * Complete missing metadata on one Gateway connection row from the registered
- * catalog. Endpoint-provided values, including an explicit empty effort list,
- * are never replaced. This executes when the connection is published, so a
- * session still reads only connection metadata.
+ * catalog. A non-empty endpoint value wins; an empty effort ladder is treated
+ * as undeclared here so registry efforts can backfill it. This executes when
+ * the connection is published, so a session still reads only connection
+ * metadata. `parseModelList` keeps an endpoint's explicit empty list.
  */
 export function withCatalogMetadata(model: PublicGatewayModel): PublicGatewayModel {
   const defaults = registeredModels.get(model.id)?.defaults
   if (defaults === undefined) return model
+  const maxInputTokens = model.maxInputTokens ?? defaults.maxInputTokens
+  const inputModalities = model.inputModalities ?? defaults.inputModalities
   const capabilities = model.capabilities
-    ?? defaults.inputModalities?.filter((modality): modality is 'text' | 'image' => modality === 'text' || modality === 'image')
+    ?? inputModalities?.filter((modality): modality is 'text' | 'image' => modality === 'text' || modality === 'image')
+  const backfillEfforts = model.reasoningEfforts === undefined || model.reasoningEfforts.length === 0
   return {
     ...model,
     contextWindow: model.contextWindow ?? defaults.contextWindow,
+    ...(maxInputTokens === undefined ? {} : { maxInputTokens }),
+    ...(inputModalities === undefined ? {} : { inputModalities }),
     ...(model.maxOutputTokens === undefined && model.maxTokens === undefined
       && defaults.maxOutputTokens !== undefined
       ? { maxOutputTokens: defaults.maxOutputTokens }
       : {}),
-    ...(model.reasoningEfforts === undefined && defaults.reasoningEfforts !== undefined
+    ...(backfillEfforts && defaults.reasoningEfforts !== undefined
       ? { reasoningEfforts: defaults.reasoningEfforts }
       : {}),
     ...(capabilities === undefined || capabilities.length === 0 ? {} : { capabilities }),

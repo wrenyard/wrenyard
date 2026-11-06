@@ -33,8 +33,12 @@ export interface GatewayModel {
   /** Catalog intelligence tier; absent when genuinely unknown (a route naming
    * no registered canonical model). */
   intelligence?: 'low' | 'mid' | 'high' | 'premium';
+  maxInputTokens?: number;
   maxOutputTokens?: number;
   capabilities?: readonly ('text' | 'image')[];
+  /** Full input modalities this route accepts, including values outside the
+   * product's `ModelCapability` subset. Absent when no source declares them. */
+  inputModalities?: readonly string[];
   /**
    * The legal reasoning efforts this model accepts, in ascending intensity.
    * Replaces the legacy fixed `reasoningEffort` field on the public gateway

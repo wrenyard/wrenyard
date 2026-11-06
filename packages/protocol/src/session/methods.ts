@@ -143,6 +143,10 @@ export interface SessionModelEntry {
   reasoningEfforts: ReasoningEffort[]
   /** Input modalities supported by this model when declared. */
   capabilities?: readonly ('text' | 'image')[]
+  /** Maximum input tokens this route accepts when declared. */
+  maxInputTokens?: number
+  /** Full input modalities this route accepts when declared. */
+  inputModalities?: readonly string[]
   /** Quota provider id backing this model: the catalog `quotaProvider`, else `provider`. */
   quotaProvider?: string
   contextWindow?: number

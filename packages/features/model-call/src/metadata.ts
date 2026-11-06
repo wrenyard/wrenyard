@@ -16,9 +16,13 @@ export type { SessionProtocol } from './transport/protocol.ts';
 /** Model facts used by the budget check and by the `<wy-info>` view. */
 export interface ModelMetadata {
   contextWindow?: number;
+  /** Maximum input tokens the route accepts. */
+  maxInputTokens?: number;
   maxOutputTokens?: number;
   /** Reasoning levels the endpoint lists for this exact model. */
   reasoningEfforts?: readonly ReasoningEffort[];
+  /** Full input modalities the route accepts. */
+  inputModalities?: readonly string[];
   /** True only when the endpoint lists the `image` input capability. */
   imageInput?: boolean;
 }
@@ -38,13 +42,17 @@ export function resolveModelMetadata(publicId: string, models: readonly GatewayM
   const definition = models.find((entry) => entry.publicId === publicId);
   if (definition === undefined) return {};
   const contextWindow = definition.contextWindow;
+  const maxInputTokens = definition.maxInputTokens;
   const maxOutputTokens = definition.maxOutputTokens ?? definition.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
   const reasoningEfforts = definition.reasoningEfforts;
+  const inputModalities = definition.inputModalities;
   const imageInput = definition.capabilities?.some((capability) => capability === 'image');
   return {
     ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(maxInputTokens === undefined ? {} : { maxInputTokens }),
     ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
     ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
+    ...(inputModalities === undefined ? {} : { inputModalities }),
     ...(imageInput === undefined ? {} : { imageInput }),
   };
 }

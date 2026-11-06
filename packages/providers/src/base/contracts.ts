@@ -218,6 +218,13 @@ export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel'> & {
    * route health, quota and statistics. The protocol `/models` listing and the
    * session transport use this value; `id` stays the bare registered id. */
   publicId: string;
+  /** Maximum input tokens this route accepts; absent when neither the endpoint
+   * nor the registry establishes one. */
+  maxInputTokens?: number;
+  /** Full input modalities this route accepts, including values outside the
+   * product's `ModelCapability` subset. Absent when neither source declares
+   * them. */
+  inputModalities?: readonly string[];
   routeState?: GatewayRouteState;
   routeUntil?: string;
   /** Circuit phase of the route; absent when the route is healthy. */

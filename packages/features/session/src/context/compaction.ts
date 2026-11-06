@@ -127,7 +127,11 @@ export async function compactContext(input: CompactionInput): Promise<Compaction
   const outputReservation = input.outputReservation ?? boundedOutputReservation(input.metadata.maxOutputTokens) ?? 0;
   const threshold = contextWindow === undefined
     ? 0
-    : Math.min(Math.floor(THRESHOLD_SHARE * (contextWindow - outputReservation)), COMPACTION_THRESHOLD_CAP);
+    : Math.min(
+      Math.floor(THRESHOLD_SHARE * (contextWindow - outputReservation)),
+      COMPACTION_THRESHOLD_CAP,
+      input.metadata.maxInputTokens ?? Number.MAX_SAFE_INTEGER,
+    );
   const maxOutputTokens = contextWindow === undefined
     ? COMPACTION_MAX_OUTPUT_TOKENS
     : Math.min(COMPACTION_MAX_OUTPUT_TOKENS, Math.floor(contextWindow / 4));
