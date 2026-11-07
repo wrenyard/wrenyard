@@ -64,7 +64,7 @@ export interface AgentToolContext {
   message(to: string, text: string): void
   /** Drop every watch of one session, so its turns can no longer wake this bot. */
   removeWatches(sessionId: string): void
-  /** The ranked model routes this bot may run on, best first. */
+  /** The ranked model routes this bot's work sessions select from, best first. */
   selectModels(): Promise<readonly AgentModelRoute[]>
   /** True when a session model's route may be called now. */
   isModelUsable(provider: string, model: string): boolean

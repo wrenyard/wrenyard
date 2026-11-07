@@ -56,11 +56,21 @@ export type ForemanBotsModelConfig = {
   reasoningEffort: ReasoningEffort
 }
 
+/**
+ * One determined orchestrator model. `model` is the endpoint's own model id,
+ * sent unchanged; `reasoningEffort` is the level work sessions request.
+ */
+export type ForemanOrchestratorModelConfig = {
+  model: string
+  reasoningEffort: ReasoningEffort
+}
+
 /** Model-purpose settings that apply beside a configured endpoint. */
 export type ForemanModelsConfig = {
   auxiliary?: ForemanAuxiliaryModelConfig
   worker?: ForemanWorkerModelConfig
   bots?: ForemanBotsModelConfig
+  orchestrator?: ForemanOrchestratorModelConfig
 }
 
 export interface ForemanServiceConfig {

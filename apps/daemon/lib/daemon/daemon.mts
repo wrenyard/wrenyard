@@ -1526,6 +1526,32 @@ async function createForemanDaemonResources(
         }
       })
     }
+    // Work sessions (session.send Auto and the bot `session` tool) select
+    // through this dedicated source: with a configured endpoint a configured
+    // `models.orchestrator` is the one route they run on, sent unchanged like
+    // the bots model above; with an endpoint and no orchestrator entry they
+    // keep the bots model, and without an endpoint the automatic routing of
+    // `selectModels` applies unchanged. Bot own turns always select through
+    // `selectModels`.
+    const selectWorkSessionModels = async (): Promise<readonly AgentModelRoute[]> => {
+      const orchestrator = config.endpoint === undefined ? undefined : config.models?.orchestrator
+      if (orchestrator === undefined) return selectModels()
+      // The session route contract requires a slash-free model id, so every
+      // separator but the last belongs to the provider; `provider/model`
+      // rejoins to the exact configured id the transport sends unchanged.
+      const separator = orchestrator.model.lastIndexOf('/')
+      const provider = separator > 0 ? orchestrator.model.slice(0, separator) : orchestrator.model
+      const model = separator > 0 ? orchestrator.model.slice(separator + 1) : orchestrator.model
+      const models = (await gatewayConnectionSnapshot()).models
+      const metadata = resolveModelMetadata(`${provider}/${model}`, models)
+      return [{
+        provider,
+        model,
+        reasoningEffort: orchestrator.reasoningEffort,
+        ...(metadata.contextWindow === undefined ? {} : { contextWindow: metadata.contextWindow }),
+        ...(metadata.maxOutputTokens === undefined ? {} : { maxOutputTokens: metadata.maxOutputTokens }),
+      }]
+    }
     const isRouteExcluded = (model: string): boolean => {
       const settings = readAuxiliaryRoutingSettings(authoritativeConfigPath)
       const separator = model.indexOf('/')
@@ -1636,6 +1662,7 @@ async function createForemanDaemonResources(
       sessions: session,
       todos: workspaceTodoService,
       selectModels,
+      selectWorkSessionModels,
       isModelUsable,
       log: (level, message) => writeDaemonLog(level, message),
     })
@@ -1653,7 +1680,7 @@ async function createForemanDaemonResources(
       scheduler,
       unsubscribeTodoChanges,
       botAgents,
-      resolveAutoModel: (sessionId) => resolveSessionModel(session, sessionId, { selectModels, isModelUsable }),
+      resolveAutoModel: (sessionId) => resolveSessionModel(session, sessionId, { selectModels: selectWorkSessionModels, isModelUsable }),
       taskOutputCompile,
     }
   }

@@ -258,6 +258,12 @@ export interface CreateBotAgentKernelOptions {
   todos: WorkspaceTodoService
   /** The ladder-ranked routes a bot may run on, best first. */
   selectModels(): Promise<readonly AgentModelRoute[]>
+  /**
+   * The routes the work sessions a bot opens select from, best first; the
+   * daemon supplies its shared work-session selector, and callers that omit
+   * it keep the bot routes of `selectModels`.
+   */
+  selectWorkSessionModels?(): Promise<readonly AgentModelRoute[]>
   /** True when a session model's route may be called now. */
   isModelUsable(provider: string, model: string): boolean
   log(level: 'info' | 'warn' | 'error', message: string): void
@@ -839,7 +845,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       watch: (sessionId, afterTurn, todoIds) => addWatch(botId, sessionId, afterTurn, todoIds),
       message: (to, text) => sendMessage(botId, to, text),
       removeWatches: sessionId => removeWatches(sessionId),
-      selectModels: () => options.selectModels(),
+      selectModels: () => (options.selectWorkSessionModels ?? options.selectModels)(),
       isModelUsable: (provider, model) => options.isModelUsable(provider, model),
     }
   }
