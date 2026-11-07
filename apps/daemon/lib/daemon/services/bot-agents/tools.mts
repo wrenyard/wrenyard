@@ -30,6 +30,7 @@ import {
 } from './config.mts'
 import { newRoutineId, readRoutines, removeRoutine, writeRoutine, type RoutineDefinition } from './routine-files.mts'
 import { resolveSessionModel } from '../session-model.mts'
+import { killProcessTree, spawnShellProcess } from '../../../adapters/shell/process.mts'
 
 /** One ranked model route a bot may run a session on. */
 export interface AgentModelRoute {
@@ -283,6 +284,32 @@ const WORKSPACE_TOOL: ToolSpec = {
   },
 }
 
+const BASH_TOOL: ToolSpec = {
+  name: 'bash',
+  description: [
+    'Run one shell command with the workspace root as the working directory.',
+    'The call returns the exit code, stdout and stderr; a nonzero exit code is still a completed run, not a failed call.',
+    'Each output stream keeps only its newest 64 KiB and is flagged when older output was dropped.',
+    'timeoutSeconds bounds the run (default 60, capped at 300); past it the command is terminated together',
+    'with its whole process group and the call fails with a timeout message.',
+  ].join(' '),
+  parameters: {
+    type: 'object',
+    properties: {
+      command: {
+        type: 'string',
+        description: 'The shell command line to run.',
+      },
+      timeoutSeconds: {
+        type: 'number',
+        description: 'Seconds the command may run; default 60, values above 300 are capped at 300.',
+      },
+    },
+    required: ['command'],
+    additionalProperties: false,
+  },
+}
+
 const TOOL_SPECS: Readonly<Record<AgentToolName, ToolSpec>> = {
   session: SESSION_TOOL,
   todo: TODO_TOOL,
@@ -290,6 +317,7 @@ const TOOL_SPECS: Readonly<Record<AgentToolName, ToolSpec>> = {
   memory: MEMORY_TOOL,
   routine: ROUTINE_TOOL,
   workspace: WORKSPACE_TOOL,
+  bash: BASH_TOOL,
 }
 
 /** The specs of the enabled tools, in the order the config lists them. */
@@ -335,6 +363,8 @@ export function createAgentToolRunner(deps: {
           return await runMemoryTool(args, ctx)
         case 'routine':
           return await runRoutineTool(args, ctx)
+        case 'bash':
+          return await runBashTool(args, ctx)
         default:
           return failed(`unknown tool: ${call.name}`)
       }
@@ -861,4 +891,144 @@ async function runIdentityTool(args: Record<string, unknown>, ctx: AgentToolCont
   }
   ctx.refreshIdentity(validated)
   return done(validated)
+}
+
+// ─── bash tool ─────────────────────────────────────────────────────────
+
+/** `timeoutSeconds` of a bash call when absent or unusable, and its ceiling. */
+const BASH_TIMEOUT_DEFAULT_SECONDS = 60
+const BASH_TIMEOUT_MAX_SECONDS = 300
+/** How much of each output stream a bash result keeps, as the newest bytes. */
+const BASH_OUTPUT_LIMIT_BYTES = 64 * 1024
+
+/** The exit of one bash run: the shell's code, or the signal that killed it. */
+interface BashExit {
+  exitCode: number | null
+  signal: NodeJS.Signals | null
+}
+
+/**
+ * The optional `timeoutSeconds` argument: a positive finite number of seconds,
+ * capped at the maximum. A missing, null, non-finite or non-positive value
+ * falls back to the default instead of failing the call; a value that is not
+ * a number at all is a validation error the model can correct.
+ */
+function readBashTimeoutSeconds(value: unknown): number {
+  if (value === undefined || value === null) return BASH_TIMEOUT_DEFAULT_SECONDS
+  if (typeof value !== 'number') throw new Error('timeoutSeconds must be a number')
+  if (!Number.isFinite(value) || value <= 0) return BASH_TIMEOUT_DEFAULT_SECONDS
+  return Math.min(value, BASH_TIMEOUT_MAX_SECONDS)
+}
+
+/**
+ * The fixed-size tail of one output stream: the newest bytes are kept, older
+ * bytes are dropped, and the finished text records that the stream exceeded
+ * the cap. A cut can split a multi-byte rune, so leading orphaned continuation
+ * bytes are skipped when decoding.
+ */
+function createBoundedTail(maxBytes: number): {
+  push(chunk: Buffer): void
+  finish(): { text: string; truncated: boolean }
+} {
+  let chunks: Buffer[] = []
+  let bytes = 0
+  let truncated = false
+  return {
+    push(chunk: Buffer): void {
+      if (chunk.length === 0) return
+      if (chunk.length >= maxBytes) {
+        chunks = [chunk.subarray(chunk.length - maxBytes)]
+        bytes = maxBytes
+        truncated = true
+        return
+      }
+      chunks.push(chunk)
+      bytes += chunk.length
+      while (bytes > maxBytes) {
+        truncated = true
+        const head = chunks[0]!
+        const excess = bytes - maxBytes
+        if (head.length <= excess) {
+          chunks.shift()
+          bytes -= head.length
+        } else {
+          chunks[0] = head.subarray(excess)
+          bytes -= excess
+        }
+      }
+    },
+    finish(): { text: string; truncated: boolean } {
+      if (bytes === 0) return { text: '', truncated }
+      const buffer = Buffer.concat(chunks)
+      let start = 0
+      const limit = Math.min(4, buffer.length)
+      while (start < limit && (buffer[start]! & 0xc0) === 0x80) start += 1
+      return { text: buffer.subarray(start).toString('utf-8'), truncated }
+    },
+  }
+}
+
+/**
+ * Run one shell command with the workspace root as cwd. The child runs through
+ * a shell and is awaited without ever blocking the daemon, with both streams
+ * drained continuously into bounded tails. On Unix the child is detached, so
+ * its pid is also its process-group id and a timeout terminates the command
+ * together with every process it started, through the shared process-tree
+ * killer, before the timed-out result is returned — the cleanup race cannot
+ * leave children behind. A spawn or validation error, like every other tool
+ * failure, becomes a `failed` result the model reads.
+ */
+async function runBashTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
+  const command = requireString(args, 'command', 'bash requires command')
+  const timeoutSeconds = readBashTimeoutSeconds(args.timeoutSeconds)
+  const child = spawnShellProcess(command, [], {
+    cwd: ctx.workspaceRoot,
+    env: process.env,
+    shell: true,
+    detached: process.platform !== 'win32',
+    windowsHide: true,
+  })
+  const stdout = createBoundedTail(BASH_OUTPUT_LIMIT_BYTES)
+  const stderr = createBoundedTail(BASH_OUTPUT_LIMIT_BYTES)
+  child.stdout?.on('data', (chunk: Buffer) => stdout.push(chunk))
+  child.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk))
+  // `close`, not `exit`: the streams must have drained before the result is
+  // built, so no captured output is lost to the race.
+  const exited = new Promise<BashExit>((resolve, reject) => {
+    child.once('error', reject)
+    child.once('close', (exitCode, signal) => resolve({ exitCode, signal }))
+  })
+  // The losing side of the race below must never surface later as an
+  // unhandled rejection once the winner settled the outcome.
+  void exited.catch(() => {})
+  let timer: NodeJS.Timeout | undefined
+  try {
+    const timeoutSignal = new Promise<'timeout'>(resolve => {
+      timer = setTimeout(() => resolve('timeout'), timeoutSeconds * 1000)
+    })
+    const outcome = await Promise.race([
+      exited.then((exit): { exit: BashExit } | 'timeout' => ({ exit })),
+      timeoutSignal,
+    ])
+    if (outcome !== 'timeout') {
+      const out = stdout.finish()
+      const errText = stderr.finish()
+      // A nonzero exit code is the command's own answer, not a failed call.
+      return done({
+        exitCode: outcome.exit.exitCode,
+        ...(outcome.exit.signal === null ? {} : { signal: outcome.exit.signal }),
+        stdout: out.text,
+        stderr: errText.text,
+        ...(out.truncated ? { stdoutTruncated: true } : {}),
+        ...(errText.truncated ? { stderrTruncated: true } : {}),
+      })
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+  // Past the timeout: terminate the command's whole process group and wait
+  // for that cleanup to settle, so no process the command started outlives
+  // the timed-out result the bot reads.
+  await killProcessTree(child.pid ?? 0, child.pid)
+  return failed(`command timed out after ${timeoutSeconds}s and was terminated with its process group`)
 }

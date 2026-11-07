@@ -58,6 +58,7 @@ You are the reviewer of project aurora. Keep findings short and backed by eviden
 | `message` | Send a message to another bot by id, which wakes that bot. |
 | `memory` | Keep the bot's own memory and edit its identity. |
 | `routine` | List, create, change and delete the bot's own routines on this device. |
+| `bash` | Run a shell command with the workspace root as the working directory and read its exit code, stdout and stderr. Opt in with `"tools": { "bash": true }`. `timeoutSeconds` defaults to 60 seconds and is capped at 300; a command past its timeout is terminated with its whole process group. |
 
 Sessions a bot creates or messages are watched: when such a session finishes
 its next turn, the bot is woken with the outcome. A bot therefore starts work,
