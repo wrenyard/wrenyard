@@ -35,7 +35,7 @@ import {
   type ToolSpec,
   type ToolChoice,
   type Usage,
-} from '@wrenyard/model-call/transport';
+} from '@wrenyard/ai/transport';
 import {
   callModelAttempt,
   settleWithAbort,
@@ -45,10 +45,10 @@ import {
   hasSelectableReasoningEfforts,
   isReasoningEffortSupported,
   type ContextBudgetFacts,
-} from '@wrenyard/model-call';
+} from '@wrenyard/ai';
 import type { ModelSpanFinishedEvent, ModelSpanStartedEvent } from '../ledger/events.ts';
 import type { AuxiliaryCallRole } from './roles.ts';
-import type { ModelMetadata } from '@wrenyard/model-call/metadata';
+import type { ModelMetadata } from '@wrenyard/ai/metadata';
 
 /** Every role that may issue a call. `reason` is the one expensive role. */
 export const CALL_ROLES = ['reason', 'memory-search', 'search', 'dispatch', 'reply', 'title', 'document', 'todo', 'vcs', 'project', 'status', 'suggestion', 'task-output'] as const;
@@ -123,7 +123,7 @@ export interface ModelCallInput {
   turn?: number;
   step?: number;
   /** Fully assembled request messages, supplied by the caller's view. */
-  messages: readonly import('@wrenyard/model-call/transport').Message[];
+  messages: readonly import('@wrenyard/ai/transport').Message[];
   /** Character count per assembled prompt layer. */
   layers: Record<string, number>;
   /** Required for `reason`; ignored for every other role. */
@@ -158,7 +158,7 @@ export interface ModelCallOutput {
   usage?: Usage;
   /** Native tool calls the model returned, in call order; empty when it returned none. */
   toolCalls: ToolCall[];
-  finishReason?: import('@wrenyard/model-call/transport').FinishReason;
+  finishReason?: import('@wrenyard/ai/transport').FinishReason;
   /** Measured facts of the call, produced by the transport. */
   metrics: ModelMetrics;
   /**
@@ -249,11 +249,11 @@ export class ModelCallError extends Error {
 /**
  * Session's budget facts. The compaction threshold cap is session policy, so
  * this wrapper keeps applying the fixed {@link COMPACTION_THRESHOLD_CAP} over
- * the shared calculation instead of moving the policy into `@wrenyard/model-call`.
+ * the shared calculation instead of moving the policy into `@wrenyard/ai`.
  */
 export function contextBudgetOf(
   publicId: string,
-  messages: readonly import('@wrenyard/model-call/transport').Message[],
+  messages: readonly import('@wrenyard/ai/transport').Message[],
   models: readonly GatewayModel[],
   requestedMaxOutputTokens?: number,
 ): ContextBudgetFacts {
@@ -268,8 +268,8 @@ export function contextBudgetOf(
  */
 export function sanitizeMessagesForRole(
   role: CallRole,
-  messages: readonly import('@wrenyard/model-call/transport').Message[],
-): readonly import('@wrenyard/model-call/transport').Message[] {
+  messages: readonly import('@wrenyard/ai/transport').Message[],
+): readonly import('@wrenyard/ai/transport').Message[] {
   if (role === 'reason') return messages;
   let replaced = false;
   const next = messages.map((message) => {
@@ -282,7 +282,7 @@ export function sanitizeMessagesForRole(
   return replaced ? next : messages;
 }
 
-// The shared settleWithAbort helper is imported from '@wrenyard/model-call'
+// The shared settleWithAbort helper is imported from '@wrenyard/ai'
 // above; the attempt calls below no longer wrap it themselves because
 // callModelAttempt settles internally against the same signal.
 

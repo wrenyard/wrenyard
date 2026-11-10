@@ -7,7 +7,7 @@ import {
   stepId,
   type LedgerEventDraft,
 } from '../ledger/store.ts';
-import { type ToolCall } from '@wrenyard/model-call/transport';
+import { type ToolCall } from '@wrenyard/ai/transport';
 import { parseActionCall } from '../reasoning/tool.ts';
 import {
   type ActionExecutionOutcome,

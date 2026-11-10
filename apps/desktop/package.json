@@ -21,7 +21,7 @@
   "dependencies": {
     "@wrenyard/auto-routing": "workspace:*",
     "@wrenyard/clients": "workspace:*",
-    "@wrenyard/model-call": "workspace:*",
+    "@wrenyard/ai": "workspace:*",
     "@wrenyard/models": "workspace:*",
     "@wrenyard/providers": "workspace:*",
     "@wrenyard/control": "workspace:*",

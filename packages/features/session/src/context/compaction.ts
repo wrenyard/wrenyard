@@ -9,14 +9,14 @@
  * call is attempted, with no retry: a failed or oversized call falls back to a
  * deterministic summary built from ledger facts and records the failure.
  */
-import { boundedOutputReservation, type ModelMetadata } from '@wrenyard/model-call/metadata';
+import { boundedOutputReservation, type ModelMetadata } from '@wrenyard/ai/metadata';
 import { COMPACTION_THRESHOLD_CAP } from '../model/request.ts';
-import { estimateInputTokens, estimateTokens } from '@wrenyard/model-call';
+import { estimateInputTokens, estimateTokens } from '@wrenyard/ai';
 import { CONTEXT_EVENT_TYPES, type LedgerEvent } from '../ledger/store.ts';
 import { escapeBody, renderEventText, tag } from './render.ts';
 import { hotZoneStart } from './reduction.ts';
 import { messageOf } from '../errors.ts';
-import type { Message as ModelMessage } from '@wrenyard/model-call/transport';
+import type { Message as ModelMessage } from '@wrenyard/ai/transport';
 
 /** The summarisation call's output cap; never above this. */
 export const COMPACTION_MAX_OUTPUT_TOKENS = 6000;

@@ -11,7 +11,7 @@ import { Ledger } from './ledger/store.ts';
 import { WorkspaceFileSource } from './workspace.ts';
 import { createWorkspaceMemory } from './memory-write.ts';
 import { createCallRunner, type CallRunner, type ReasonSelection, type ReasoningRetryPolicy } from './model/request.ts';
-import { createModelTransport } from '@wrenyard/model-call/transport';
+import { createModelTransport } from '@wrenyard/ai/transport';
 import { FileStore } from './media.ts';
 import { createEngine } from './turn/engine.ts';
 import { SpanRecorder } from '@wrenyard/agent-loop';

@@ -89,7 +89,7 @@ importers:
       '@wrenyard/agent-loop':
         specifier: workspace:*
         version: link:../../packages/features/agent-loop
-      '@wrenyard/model-call':
+      '@wrenyard/ai':
         specifier: workspace:*
         version: link:../../packages/ai/ai
       '@wrenyard/ai-protocol':
@@ -165,7 +165,7 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@wrenyard/model-call':
+      '@wrenyard/ai':
         specifier: workspace:*
         version: link:../../packages/ai/ai
       '@wrenyard/auto-routing':
@@ -452,7 +452,7 @@ importers:
 
   packages/clients/base:
     dependencies:
-      '@wrenyard/model-call':
+      '@wrenyard/ai':
         specifier: workspace:*
         version: link:../../ai/ai
       '@wrenyard/execution':
@@ -812,7 +812,7 @@ importers:
 
   packages/features/gateway:
     dependencies:
-      '@wrenyard/model-call':
+      '@wrenyard/ai':
         specifier: workspace:*
         version: link:../../ai/ai
       '@wrenyard/providers':
@@ -887,7 +887,7 @@ importers:
       '@wrenyard/agent-loop':
         specifier: workspace:*
         version: link:../agent-loop
-      '@wrenyard/model-call':
+      '@wrenyard/ai':
         specifier: workspace:*
         version: link:../../ai/ai
       '@wrenyard/ai-protocol':

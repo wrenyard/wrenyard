@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 
 import { diffArrays } from 'diff';
 
-import { estimateTokens } from '@wrenyard/model-call';
+import { estimateTokens } from '@wrenyard/ai';
 import type { DocumentContentEvent, LedgerEvent } from './ledger/store.ts';
 
 /** A captured full snapshot; the serialized ledger append computes its durable diff. */

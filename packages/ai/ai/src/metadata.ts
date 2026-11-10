@@ -1,7 +1,7 @@
 /**
  * Browser-safe model metadata entry.
  *
- * The narrow `@wrenyard/model-call/metadata` subpath: it exposes the pure
+ * The narrow `@wrenyard/ai/metadata` subpath: it exposes the pure
  * `resolveModelMetadata` helper together with the per-model protocol-selection
  * helpers, without importing the Node transport/HTTP graph. A consumer such as
  * Desktop's metadata-only bundle resolves a model's protocols through it

@@ -6,7 +6,7 @@ import {
   createModelTransport,
   settleWithAbort,
   type Message,
-} from '@wrenyard/model-call'
+} from '@wrenyard/ai'
 
 /** One ranked auxiliary route and the level it is called at. */
 export interface AuxiliaryRoute { model: string; reasoningEffort: ReasoningEffort }

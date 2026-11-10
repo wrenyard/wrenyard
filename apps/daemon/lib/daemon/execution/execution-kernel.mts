@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { estimateTokens } from '@wrenyard/model-call'
+import { estimateTokens } from '@wrenyard/ai'
 import { getDb } from '../../db/connection.mts'
 import { ExecutionEventStore } from '../../db/stores/execution-event-store.mts'
 import {

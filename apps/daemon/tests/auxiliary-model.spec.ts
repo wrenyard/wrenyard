@@ -2,7 +2,7 @@ import { expect, it } from 'vitest'
 
 import type { ReasoningEffort } from '@wrenyard/models'
 import { createCallRunner } from '@wrenyard/session'
-import { createModelTransport } from '@wrenyard/model-call/transport'
+import { createModelTransport } from '@wrenyard/ai/transport'
 
 import { resolveAuxiliaryModel } from '../lib/daemon/services/auxiliary-model.mts'
 import { endpointConnection } from '../lib/daemon/services/endpoint-connection.mts'

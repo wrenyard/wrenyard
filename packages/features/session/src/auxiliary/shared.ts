@@ -9,8 +9,8 @@ import {
 import { escapeBody, renderEventsBlock, renderEventText } from '../context/render.ts';
 import { messageOf } from '../errors.ts';
 import type { LedgerEvent } from '../ledger/store.ts';
-import { boundedOutputReservation, resolveModelMetadata } from '@wrenyard/model-call/metadata';
-import { estimateTokens } from '@wrenyard/model-call';
+import { boundedOutputReservation, resolveModelMetadata } from '@wrenyard/ai/metadata';
+import { estimateTokens } from '@wrenyard/ai';
 import type { AuxiliaryCallRole } from '../model/roles.ts';
 import type { SessionHost } from '../ports.ts';
 import type { ActionExecutionOutcome } from '../reasoning/actions.ts';

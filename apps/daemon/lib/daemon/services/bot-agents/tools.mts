@@ -18,7 +18,7 @@ import {
   type Session,
   type WorkspaceMemoryPort,
 } from '@wrenyard/session'
-import type { ToolSpec } from '@wrenyard/model-call/transport'
+import type { ToolSpec } from '@wrenyard/ai/transport'
 import { errorTooltip } from '@wrenyard/session/session-status'
 import type { TodoStatus, WorkspaceTodoService } from '../workspace-todo-service.mts'
 import {

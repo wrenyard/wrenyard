@@ -4,7 +4,7 @@ import type { WrenyardGatewayModel } from '@wrenyard/control';
 import type { ProviderListResult, ProviderQuotaBalance, ProviderQuotaSnapshot } from '@wrenyard/protocol/provider';
 import { chatGptFundingSourceFromSnapshot } from '@wrenyard/providers/chatgpt';
 import { formatBalanceAmount } from '@wrenyard/auto-routing';
-import { selectSessionProtocol } from '@wrenyard/model-call/metadata';
+import { selectSessionProtocol } from '@wrenyard/ai/metadata';
 import { floorQuotaPercentage } from '../pet/shared/quota-percentage.js';
 import type { SessionBridgeModelEntry } from './preload.js';
 

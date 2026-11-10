@@ -17,7 +17,7 @@ import { fail, isObject, renderRunFiles } from './shared.ts';
 import { messageOf } from '../errors.ts';
 import type { DocCatalogEntry } from '../workspace.ts';
 import type { SessionFile } from '../media.ts';
-import type { ToolCall, ToolSpec, Usage } from '@wrenyard/model-call/transport';
+import type { ToolCall, ToolSpec, Usage } from '@wrenyard/ai/transport';
 import type { TaskUsage } from '@wrenyard/protocol';
 import type {
   ActionExecutionOutcome,

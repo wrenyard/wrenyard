@@ -19,7 +19,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { estimateTokens } from '@wrenyard/model-call'
+import { estimateTokens } from '@wrenyard/ai'
 import { errorTooltip } from '@wrenyard/session/session-status'
 import {
   createSession,
@@ -34,7 +34,7 @@ import {
   type TurnStatus,
   type WorkspaceMemoryPort,
 } from '@wrenyard/session'
-import type { ToolSpec } from '@wrenyard/model-call/transport'
+import type { ToolSpec } from '@wrenyard/ai/transport'
 import type { RoutineRecord } from '../../../protocol/methods/routine.mts'
 import type { Scheduler } from '../scheduler.mts'
 import type { WorkspaceTodoService } from '../workspace-todo-service.mts'

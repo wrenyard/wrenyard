@@ -10,7 +10,7 @@
 import { keepNewestWithinBudget } from '@wrenyard/agent-loop';
 import { attachmentRefUrl, type SessionFile } from '@wrenyard/protocol';
 import { stepId, turnId, type LedgerEvent } from '../ledger/store.ts';
-import type { ToolCall, ToolSpec } from '@wrenyard/model-call/transport';
+import type { ToolCall, ToolSpec } from '@wrenyard/ai/transport';
 import { escapeReplyBody, tag } from '../context/render.ts';
 import { messageOf } from '../errors.ts';
 import type { BuiltView, CallFailureSummary, SessionCallHost } from '../ports.ts';
@@ -18,7 +18,7 @@ import type { SessionRuntime, TurnRuntime } from '../turn/runtime.ts';
 import { maybeClassifyStatus } from './status.ts';
 import { memoryPortOf } from '../memory-write.ts';
 import { computeReplyConversationTokenBudget } from './shared.ts';
-import { estimateTokens } from '@wrenyard/model-call';
+import { estimateTokens } from '@wrenyard/ai';
 
 /** Output-token allowance for the single communication reply call. */
 const REPLY_MAX_TOKENS = 800;

@@ -6,7 +6,7 @@
 import type { GatewayModel } from '@wrenyard/ai-protocol';
 import type { LedgerEvent } from '../ledger/store.ts';
 import { contextBudgetOf } from '../model/request.ts';
-import type { ModelMetadata } from '@wrenyard/model-call/metadata';
+import type { ModelMetadata } from '@wrenyard/ai/metadata';
 import { compactContext, renderKernelFactsBlock, type CompactionResult } from '../context/compaction.ts';
 import { computeReduction } from '../context/reduction.ts';
 import type { BuiltView, SessionCallHost } from '../ports.ts';

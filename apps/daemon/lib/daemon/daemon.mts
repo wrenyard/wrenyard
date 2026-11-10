@@ -45,7 +45,7 @@ import type {
 } from '../protocol/registry.mts'
 import { TaskService, isTaskRunRejection } from '../core/task/service.mts'
 import { Ledger, createSession, createWorkspaceMemory, type Session } from '@wrenyard/session'
-import { resolveModelMetadata } from '@wrenyard/model-call/metadata'
+import { resolveModelMetadata } from '@wrenyard/ai/metadata'
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
 import { withCatalogMetadata } from './services/endpoint-models.mts'

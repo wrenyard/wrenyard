@@ -17,8 +17,8 @@
  * This module never calls a model and never mutates the ledger.
  */
 
-import { estimateTokens, IMAGE_INPUT_TOKEN_ESTIMATE } from '@wrenyard/model-call';
-import { resolveModelMetadata } from '@wrenyard/model-call/metadata';
+import { estimateTokens, IMAGE_INPUT_TOKEN_ESTIMATE } from '@wrenyard/ai';
+import { resolveModelMetadata } from '@wrenyard/ai/metadata';
 import {
   type LedgerEvent,
   type SessionCreatedEvent,

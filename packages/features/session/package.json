@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@wrenyard/agent-loop": "workspace:*",
-    "@wrenyard/model-call": "workspace:*",
+    "@wrenyard/ai": "workspace:*",
     "@wrenyard/ai-protocol": "workspace:*",
     "@wrenyard/auto-routing": "workspace:*",
     "@wrenyard/models": "workspace:*",

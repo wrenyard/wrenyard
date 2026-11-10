@@ -8,7 +8,7 @@
   "scripts": {
   },
   "dependencies": {
-    "@wrenyard/model-call": "workspace:*",
+    "@wrenyard/ai": "workspace:*",
     "@wrenyard/providers": "workspace:*"
   },
   "devDependencies": {

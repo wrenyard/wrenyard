@@ -6,7 +6,7 @@
  */
 
 import type { ActionExecutionOutcome, ParsedAction } from '../reasoning/actions.ts';
-import type { ToolCall } from '@wrenyard/model-call/transport';
+import type { ToolCall } from '@wrenyard/ai/transport';
 import type { ReplyWriter } from '../auxiliary/reply.ts';
 import type { SessionCallHost } from '../ports.ts';
 import { ActionRunner, auxiliaryToolRequest } from './actions.ts';

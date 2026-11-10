@@ -8,7 +8,7 @@
  * This module never calls a model and never touches the ledger.
  */
 
-import type { Message as ModelMessage, ModelContentPart } from '@wrenyard/model-call/transport';
+import type { Message as ModelMessage, ModelContentPart } from '@wrenyard/ai/transport';
 import {
   type LedgerEvent,
   type WorkspaceSnapshot,
