@@ -2,7 +2,7 @@
  * The workspace todo auxiliary task.
  *
  * The loop and the todo definition (native methods, round budget and system
- * prompt) live in `@wrenyard/agent-loop`. This module is the session-side
+ * prompt) live in `./definitions.ts`. This module is the session-side
  * adapter: it supplies the method catalog, the model transport and a record
  * adapter that records each successful read-only todo result as an observation — a
  * `todos` array for a list or a `todo` object for a get. Sessions cannot mutate todos. An
@@ -15,9 +15,11 @@
 import {
   runAuxiliary,
   type AuxiliaryRecordPort,
+} from './runner.ts';
+import {
   createLoopRecord,
   type LoopRecord,
-} from '@wrenyard/agent-loop';
+} from '@wrenyard/loop';
 
 import { createAuxiliaryLoopHelpers } from './shared.ts';
 import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';

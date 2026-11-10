@@ -1,0 +1,80 @@
+import type { AgentRequest } from '@wrenyard/agent';
+import { inspectCodex } from './installation.ts';
+import { resolveMcpServers, type ResolvedMcpServer } from '@wrenyard/agent/mcp';
+import { assertLaunch } from '@wrenyard/agent/native';
+import type { ProcessSpec } from '@wrenyard/execution';
+import { codexChildEnv } from './readiness.ts';
+
+/**
+ * A TOML literal for a string value. The reference encoder used JSON string
+ * encoding, which is a valid TOML basic string for every path/env value we
+ * project (no control characters are expected from a caller-supplied server).
+ */
+function tomlLiteral(value: string): string {
+    return JSON.stringify(value);
+}
+
+/**
+ * Build the `-c mcp_servers.<name>.*` overrides Codex accepts before its
+ * `app-server` subcommand. A URL server is registered by url alone; a stdio
+ * server carries command, args, and sorted env keys. The server name comes from
+ * the caller and is used verbatim as the TOML key segment.
+ */
+function codexMcpArgs(servers: readonly ResolvedMcpServer[]): string[] {
+    const args: string[] = [];
+    for (const { name, server } of servers) {
+        const prefix = `mcp_servers.${name}`;
+        if (server.transport === 'http') {
+            args.push('-c', `${prefix}.url=${tomlLiteral(server.url)}`);
+            for (const [key, value] of Object.entries(server.headers ?? {}))
+                args.push('-c', `${prefix}.http_headers.${tomlLiteral(key)}=${tomlLiteral(value)}`);
+            continue;
+        }
+        args.push('-c', `${prefix}.command=${tomlLiteral(server.command)}`);
+        args.push('-c', `${prefix}.args=${JSON.stringify(server.args ?? [])}`);
+        if (server.cwd)
+            args.push('-c', `${prefix}.cwd=${tomlLiteral(server.cwd)}`);
+        const env = server.env ?? {};
+        for (const key of Object.keys(env).sort())
+            args.push('-c', `${prefix}.env.${tomlLiteral(key)}=${tomlLiteral(env[key])}`);
+    }
+    return args;
+}
+
+export async function launchCodex(request: AgentRequest, env: NodeJS.ProcessEnv, isolatedHome: string): Promise<ProcessSpec> {
+    assertLaunch(request);
+    if (!request.clientReasoningEffort)
+        throw new Error('codex: launch requires a mapped reasoning effort');
+    const status = await inspectCodex({ env });
+    if (status.installation.state !== 'installed')
+        throw new Error('codex is not installed');
+    const args: string[] = [];
+    const gateway = request.mode === 'gateway' ? env.WRENYARD_GATEWAY_OPENAI_RESPONSES_URL?.trim() : undefined;
+    if (gateway) {
+        args.push(
+            '-c', 'model_provider="wrenyard"',
+            '-c', 'model_providers.wrenyard.name="Wrenyard"',
+            '-c', `model_providers.wrenyard.base_url=${JSON.stringify(gateway)}`,
+            '-c', 'model_providers.wrenyard.env_key="WRENYARD_GATEWAY_TOKEN"',
+            '-c', 'model_providers.wrenyard.wire_api="responses"',
+            // The gateway resolves bare model ids using the provider named
+            // here; without it models offered by more than one credentialed
+            // provider fail closed.
+            ...(request.provider
+                ? ['-c', `model_providers.wrenyard.http_headers.x-wrenyard-provider=${tomlLiteral(request.provider)}`]
+                : []),
+        );
+    }
+    if (request.clientReasoningEffort)
+        args.push('-c', `model_reasoning_effort=${JSON.stringify(request.clientReasoningEffort)}`);
+    // Native Fast is a client-side service tier override; an explicit off is
+    // passed too so it wins over the user's own machine configuration. Gateway
+    // runs carry no launch flags and stay unchanged.
+    if (request.mode !== 'gateway' && request.fast !== undefined)
+        args.push('-c', `service_tier=${JSON.stringify(request.fast ? 'fast' : 'default')}`);
+    // MCP servers are registered as -c overrides ahead of the app-server bridge.
+    args.push(...codexMcpArgs(resolveMcpServers(request.mcpServers)));
+    args.push('app-server', '--stdio');
+    return { executable: status.installation.executable, args, cwd: request.cwd,
+        env: { ...codexChildEnv(env, isolatedHome, request.mode !== 'gateway'), CODEX_MODEL: request.model } };
+}

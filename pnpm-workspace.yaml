@@ -3,7 +3,8 @@ packages:
   - "packages/*"
   - "packages/ai/*"
   - "packages/features/*"
-  - "packages/clients/*"
+  - "packages/agent/*"
+  - "packages/agent/clients/*"
 
 # Build-tool tar 6.x still appears via node-gyp/cacache; force the patched 7.5 line.
 # The override below enforces the Vite 6.4.3 security floor.

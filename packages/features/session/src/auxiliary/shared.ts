@@ -2,9 +2,8 @@ import {
   getAuxiliaryDefinition,
   type AuxiliaryDefinitionId,
   type DefinitionPorts,
-  type LoopHelpers,
-  type LoopRecord,
-} from '@wrenyard/agent-loop';
+} from './definitions.ts';
+import type { LoopHelpers, LoopRecord } from '@wrenyard/loop';
 
 import { escapeBody, renderEventsBlock, renderEventText } from '../context/render.ts';
 import { messageOf } from '../errors.ts';

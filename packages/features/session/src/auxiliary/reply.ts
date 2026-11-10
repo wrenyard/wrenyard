@@ -7,7 +7,7 @@
  * reply tool call.
  */
 
-import { keepNewestWithinBudget } from '@wrenyard/agent-loop';
+import { keepNewestWithinBudget } from '@wrenyard/loop';
 import { attachmentRefUrl, type SessionFile } from '@wrenyard/protocol';
 import { stepId, turnId, type LedgerEvent } from '../ledger/store.ts';
 import type { ToolCall, ToolSpec } from '@wrenyard/ai/transport';

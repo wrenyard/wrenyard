@@ -14,7 +14,7 @@ import { createCallRunner, type CallRunner, type ReasonSelection, type Reasoning
 import { createModelTransport } from '@wrenyard/ai/transport';
 import { FileStore } from './media.ts';
 import { createEngine } from './turn/engine.ts';
-import { SpanRecorder } from '@wrenyard/agent-loop';
+import { SpanRecorder } from '@wrenyard/loop';
 import {
   type CallsPort,
   type EnginePorts,
@@ -53,6 +53,8 @@ export {
   type AuxiliaryRoute,
 } from './model/request.ts';
 export { AUXILIARY_ROLE_ORDER, type AuxiliaryRoutePreview } from './model/roles.ts';
+export { getAuxiliaryDefinition } from './auxiliary/definitions.ts';
+export type { AuxiliaryDefinition, AuxiliaryDefinitionId } from './auxiliary/definitions.ts';
 export { ROLE_ROUTE_REQUIREMENTS } from './model/route-requirements.ts';
 
 // ── Shapes hosts pass across the boundary ─────────────────────────

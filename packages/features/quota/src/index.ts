@@ -1,6 +1,7 @@
 import { providerQuotas, type ProviderQuota, type QuotaSource } from '@wrenyard/providers';
 import type { QuotaSnapshot } from '@wrenyard/providers/base';
-import { createAgentClients, ClientError, type AgentClient, type ClientOptions } from '@wrenyard/clients';
+import { createAgentClients } from '@wrenyard/clients';
+import { ClientError, type AgentClient, type OperationOptions as ClientOptions } from '@wrenyard/agent';
 import { HttpQuotaSource } from './http.ts';
 import { readCodeBuddyObservation, type CodeBuddyQueryContext } from './observed.ts';
 export type { CodeBuddyQueryContext } from './observed.ts';

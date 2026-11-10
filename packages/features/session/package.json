@@ -12,7 +12,7 @@
   "scripts": {
   },
   "dependencies": {
-    "@wrenyard/agent-loop": "workspace:*",
+    "@wrenyard/loop": "workspace:*",
     "@wrenyard/ai": "workspace:*",
     "@wrenyard/ai-protocol": "workspace:*",
     "@wrenyard/auto-routing": "workspace:*",

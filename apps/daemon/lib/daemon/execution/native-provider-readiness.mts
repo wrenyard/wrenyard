@@ -1,7 +1,7 @@
 import { canonicalizeBuiltinPublicModelId } from '@wrenyard/providers'
-import type { NativeModelAvailability, NativeModelAvailabilityReason, NativeModelAvailabilityStatus } from '@wrenyard/clients'
+import type { NativeModelAvailability, NativeModelAvailabilityReason, NativeModelAvailabilityStatus } from '@wrenyard/agent'
 import type { CodexModelDiscovery } from '@wrenyard/clients'
-export type { NativeModelAvailability, NativeModelAvailabilityReason, NativeModelAvailabilityStatus } from '@wrenyard/clients'
+export type { NativeModelAvailability, NativeModelAvailabilityReason, NativeModelAvailabilityStatus } from '@wrenyard/agent'
 
 /**
  * Neutral native-provider readiness shape and pure route evaluation.

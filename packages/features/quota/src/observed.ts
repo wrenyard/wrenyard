@@ -1,7 +1,8 @@
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveWrenyardStateRoot } from '@wrenyard/paths';
-import { CodeBuddyClient, type ClientOptions } from '@wrenyard/clients';
+import { CodeBuddyClient } from '@wrenyard/clients';
+import type { OperationOptions as ClientOptions } from '@wrenyard/agent';
 export interface CodeBuddyQueryContext {
     readonly expectedScope: string;
     readonly expectedEnvironment: string;

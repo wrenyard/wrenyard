@@ -19,6 +19,7 @@
     "convert:settings": "node tools/convert-settings.mjs"
   },
   "dependencies": {
+    "@wrenyard/agent": "workspace:*",
     "@wrenyard/auto-routing": "workspace:*",
     "@wrenyard/clients": "workspace:*",
     "@wrenyard/ai": "workspace:*",

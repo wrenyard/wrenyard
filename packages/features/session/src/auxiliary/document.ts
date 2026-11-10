@@ -1,5 +1,6 @@
 /** Document auxiliaries use the host's durable workspace document commit path. */
-import { runAuxiliary, createLoopRecord, type AuxiliaryRecordPort, type LoopRecord } from '@wrenyard/agent-loop';
+import { runAuxiliary, type AuxiliaryRecordPort } from './runner.ts';
+import { createLoopRecord, type LoopRecord } from '@wrenyard/loop';
 import { createAuxiliaryLoopHelpers, OBSERVATION_TOTAL_CHAR_CAP, OBSERVATION_TRUNCATED_NOTE, OBSERVATION_OMITTED_NOTE } from './shared.ts';
 import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';
 

@@ -1,5 +1,5 @@
 import type { WrenyardGatewayConnection } from '@wrenyard/control'
-import type { ToolCall, ToolChoice, ToolSpec } from '@wrenyard/agent-loop'
+import type { ToolCall, ToolChoice, ToolSpec } from '@wrenyard/loop'
 import type { ReasoningEffort } from '@wrenyard/models'
 import {
   callModelAttempt,

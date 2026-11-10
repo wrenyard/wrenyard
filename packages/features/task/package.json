@@ -10,6 +10,7 @@
   "dependencies": {
     "@wrenyard/auto-routing": "workspace:*",
     "@wrenyard/gateway": "workspace:*",
+    "@wrenyard/loop": "workspace:*",
     "@wrenyard/models": "workspace:*",
     "@wrenyard/paths": "workspace:*",
     "@wrenyard/protocol": "workspace:*",

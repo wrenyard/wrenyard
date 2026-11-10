@@ -83,12 +83,9 @@ importers:
 
   apps/daemon:
     dependencies:
-      '@wrenyard/agent-client':
+      '@wrenyard/agent':
         specifier: workspace:*
-        version: link:../../packages/clients/base
-      '@wrenyard/agent-loop':
-        specifier: workspace:*
-        version: link:../../packages/features/agent-loop
+        version: link:../../packages/agent/agent
       '@wrenyard/ai':
         specifier: workspace:*
         version: link:../../packages/ai/ai
@@ -100,7 +97,7 @@ importers:
         version: link:../../packages/features/auto-routing
       '@wrenyard/clients':
         specifier: workspace:*
-        version: link:../../packages/clients
+        version: link:../../packages/agent/clients
       '@wrenyard/control':
         specifier: workspace:*
         version: link:../../packages/control
@@ -110,6 +107,9 @@ importers:
       '@wrenyard/gateway':
         specifier: workspace:*
         version: link:../../packages/features/gateway
+      '@wrenyard/loop':
+        specifier: workspace:*
+        version: link:../../packages/agent/loop
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../../packages/ai/models
@@ -165,6 +165,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@wrenyard/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent/agent
       '@wrenyard/ai':
         specifier: workspace:*
         version: link:../../packages/ai/ai
@@ -173,7 +176,7 @@ importers:
         version: link:../../packages/features/auto-routing
       '@wrenyard/clients':
         specifier: workspace:*
-        version: link:../../packages/clients
+        version: link:../../packages/agent/clients
       '@wrenyard/control':
         specifier: workspace:*
         version: link:../../packages/control
@@ -323,6 +326,306 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@22.20.1)(vite@6.4.4(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0))
 
+  packages/agent/agent:
+    dependencies:
+      '@wrenyard/ai':
+        specifier: workspace:*
+        version: link:../../ai/ai
+      '@wrenyard/execution':
+        specifier: workspace:*
+        version: link:../../execution
+      '@wrenyard/models':
+        specifier: workspace:*
+        version: link:../../ai/models
+      '@wrenyard/paths':
+        specifier: workspace:*
+        version: link:../../paths
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/agent/clients:
+    dependencies:
+      '@wrenyard/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@wrenyard/client-claude':
+        specifier: workspace:*
+        version: link:claude
+      '@wrenyard/client-codebuddy':
+        specifier: workspace:*
+        version: link:codebuddy
+      '@wrenyard/client-codex':
+        specifier: workspace:*
+        version: link:codex
+      '@wrenyard/client-cursor':
+        specifier: workspace:*
+        version: link:cursor
+      '@wrenyard/client-dsh':
+        specifier: workspace:*
+        version: link:dsh
+      '@wrenyard/client-grok':
+        specifier: workspace:*
+        version: link:grok
+      '@wrenyard/client-kimi':
+        specifier: workspace:*
+        version: link:kimi
+      '@wrenyard/client-opencode':
+        specifier: workspace:*
+        version: link:opencode
+      '@wrenyard/client-pi':
+        specifier: workspace:*
+        version: link:pi
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/agent/clients/claude:
+    dependencies:
+      '@wrenyard/agent':
+        specifier: workspace:*
+        version: link:../../agent
+      '@wrenyard/execution':
+        specifier: workspace:*
+        version: link:../../../execution
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/agent/clients/codebuddy:
+    dependencies:
+      '@wrenyard/agent':
+        specifier: workspace:*
+        version: link:../../agent
+      '@wrenyard/execution':
+        specifier: workspace:*
+        version: link:../../../execution
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/agent/clients/codex:
+    dependencies:
+      '@wrenyard/agent':
+        specifier: workspace:*
+        version: link:../../agent
+      '@wrenyard/execution':
+        specifier: workspace:*
+        version: link:../../../execution
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/agent/clients/cursor:
+    dependencies:
+      '@wrenyard/agent':
+        specifier: workspace:*
+        version: link:../../agent
+      '@wrenyard/execution':
+        specifier: workspace:*
+        version: link:../../../execution
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/agent/clients/dsh:
+    dependencies:
+      '@wrenyard/agent':
+        specifier: workspace:*
+        version: link:../../agent
+      '@wrenyard/execution':
+        specifier: workspace:*
+        version: link:../../../execution
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/agent/clients/grok:
+    dependencies:
+      '@wrenyard/agent':
+        specifier: workspace:*
+        version: link:../../agent
+      '@wrenyard/execution':
+        specifier: workspace:*
+        version: link:../../../execution
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/agent/clients/kimi:
+    dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: 1.8.0
+        version: 1.8.0(zod@4.4.3)
+      '@wrenyard/agent':
+        specifier: workspace:*
+        version: link:../../agent
+      '@wrenyard/execution':
+        specifier: workspace:*
+        version: link:../../../execution
+      '@wrenyard/providers':
+        specifier: workspace:*
+        version: link:../../../ai/provider
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/agent/clients/opencode:
+    dependencies:
+      '@wrenyard/agent':
+        specifier: workspace:*
+        version: link:../../agent
+      '@wrenyard/execution':
+        specifier: workspace:*
+        version: link:../../../execution
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/agent/clients/pi:
+    dependencies:
+      '@wrenyard/agent':
+        specifier: workspace:*
+        version: link:../../agent
+      '@wrenyard/execution':
+        specifier: workspace:*
+        version: link:../../../execution
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/agent/loop:
+    dependencies:
+      '@wrenyard/ai-protocol':
+        specifier: workspace:*
+        version: link:../../ai/protocol
+      '@wrenyard/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   packages/ai/ai:
     dependencies:
       '@wrenyard/ai-protocol':
@@ -404,284 +707,6 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
-  packages/clients:
-    dependencies:
-      '@wrenyard/agent-client':
-        specifier: workspace:*
-        version: link:base
-      '@wrenyard/client-claude':
-        specifier: workspace:*
-        version: link:claude
-      '@wrenyard/client-codebuddy':
-        specifier: workspace:*
-        version: link:codebuddy
-      '@wrenyard/client-codex':
-        specifier: workspace:*
-        version: link:codex
-      '@wrenyard/client-cursor':
-        specifier: workspace:*
-        version: link:cursor
-      '@wrenyard/client-dsh':
-        specifier: workspace:*
-        version: link:dsh
-      '@wrenyard/client-grok':
-        specifier: workspace:*
-        version: link:grok
-      '@wrenyard/client-kimi':
-        specifier: workspace:*
-        version: link:kimi
-      '@wrenyard/client-opencode':
-        specifier: workspace:*
-        version: link:opencode
-      '@wrenyard/client-pi':
-        specifier: workspace:*
-        version: link:pi
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/clients/base:
-    dependencies:
-      '@wrenyard/ai':
-        specifier: workspace:*
-        version: link:../../ai/ai
-      '@wrenyard/execution':
-        specifier: workspace:*
-        version: link:../../execution
-      '@wrenyard/models':
-        specifier: workspace:*
-        version: link:../../ai/models
-      '@wrenyard/paths':
-        specifier: workspace:*
-        version: link:../../paths
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/clients/claude:
-    dependencies:
-      '@wrenyard/agent-client':
-        specifier: workspace:*
-        version: link:../base
-      '@wrenyard/execution':
-        specifier: workspace:*
-        version: link:../../execution
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/clients/codebuddy:
-    dependencies:
-      '@wrenyard/agent-client':
-        specifier: workspace:*
-        version: link:../base
-      '@wrenyard/execution':
-        specifier: workspace:*
-        version: link:../../execution
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/clients/codex:
-    dependencies:
-      '@wrenyard/agent-client':
-        specifier: workspace:*
-        version: link:../base
-      '@wrenyard/execution':
-        specifier: workspace:*
-        version: link:../../execution
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/clients/cursor:
-    dependencies:
-      '@wrenyard/agent-client':
-        specifier: workspace:*
-        version: link:../base
-      '@wrenyard/execution':
-        specifier: workspace:*
-        version: link:../../execution
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/clients/dsh:
-    dependencies:
-      '@wrenyard/agent-client':
-        specifier: workspace:*
-        version: link:../base
-      '@wrenyard/execution':
-        specifier: workspace:*
-        version: link:../../execution
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/clients/grok:
-    dependencies:
-      '@wrenyard/agent-client':
-        specifier: workspace:*
-        version: link:../base
-      '@wrenyard/execution':
-        specifier: workspace:*
-        version: link:../../execution
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/clients/kimi:
-    dependencies:
-      '@agentclientprotocol/sdk':
-        specifier: 1.8.0
-        version: 1.8.0(zod@4.4.3)
-      '@wrenyard/agent-client':
-        specifier: workspace:*
-        version: link:../base
-      '@wrenyard/execution':
-        specifier: workspace:*
-        version: link:../../execution
-      '@wrenyard/providers':
-        specifier: workspace:*
-        version: link:../../ai/provider
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/clients/opencode:
-    dependencies:
-      '@wrenyard/agent-client':
-        specifier: workspace:*
-        version: link:../base
-      '@wrenyard/execution':
-        specifier: workspace:*
-        version: link:../../execution
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/clients/pi:
-    dependencies:
-      '@wrenyard/agent-client':
-        specifier: workspace:*
-        version: link:../base
-      '@wrenyard/execution':
-        specifier: workspace:*
-        version: link:../../execution
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
   packages/control:
     dependencies:
       '@wrenyard/ai-protocol':
@@ -735,34 +760,6 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
-  packages/features/agent-loop:
-    dependencies:
-      '@wrenyard/ai-protocol':
-        specifier: workspace:*
-        version: link:../../ai/protocol
-      '@wrenyard/auto-routing':
-        specifier: workspace:*
-        version: link:../auto-routing
-      '@wrenyard/protocol':
-        specifier: workspace:*
-        version: link:../../protocol
-      ajv:
-        specifier: ^8.20.0
-        version: 8.20.0
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
   packages/features/auto-routing:
     dependencies:
       '@wrenyard/models':
@@ -787,12 +784,12 @@ importers:
 
   packages/features/exec:
     dependencies:
-      '@wrenyard/agent-client':
+      '@wrenyard/agent':
         specifier: workspace:*
-        version: link:../../clients/base
+        version: link:../../agent/agent
       '@wrenyard/clients':
         specifier: workspace:*
-        version: link:../../clients
+        version: link:../../agent/clients
       '@wrenyard/protocol':
         specifier: workspace:*
         version: link:../../protocol
@@ -859,9 +856,12 @@ importers:
 
   packages/features/quota:
     dependencies:
+      '@wrenyard/agent':
+        specifier: workspace:*
+        version: link:../../agent/agent
       '@wrenyard/clients':
         specifier: workspace:*
-        version: link:../../clients
+        version: link:../../agent/clients
       '@wrenyard/paths':
         specifier: workspace:*
         version: link:../../paths
@@ -884,9 +884,6 @@ importers:
 
   packages/features/session:
     dependencies:
-      '@wrenyard/agent-loop':
-        specifier: workspace:*
-        version: link:../agent-loop
       '@wrenyard/ai':
         specifier: workspace:*
         version: link:../../ai/ai
@@ -896,6 +893,9 @@ importers:
       '@wrenyard/auto-routing':
         specifier: workspace:*
         version: link:../auto-routing
+      '@wrenyard/loop':
+        specifier: workspace:*
+        version: link:../../agent/loop
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../../ai/models
@@ -939,6 +939,9 @@ importers:
       '@wrenyard/gateway':
         specifier: workspace:*
         version: link:../gateway
+      '@wrenyard/loop':
+        specifier: workspace:*
+        version: link:../../agent/loop
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../../ai/models

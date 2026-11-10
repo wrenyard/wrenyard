@@ -2,14 +2,15 @@
  * The version-control auxiliary task.
  *
  * The loop and the vcs definition (workspace protocol methods, effect map,
- * round budget and system prompt) live in `@wrenyard/agent-loop`. This module
+ * round budget and system prompt) live in `./definitions.ts`. This module
  * is the session-side adapter: it supplies the method catalog, the model
  * transport and the record adapter. A successful commit, push or pull is
  * recorded by the definition's effect map as a `ws.updated` draft with scope
  * `workspace` and target `workspace`.
  */
 
-import { runAuxiliary, type AuxiliaryRecordPort, createLoopRecord } from '@wrenyard/agent-loop';
+import { runAuxiliary, type AuxiliaryRecordPort } from './runner.ts';
+import { createLoopRecord } from '@wrenyard/loop';
 
 import { createAuxiliaryLoopHelpers, observeSuccessfulToolResult } from './shared.ts';
 import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';

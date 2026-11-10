@@ -44,7 +44,7 @@ export function findFirstPartyManifests(root) {
   const manifests = [];
   const rootPkg = path.join(root, 'package.json');
   if (existsSync(rootPkg)) manifests.push(rootPkg);
-  for (const area of ['apps', 'services', 'packages']) {
+  for (const area of ['apps', 'services', 'packages', 'packages/agent', 'packages/agent/clients']) {
     const dir = path.join(root, area);
     if (!existsSync(dir)) continue;
     for (const entry of readdirSync(dir, { withFileTypes: true })) {

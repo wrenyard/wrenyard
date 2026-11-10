@@ -58,7 +58,7 @@ pnpm test    # vitest unit tests
 
 ## DSH compatibility
 
-The DSH client adapter (`packages/clients/dsh`) drives an externally installed
+The DSH client adapter (`packages/agent/clients/dsh`) drives an externally installed
 `@deepseek-ai/dsh`; the harness is not bundled with the suite. The adapter
 enforces a minimum supported executable version of `0.2.0-rc.2` and refuses to
 launch anything older, so a legacy `0.1.x` runtime is no longer supported. The

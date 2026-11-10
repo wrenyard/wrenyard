@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import type { WrenyardGatewayConnection } from '@wrenyard/control'
 import type { TaskRunFacts } from '@wrenyard/protocol/task'
-import { getAuxiliaryDefinition } from '@wrenyard/agent-loop'
+import { getAuxiliaryDefinition } from '@wrenyard/session'
 import {
   AUXILIARY_ROLE_ORDER,
   type AuxiliaryRoutePreview,
@@ -52,7 +52,7 @@ const SESSION_CALLABLE_METHODS = new Set([
  * The method allowlist of the auxiliary definition currently running, or
  * undefined for an ordinary session call. The loop's catalog adapter sets
  * `auxiliaryDefinitionId`, whose definition data lives in
- * `@wrenyard/agent-loop`; the daemon never re-declares those lists.
+ * `@wrenyard/session`; the daemon never re-declares those lists.
  */
 function auxiliaryAllowlist(
   context: { auxiliaryDefinitionId?: string } | undefined,

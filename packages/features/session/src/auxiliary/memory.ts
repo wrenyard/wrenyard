@@ -9,7 +9,6 @@
 import {
   bindCatalog,
   createLoopRecord,
-  getAuxiliaryDefinition,
   protocolTools,
   runAuxiliaryLoop,
   type CallRunRequest,
@@ -17,7 +16,8 @@ import {
   type LoopRecord,
   type MethodCatalogPort,
   type MethodInfo,
-} from '@wrenyard/agent-loop';
+} from '@wrenyard/loop';
+import { getAuxiliaryDefinition } from './definitions.ts';
 
 import { contentVersion } from '../documents.ts';
 import { messageOf } from '../errors.ts';

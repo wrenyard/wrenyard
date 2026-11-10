@@ -62,7 +62,7 @@ export function createWorkBuddyQuota(
     async read(): Promise<QuotaSnapshot | undefined> {
       // The quota catch classifies a ClientError as configuration_missing so the
       // provider does not appear activated; providers cannot import
-      // @wrenyard/clients, so return the same snapshot shape instead.
+      // @wrenyard/agent, so return the same snapshot shape instead.
       const raw = await readObservation();
       if (raw === undefined) {
         return {

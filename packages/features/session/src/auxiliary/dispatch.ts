@@ -22,15 +22,15 @@ import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 import {
   bindCatalog,
   createLoopRecord,
-  getAuxiliaryDefinition,
   protocolTools,
   runAuxiliaryLoop,
   toActionOutcome,
-  type AuxiliaryRecordPort,
   type LoopRecord,
   type MethodCatalogPort,
   type MethodInfo,
-} from '@wrenyard/agent-loop';
+} from '@wrenyard/loop';
+import { getAuxiliaryDefinition } from './definitions.ts';
+import type { AuxiliaryRecordPort } from './runner.ts';
 
 import { renderTaskRunResult } from './dispatch-result.ts';
 import { fail, isObject, renderRunFiles } from './shared.ts';

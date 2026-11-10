@@ -2,7 +2,7 @@
  * The project auxiliary task.
  *
  * The loop and the project definition (project protocol methods, effect map,
- * round budget and system prompt) live in `@wrenyard/agent-loop`. This module
+ * round budget and system prompt) live in `./definitions.ts`. This module
  * is the session-side adapter: it supplies the method catalog, the model
  * transport and the record adapter.
  *
@@ -11,7 +11,8 @@
  * call's project id as its target and the worktree id when the call names one.
  */
 
-import { runAuxiliary, type AuxiliaryRecordPort, createLoopRecord } from '@wrenyard/agent-loop';
+import { runAuxiliary, type AuxiliaryRecordPort } from './runner.ts';
+import { createLoopRecord } from '@wrenyard/loop';
 
 import { createAuxiliaryLoopHelpers, observeSuccessfulToolResult } from './shared.ts';
 import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';

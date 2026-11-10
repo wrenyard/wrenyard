@@ -8,6 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@wrenyard/agent": "workspace:*",
     "@wrenyard/clients": "workspace:*",
     "@wrenyard/providers": "workspace:*",
     "@wrenyard/paths": "workspace:*"

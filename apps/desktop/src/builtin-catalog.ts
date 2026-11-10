@@ -1,4 +1,5 @@
-import { CodeBuddyClient, type InspectOptions } from '@wrenyard/clients';
+import { CodeBuddyClient } from '@wrenyard/clients';
+import type { InspectOptions } from '@wrenyard/agent';
 import { createBuiltinCatalog, createCodeBuddy } from '@wrenyard/providers';
 
 let catalog = createBuiltinCatalog();

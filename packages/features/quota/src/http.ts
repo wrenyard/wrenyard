@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { BUILTIN_PROVIDERS, createBuiltinProviderRuntime, readDevinCredentials } from '@wrenyard/providers';
-import type { ClientOptions } from '@wrenyard/clients';
+import type { OperationOptions as ClientOptions } from '@wrenyard/agent';
 export type HttpQuotaProvider = 'deepseek' | 'kimi-coding' | 'zhipu-coding' | 'devin' | 'openrouter';
 const endpoints: Record<Exclude<HttpQuotaProvider, 'devin'>, string> = {
     deepseek: 'https://api.deepseek.com/user/balance',

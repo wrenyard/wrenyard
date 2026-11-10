@@ -1,4 +1,4 @@
-import { runTaskOutputCompile } from '@wrenyard/agent-loop'
+import { runTaskOutputCompile } from '@wrenyard/task'
 import {
   createTaskArtifactDirectory,
   outputSchemaDeclaresArtifacts,

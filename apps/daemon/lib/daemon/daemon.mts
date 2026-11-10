@@ -73,8 +73,8 @@ import {
   projectModelAvailability,
   type NativeProviderReadinessSnapshot,
 } from './execution/native-provider-readiness.mts'
-import { createAgentClients, CodeBuddyClient, readCodexGatewayCredential, refreshCodexGatewayCredential, readCodexModels, type AgentClient, type NativeClientReadiness } from '@wrenyard/clients'
-import { findExecutable } from '@wrenyard/agent-client'
+import { createAgentClients, CodeBuddyClient, readCodexGatewayCredential, refreshCodexGatewayCredential, readCodexModels } from '@wrenyard/clients'
+import { findExecutable, type AgentClient, type NativeClientReadiness } from '@wrenyard/agent'
 import { compareVersions, isSemver } from '@wrenyard/protocol/update-feed'
 import type { ClientAction, ClientListEntry, ClientListHost, ClientListParams, ClientReadiness } from '../protocol/methods/client.mts'
 import { ExecService } from '@wrenyard/exec'

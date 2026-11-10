@@ -1,12 +1,12 @@
-import {
-  createAgentClients,
-  type AgentClient,
-  type AgentClientPreparation,
-  type AgentEvent,
-  type AgentRequest,
-  type AgentSession,
-  type OperationOptions,
-} from '@wrenyard/clients';
+import { createAgentClients } from '@wrenyard/clients';
+import type {
+  AgentClient,
+  AgentClientPreparation,
+  AgentEvent,
+  AgentRequest,
+  AgentSession,
+  OperationOptions,
+} from '@wrenyard/agent';
 import type {
   ExecEventEnvelope,
   ExecId,
@@ -15,7 +15,7 @@ import type {
 } from '@wrenyard/protocol';
 import { ExecReplayBuffer } from './replay.ts';
 
-export type { McpServer } from '@wrenyard/agent-client';
+export type { McpServer } from '@wrenyard/agent';
 
 /** Bounded wait for each live drain loop to observe its terminal frame on close. */
 const CLOSE_DRAIN_GRACE_MS = 5_000;

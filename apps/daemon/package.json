@@ -43,7 +43,7 @@
   },
   "dependencies": {
     "@wrenyard/gateway": "workspace:*",
-    "@wrenyard/agent-loop": "workspace:*",
+    "@wrenyard/loop": "workspace:*",
     "@wrenyard/ai": "workspace:*",
     "@wrenyard/ai-protocol": "workspace:*",
     "@wrenyard/models": "workspace:*",
@@ -56,7 +56,7 @@
     "yaml": "^2.7.0",
     "zod": "^4.4.3",
     "@wrenyard/auto-routing": "workspace:*",
-    "@wrenyard/agent-client": "workspace:*",
+    "@wrenyard/agent": "workspace:*",
     "@wrenyard/quota": "workspace:*",
     "@wrenyard/clients": "workspace:*",
     "@wrenyard/exec": "workspace:*",

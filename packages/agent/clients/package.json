@@ -1,0 +1,29 @@
+{
+  "name": "@wrenyard/clients",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@wrenyard/agent": "workspace:*",
+    "@wrenyard/client-codex": "workspace:*",
+    "@wrenyard/client-claude": "workspace:*",
+    "@wrenyard/client-cursor": "workspace:*",
+    "@wrenyard/client-grok": "workspace:*",
+    "@wrenyard/client-codebuddy": "workspace:*",
+    "@wrenyard/client-opencode": "workspace:*",
+    "@wrenyard/client-dsh": "workspace:*",
+    "@wrenyard/client-pi": "workspace:*",
+    "@wrenyard/client-kimi": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

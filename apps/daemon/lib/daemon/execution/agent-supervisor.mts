@@ -1,5 +1,6 @@
-import { createAgentClients, type AgentClient, type AgentEvent, type AgentRequest, type AgentSession } from '@wrenyard/clients';
-import { messageEvent } from '@wrenyard/agent-client/native';
+import { createAgentClients } from '@wrenyard/clients';
+import type { AgentClient, AgentEvent, AgentRequest, AgentSession } from '@wrenyard/agent';
+import { messageEvent } from '@wrenyard/agent/native';
 import { ExecService, type ExecRequest } from '@wrenyard/exec';
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'

@@ -1,0 +1,29 @@
+{
+  "name": "@wrenyard/agent",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./session": "./src/session.ts",
+    "./native": "./src/native.ts",
+    "./statistics": "./src/statistics.ts",
+    "./mcp": "./src/mcp.ts"
+  },
+  "dependencies": {
+    "@wrenyard/ai": "workspace:*",
+    "@wrenyard/execution": "workspace:*",
+    "@wrenyard/models": "workspace:*",
+    "@wrenyard/paths": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

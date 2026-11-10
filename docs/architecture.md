@@ -47,7 +47,11 @@ updates. There is no separate agent runtime binary or Go build.
   `@wrenyard/models`, `@wrenyard/providers` and `@wrenyard/ai-protocol`).
   Product IPC contracts remain in `packages/protocol`; AI usage and speed
   metrics live in the SDK.
-- `packages/clients/{codex,claude,cursor,grok,codebuddy,opencode,dsh,pi}` implement
+- `packages/agent/agent` (`@wrenyard/agent`) owns shared agent contracts and
+  native execution helpers. `packages/agent/loop` (`@wrenyard/loop`) owns shared
+  tool-loop mechanics and span recording. Auxiliary definitions and their runner
+  belong to session; task-output compilation belongs to task.
+- `packages/agent/clients/{codex,claude,cursor,grok,codebuddy,opencode,dsh,pi,kimi}` implement
   the common agent client interface: installation, arguments, native protocol,
   account reads and token/TPS statistics.
 - `packages/execution` owns subprocess lifetime, stdio RPC and native credential
