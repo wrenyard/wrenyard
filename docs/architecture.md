@@ -41,7 +41,12 @@ updates. There is no separate agent runtime binary or Go build.
 - `packages/features/provider` implements provider listing, configuration and
   quota queries. `features/quota` composes HTTP and native client account reads;
   providers interpret the returned observations.
-- `packages/providers` and `packages/models` own provider and model definitions.
+- `packages/ai/ai` is the AI SDK consumed by session and other application code.
+  Its `models`, `provider` and `protocol` sibling directories own model definitions,
+  provider integrations and AI wire contracts/adapters (published as
+  `@wrenyard/models`, `@wrenyard/providers` and `@wrenyard/ai-protocol`).
+  Product IPC contracts remain in `packages/protocol`; AI usage and speed
+  metrics live in the SDK.
 - `packages/clients/{codex,claude,cursor,grok,codebuddy,opencode,dsh,pi}` implement
   the common agent client interface: installation, arguments, native protocol,
   account reads and token/TPS statistics.

@@ -12,7 +12,7 @@
 
 import { turnId, type LedgerEvent } from '../ledger/store.ts';
 import { escapeBody, tag, twoPartView } from '../context/render.ts';
-import type { ToolCall, ToolSpec } from '../transport/index.ts';
+import type { ToolCall, ToolSpec } from '@wrenyard/model-call/transport';
 import type { BuiltView, SessionCallHost } from '../ports.ts';
 import type { SessionRuntime, TurnRuntime } from '../turn/runtime.ts';
 

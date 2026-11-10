@@ -19,14 +19,16 @@ import {
   type SessionSummary,
   type WorkspaceSnapshot,
 } from '../ledger/store.ts';
-import { ModelCallError, isReasoningEffortSupported, resolveModelMetadata, type CallRole } from '../model/request.ts';
+import { ModelCallError, type CallRole } from '../model/request.ts';
+import { isReasoningEffortSupported } from '@wrenyard/model-call';
+import { resolveModelMetadata } from '@wrenyard/model-call/metadata';
 import { admitSessionModel } from '../model/admission.ts';
 import {
   REASONING_EFFORTS,
   type ReasoningEffort,
 } from '@wrenyard/models';
 import { ContextInspector, findCreated, type ContextInspectRequest, type ContextInspection } from '../context/inspect.ts';
-import { type ToolCall } from '../transport/index.ts';
+import { type ToolCall } from '@wrenyard/model-call/transport';
 import { isInside, type AttachmentInput, type FileStore } from '../media.ts';
 import { messageOf } from '../errors.ts';
 import { ActionRunner } from '../reasoning/actions.ts';
@@ -1254,9 +1256,9 @@ class Engine implements Session, SessionCallHost {
       onReasoning?: (delta: string) => void;
       onToolCall?: (call: ToolCall) => void;
       /** Forwarded for the `reason` role's recovery wait lifecycle. */
-      onWait?: (state: { reason: import('../transport/index.ts').ModelWaitReason; retryAt?: string } | null) => void;
-      tools?: readonly import('../transport/index.ts').ToolSpec[];
-      toolChoice?: import('../transport/index.ts').ToolChoice;
+      onWait?: (state: { reason: import('@wrenyard/model-call/transport').ModelWaitReason; retryAt?: string } | null) => void;
+      tools?: readonly import('@wrenyard/model-call/transport').ToolSpec[];
+      toolChoice?: import('@wrenyard/model-call/transport').ToolChoice;
       maxTokens?: number;
       step?: number;
       /** Overrides the owning turn's abort signal (see `SessionCallHost.invoke`). */

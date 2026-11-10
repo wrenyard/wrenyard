@@ -1,0 +1,28 @@
+{
+  "name": "@wrenyard/model-call",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Shared business-neutral model-call layer above the local Gateway: HTTP/SSE transport, token and context-budget estimation, model metadata and a single-attempt caller.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./transport": "./src/transport.ts",
+    "./metadata": "./src/metadata.ts",
+    "./metrics": "./src/metrics.ts"
+  },
+  "dependencies": {
+    "@wrenyard/models": "workspace:*",
+    "@wrenyard/ai-protocol": "workspace:*",
+    "gpt-tokenizer": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

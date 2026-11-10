@@ -3,15 +3,15 @@
  *
  * This module exports only what hosts consume; every name here is a commitment.
  * Feature internals stay reachable inside the package through their own
- * modules. The package subpaths are declared in `package.json` (`./model-metadata`,
- * `./session-status`).
+ * modules. The package subpaths are declared in `package.json`
+ * (`./session-status`).
  */
 
 import { Ledger } from './ledger/store.ts';
 import { WorkspaceFileSource } from './workspace.ts';
 import { createWorkspaceMemory } from './memory-write.ts';
 import { createCallRunner, type CallRunner, type ReasonSelection, type ReasoningRetryPolicy } from './model/request.ts';
-import { createModelTransport } from './transport/index.ts';
+import { createModelTransport } from '@wrenyard/model-call/transport';
 import { FileStore } from './media.ts';
 import { createEngine } from './turn/engine.ts';
 import { SpanRecorder } from '@wrenyard/agent-loop';
@@ -50,14 +50,10 @@ export { createWorkspaceMemory } from './memory-write.ts';
 // ── Model routing ─────────────────────────────────────────────────
 export {
   createCallRunner,
-  resolveModelMetadata,
   type AuxiliaryRoute,
 } from './model/request.ts';
 export { AUXILIARY_ROLE_ORDER, type AuxiliaryRoutePreview } from './model/roles.ts';
 export { ROLE_ROUTE_REQUIREMENTS } from './model/route-requirements.ts';
-
-// ── Transport ─────────────────────────────────────────────────────
-export { createModelTransport, type ToolSpec } from './transport/index.ts';
 
 // ── Shapes hosts pass across the boundary ─────────────────────────
 export type { TaskArtifact } from './media.ts';

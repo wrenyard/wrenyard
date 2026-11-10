@@ -21,11 +21,12 @@
   "dependencies": {
     "@wrenyard/auto-routing": "workspace:*",
     "@wrenyard/clients": "workspace:*",
-    "@wrenyard/control": "workspace:*",
+    "@wrenyard/model-call": "workspace:*",
     "@wrenyard/models": "workspace:*",
+    "@wrenyard/providers": "workspace:*",
+    "@wrenyard/control": "workspace:*",
     "@wrenyard/paths": "workspace:*",
     "@wrenyard/protocol": "workspace:*",
-    "@wrenyard/providers": "workspace:*",
     "@wrenyard/themes": "workspace:*",
     "cmdk": "^1.1.1",
     "gpt-tokenizer": "4.0.1"

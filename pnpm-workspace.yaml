@@ -1,6 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+  - "packages/ai/*"
   - "packages/features/*"
   - "packages/clients/*"
 

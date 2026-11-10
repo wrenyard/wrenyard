@@ -2,7 +2,7 @@
  * Session model admission: the endpoint's model list decides which model a
  * session may run. No provider catalog lookup participates.
  */
-import type { GatewayModel } from '@wrenyard/protocol/gateway';
+import type { GatewayModel } from '@wrenyard/ai-protocol';
 
 /**
  * The endpoint row a session selection names, or a rejection when the endpoint

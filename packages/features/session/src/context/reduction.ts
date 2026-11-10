@@ -15,7 +15,7 @@
  * model, never writes the ledger and never depends on wall-clock state.
  */
 import { CONTEXT_EVENT_TYPES, type LedgerEvent } from '../ledger/store.ts';
-import { estimateTokens } from '../model/request.ts';
+import { estimateTokens } from '@wrenyard/model-call';
 import { renderCompactionBlock } from './compaction.ts';
 import { renderEventText } from './render.ts';
 

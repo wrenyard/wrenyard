@@ -11,14 +11,14 @@ import {
   type LedgerEvent,
   type StepStatus,
 } from '../ledger/store.ts';
-import { resolveModelMetadata } from '../model/request.ts';
+import { resolveModelMetadata } from '@wrenyard/model-call/metadata';
 import { ACTION_TOOL } from '../reasoning/tool.ts';
 import { buildReason } from '../reasoning/prompt.ts';
 import { runMemorySearch } from '../auxiliary/memory.ts';
 import type { ReplyWriter } from '../auxiliary/reply.ts';
 import { startInitialTitle } from '../auxiliary/title.ts';
 import type { CallFailureSummary, SessionCallHost, SessionViewInfo } from '../ports.ts';
-import type { ToolSpec } from '../transport/index.ts';
+import type { ToolSpec } from '@wrenyard/model-call/transport';
 import type { SessionRuntime, TurnRuntime } from './runtime.ts';
 import { messageOf } from '../errors.ts';
 import type { ActionRunner } from './actions.ts';

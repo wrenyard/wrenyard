@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { GatewayModel } from '@wrenyard/protocol/gateway';
+import type { GatewayModel } from '@wrenyard/ai-protocol';
 
 import { admitSessionModel } from '../src/model/admission.ts';
 

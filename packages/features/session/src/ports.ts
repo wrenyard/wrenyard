@@ -3,7 +3,7 @@
  * interface, and the module ports the engine is composed from.
  */
 
-import type { GatewayConnection as WrenyardGatewayConnection } from '@wrenyard/protocol/gateway';
+import type { GatewayConnection as WrenyardGatewayConnection } from '@wrenyard/ai-protocol';
 import type { TaskRunFacts } from '@wrenyard/protocol/task';
 import type { ReasoningEffort } from '@wrenyard/models';
 import type { LiveCall } from '@wrenyard/protocol/session';
@@ -18,7 +18,7 @@ import type {
 import type { ActionType } from './ledger/events.ts';
 import type { CallRole } from './model/request.ts';
 import type { ContextInspectRequest, ContextInspection } from './context/inspect.ts';
-import type { Message as ModelMessage, ModelContentPart, ModelWaitReason, ToolCall, ToolSpec, ToolChoice, Usage, ModelMetrics } from './transport/index.ts';
+import type { Message as ModelMessage, ModelContentPart, ModelWaitReason, ToolCall, ToolSpec, ToolChoice, Usage, ModelMetrics } from '@wrenyard/model-call/transport';
 import type { AttachmentInput, FileStore, TaskArtifact } from './media.ts';
 import type { DocCatalogEntry } from './workspace.ts';
 import type { ActionRunContext } from './reasoning/actions.ts';

@@ -44,7 +44,8 @@ import type {
   WorkspaceSwitchResult,
 } from '../protocol/registry.mts'
 import { TaskService, isTaskRunRejection } from '../core/task/service.mts'
-import { Ledger, createSession, createWorkspaceMemory, resolveModelMetadata, type Session } from '@wrenyard/session'
+import { Ledger, createSession, createWorkspaceMemory, type Session } from '@wrenyard/session'
+import { resolveModelMetadata } from '@wrenyard/model-call/metadata'
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
 import { withCatalogMetadata } from './services/endpoint-models.mts'
@@ -106,9 +107,10 @@ import {
   resolveWorkBuddySession,
   startWorkBuddyBrowserAuth,
   writePersistedAuth,
-} from '../../../../packages/providers/src/workbuddy/credentials.ts'
-import { AUTH_POLL_TIMEOUT_MS } from '../../../../packages/providers/src/workbuddy/protocol.ts'
-import { WORKBUDDY_BUILDS, type WorkBuddyBuildId } from '../../../../packages/providers/src/workbuddy/definition.ts'
+  AUTH_POLL_TIMEOUT_MS,
+  WORKBUDDY_BUILDS,
+  type WorkBuddyBuildId,
+} from '@wrenyard/providers/workbuddy'
 import { REASONING_EFFORTS, parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { PROVIDER_DEFAULT_REASONING } from '@wrenyard/providers/base'
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '@wrenyard/task'
@@ -3088,7 +3090,7 @@ function blockedSharedTaskRoute(
   return shared?.phase === 'open' ? shared : undefined
 }
 
-type DaemonGatewayConnection = import('@wrenyard/protocol/gateway').GatewayConnection & { token: string }
+type DaemonGatewayConnection = import('@wrenyard/ai-protocol').GatewayConnection & { token: string }
 
 function installGatewayEnvironment(
   connection: DaemonGatewayConnection,

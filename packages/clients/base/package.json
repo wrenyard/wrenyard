@@ -12,8 +12,8 @@
     "./mcp": "./src/mcp.ts"
   },
   "dependencies": {
+    "@wrenyard/model-call": "workspace:*",
     "@wrenyard/execution": "workspace:*",
-    "@wrenyard/metrics": "workspace:*",
     "@wrenyard/models": "workspace:*",
     "@wrenyard/paths": "workspace:*"
   },

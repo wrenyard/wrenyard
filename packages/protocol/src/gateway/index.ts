@@ -1,5 +1,4 @@
 export type {
-  GatewayConnection,
   GatewayConnectionParams,
   GatewayEffectiveConnection,
   GatewayHealthParams,
@@ -8,11 +7,8 @@ export type {
   GatewayHealthResult,
   GatewayHealthRoute,
   GatewayHealthWindow,
-  GatewayModel,
-  GatewayModelPricing,
   GatewayPortChoice,
   GatewayPortMode,
-  GatewayProtocol,
   GatewayRouteState,
   GatewayRouteStatus,
   GatewaySettings,

@@ -14,7 +14,7 @@ import {
   type FilesAttachedEvent,
   type LedgerEvent,
 } from '../ledger/store.ts';
-import { estimateTokens } from '../model/request.ts';
+import { estimateTokens } from '@wrenyard/model-call';
 import type { SessionFile } from '../media.ts';
 import type { BuiltView } from '../ports.ts';
 

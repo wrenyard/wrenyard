@@ -17,7 +17,8 @@
  * This module never calls a model and never mutates the ledger.
  */
 
-import { estimateTokens, IMAGE_INPUT_TOKEN_ESTIMATE, resolveModelMetadata } from '../model/request.ts';
+import { estimateTokens, IMAGE_INPUT_TOKEN_ESTIMATE } from '@wrenyard/model-call';
+import { resolveModelMetadata } from '@wrenyard/model-call/metadata';
 import {
   type LedgerEvent,
   type SessionCreatedEvent,
@@ -26,7 +27,7 @@ import {
 import { renderEventText } from './render.ts';
 import { buildReason } from '../reasoning/prompt.ts';
 import type { LedgerPort, SessionViewInfo } from '../ports.ts';
-import type { GatewayModel } from '@wrenyard/protocol/gateway';
+import type { GatewayModel } from '@wrenyard/ai-protocol';
 import type {
   ContextInspectCalibration,
   ContextInspectFiles,

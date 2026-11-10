@@ -1,0 +1,28 @@
+{
+  "name": "@wrenyard/ai-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Gateway protocol types, fact types and the three session protocol adapters: a browser-safe root of pure types plus explicit Node/HTTP subpath entries.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./protocol": "./src/protocol.ts",
+    "./errors": "./src/errors.ts",
+    "./adapters/chat": "./src/adapters/chat.ts",
+    "./adapters/messages": "./src/adapters/messages.ts",
+    "./adapters/responses": "./src/adapters/responses.ts"
+  },
+  "dependencies": {
+    "@wrenyard/models": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

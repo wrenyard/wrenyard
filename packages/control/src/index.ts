@@ -1,6 +1,6 @@
 import type { ProviderListResult, ProviderQuotaResult, ProviderSignInParams, ProviderSignInResult } from '@wrenyard/protocol/provider';
+import type { GatewayConnection as WrenyardGatewayConnection } from '@wrenyard/ai-protocol';
 import type {
-  GatewayConnection as WrenyardGatewayConnection,
   GatewayHealthResult as WrenyardGatewayHealthResult,
   GatewaySettings as WrenyardGatewaySettings,
   GatewaySettingsSaveInput as WrenyardGatewaySettingsSaveInput,
@@ -57,13 +57,15 @@ export interface WrenyardIpcRequestOptions {
 
 export type {
   GatewayConnection as WrenyardGatewayConnection,
-  GatewayHealthResult as WrenyardGatewayHealthResult,
-  GatewayEffectiveConnection as WrenyardGatewayEffectiveConnection,
   GatewayModel as WrenyardGatewayModel,
   GatewayModelPricing as WrenyardGatewayModelPricing,
+  GatewayProtocol as WrenyardGatewayProtocol,
+} from '@wrenyard/ai-protocol';
+export type {
+  GatewayHealthResult as WrenyardGatewayHealthResult,
+  GatewayEffectiveConnection as WrenyardGatewayEffectiveConnection,
   GatewayPortChoice as WrenyardGatewayPortChoice,
   GatewayPortMode as WrenyardGatewayPortMode,
-  GatewayProtocol as WrenyardGatewayProtocol,
   GatewaySettings as WrenyardGatewaySettings,
   GatewaySettingsSaveInput as WrenyardGatewaySettingsSaveInput,
   GatewaySettingsSaveResult as WrenyardGatewaySettingsSaveResult,

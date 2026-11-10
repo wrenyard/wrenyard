@@ -9,8 +9,27 @@
  */
 
 import type { AuxiliaryRunRecordInput } from '@wrenyard/protocol'
+import type {
+  FinishReason,
+  ModelAttempt,
+  ModelErrorKind,
+  ModelMetrics,
+  RetryAfterHint,
+  RetryAfterSource,
+  Usage,
+} from '@wrenyard/ai-protocol'
 
 // ─── Model wire vocabulary ──────────────────────────────────────────────────
+
+export type {
+  FinishReason,
+  ModelAttempt,
+  ModelErrorKind,
+  ModelMetrics,
+  RetryAfterHint,
+  RetryAfterSource,
+  Usage,
+}
 
 /** Public reasoning level a route may be called at. */
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'default';
@@ -92,65 +111,6 @@ export interface Message {
   toolCalls?: MessageToolCall[];
   /** `tool` only. */
   toolCallId?: string;
-}
-
-/** Provider-reported usage; absent values stay absent. */
-export interface Usage {
-  inputTokens?: number;
-  cachedInputTokens?: number;
-  outputTokens?: number;
-  reasoningTokens?: number;
-}
-
-/** Normalized completion reason. */
-export type FinishReason = 'stop' | 'length' | 'tool_calls' | 'content_filter';
-
-/** Normalized model failure class. */
-export type ModelErrorKind =
-  | 'network'
-  | 'server'
-  | 'rate_limited'
-  | 'quota_exhausted'
-  | 'auth'
-  | 'model_unavailable'
-  | 'invalid_request'
-  | 'context_overflow'
-  | 'protocol'
-  | 'interrupted'
-  | 'aborted';
-
-/** Which upstream response header supplied an adopted retry hint. */
-export type RetryAfterSource = 'retry-after' | 'retry-after-ms';
-
-/** An upstream retry hint the transport actually adopted. */
-export interface RetryAfterHint {
-  source: RetryAfterSource;
-  value: string;
-  delayMs: number;
-  /** Absolute instant (epoch ms) before which no retry may start. */
-  retryAt: number;
-}
-
-/** One request actually issued by a call. */
-export interface ModelAttempt {
-  status?: number;
-  error?: ModelErrorKind;
-  ms: number;
-  waitedMs?: number;
-  retryAfter?: RetryAfterHint;
-  model?: string;
-  routeUntil?: string;
-}
-
-/** Measured facts of one completed or failed call, produced by the transport. */
-export interface ModelMetrics {
-  responseModel?: string;
-  finishReason?: FinishReason;
-  usage?: Usage;
-  ttftMs?: number;
-  streamMs?: number;
-  streamTokens?: number;
-  attempts: ModelAttempt[];
 }
 
 // ─── Ledger draft vocabulary ────────────────────────────────────────────────

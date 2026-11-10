@@ -1,4 +1,4 @@
-import type { GatewayConnection, GatewayModel } from '@wrenyard/protocol/gateway'
+import type { GatewayConnection, GatewayModel } from '@wrenyard/ai-protocol'
 import { parseModelList, type NormalizedModelMetadata } from './endpoint-models.mts'
 
 /** One standard Chat endpoint as the daemon config declares it. */

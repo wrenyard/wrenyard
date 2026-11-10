@@ -7,7 +7,7 @@ import type { ReasoningEffort } from '@wrenyard/models'
  * import from `@wrenyard/providers` (or any other runtime package) here.
  *
  * `ProviderQuotaSnapshot` structurally preserves the provider-owned
- * `QuotaSnapshot` observation (`packages/providers/src/base/quota-snapshot.ts`),
+ * `QuotaSnapshot` observation (`packages/ai/provider/src/base/quota-snapshot.ts`),
  * including the nested `windows` and `balances` shapes, so a provider adapter
  * observation can cross the wire unchanged.
  */

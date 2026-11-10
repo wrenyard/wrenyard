@@ -31,10 +31,10 @@ import {
   type Session,
   type SessionHost,
   type SessionSummary,
-  type ToolSpec,
   type TurnStatus,
   type WorkspaceMemoryPort,
 } from '@wrenyard/session'
+import type { ToolSpec } from '@wrenyard/model-call/transport'
 import type { RoutineRecord } from '../../../protocol/methods/routine.mts'
 import type { Scheduler } from '../scheduler.mts'
 import type { WorkspaceTodoService } from '../workspace-todo-service.mts'

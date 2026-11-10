@@ -7,8 +7,8 @@
   "description": "Provider product feature: catalog listing and configuration plus per-provider quota acquisition.",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@wrenyard/providers": "workspace:*",
     "@wrenyard/protocol": "workspace:*",
+    "@wrenyard/providers": "workspace:*",
     "@wrenyard/quota": "workspace:*"
   },
   "devDependencies": {

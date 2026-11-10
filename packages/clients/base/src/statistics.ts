@@ -23,7 +23,7 @@ import {
     type MeasuredGeneration,
     type ResponseTpsSample,
     type TpsGenerationSample,
-} from '@wrenyard/metrics';
+} from '@wrenyard/model-call/metrics';
 import type { AgentEvent } from './index.ts';
 
 export {

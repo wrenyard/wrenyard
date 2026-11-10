@@ -47,7 +47,7 @@ export const DEEPSEEK_PRICING_LOOKAHEAD_MS = 60_000;
 /**
  * The session's Gateway protocol entry points in its fixed precedence order
  * Chat -> Responses -> Messages. This copy must stay in sync with
- * `selectSessionProtocol` in `packages/features/session/src/transport/protocol.ts`.
+ * `selectSessionProtocol` in `packages/ai/protocol/src/protocol.ts`.
  */
 const SESSION_PROTOCOLS = ['openai_chat', 'openai_responses', 'anthropic_messages'] as const;
 

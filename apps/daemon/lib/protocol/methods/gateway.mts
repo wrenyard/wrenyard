@@ -1,9 +1,10 @@
 import { REASONING_EFFORTS } from '@wrenyard/providers/catalog'
 import type { JsonSchema } from '../jsonrpc.mts'
 
+export type { GatewayConnection as GatewayConnectionResult } from '@wrenyard/ai-protocol'
+
 export type {
   GatewayConnectionParams,
-  GatewayConnection as GatewayConnectionResult,
   GatewayHealthParams,
   GatewayHealthResult,
   GatewayPortMode,

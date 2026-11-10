@@ -1,6 +1,6 @@
 import type { RpcMethod } from '../common/methods.ts'
+import type { GatewayConnection } from '@wrenyard/ai-protocol'
 import type {
-  GatewayConnection,
   GatewayConnectionParams,
   GatewayHealthParams,
   GatewayHealthResult,

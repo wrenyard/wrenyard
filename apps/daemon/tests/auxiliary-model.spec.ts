@@ -1,7 +1,8 @@
 import { expect, it } from 'vitest'
 
 import type { ReasoningEffort } from '@wrenyard/models'
-import { createCallRunner, createModelTransport } from '@wrenyard/session'
+import { createCallRunner } from '@wrenyard/session'
+import { createModelTransport } from '@wrenyard/model-call/transport'
 
 import { resolveAuxiliaryModel } from '../lib/daemon/services/auxiliary-model.mts'
 import { endpointConnection } from '../lib/daemon/services/endpoint-connection.mts'

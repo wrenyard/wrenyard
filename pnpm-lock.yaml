@@ -63,10 +63,10 @@ importers:
         version: link:../daemon
       '@wrenyard/models':
         specifier: workspace:*
-        version: link:../../packages/models
+        version: link:../../packages/ai/models
       '@wrenyard/providers':
         specifier: workspace:*
-        version: link:../../packages/providers
+        version: link:../../packages/ai/provider
       tsx:
         specifier: ^4.22.4
         version: 4.23.12
@@ -89,6 +89,12 @@ importers:
       '@wrenyard/agent-loop':
         specifier: workspace:*
         version: link:../../packages/features/agent-loop
+      '@wrenyard/model-call':
+        specifier: workspace:*
+        version: link:../../packages/ai/ai
+      '@wrenyard/ai-protocol':
+        specifier: workspace:*
+        version: link:../../packages/ai/protocol
       '@wrenyard/auto-routing':
         specifier: workspace:*
         version: link:../../packages/features/auto-routing
@@ -104,12 +110,9 @@ importers:
       '@wrenyard/gateway':
         specifier: workspace:*
         version: link:../../packages/features/gateway
-      '@wrenyard/model-call':
-        specifier: workspace:*
-        version: link:../../packages/features/model-call
       '@wrenyard/models':
         specifier: workspace:*
-        version: link:../../packages/models
+        version: link:../../packages/ai/models
       '@wrenyard/paths':
         specifier: workspace:*
         version: link:../../packages/paths
@@ -121,7 +124,7 @@ importers:
         version: link:../../packages/features/provider
       '@wrenyard/providers':
         specifier: workspace:*
-        version: link:../../packages/providers
+        version: link:../../packages/ai/provider
       '@wrenyard/quota':
         specifier: workspace:*
         version: link:../../packages/features/quota
@@ -162,6 +165,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@wrenyard/model-call':
+        specifier: workspace:*
+        version: link:../../packages/ai/ai
       '@wrenyard/auto-routing':
         specifier: workspace:*
         version: link:../../packages/features/auto-routing
@@ -173,7 +179,7 @@ importers:
         version: link:../../packages/control
       '@wrenyard/models':
         specifier: workspace:*
-        version: link:../../packages/models
+        version: link:../../packages/ai/models
       '@wrenyard/paths':
         specifier: workspace:*
         version: link:../../packages/paths
@@ -182,7 +188,7 @@ importers:
         version: link:../../packages/protocol
       '@wrenyard/providers':
         specifier: workspace:*
-        version: link:../../packages/providers
+        version: link:../../packages/ai/provider
       '@wrenyard/themes':
         specifier: workspace:*
         version: link:../../packages/themes
@@ -317,6 +323,87 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@22.20.1)(vite@6.4.4(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0))
 
+  packages/ai/ai:
+    dependencies:
+      '@wrenyard/ai-protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@wrenyard/models':
+        specifier: workspace:*
+        version: link:../models
+      gpt-tokenizer:
+        specifier: 4.0.1
+        version: 4.0.1
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/ai/models:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/ai/protocol:
+    dependencies:
+      '@wrenyard/models':
+        specifier: workspace:*
+        version: link:../models
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/ai/provider:
+    dependencies:
+      '@wrenyard/models':
+        specifier: workspace:*
+        version: link:../models
+      '@wrenyard/paths':
+        specifier: workspace:*
+        version: link:../../paths
+      smol-toml:
+        specifier: ^1.4.2
+        version: 1.9.1
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   packages/clients:
     dependencies:
       '@wrenyard/agent-client':
@@ -365,15 +452,15 @@ importers:
 
   packages/clients/base:
     dependencies:
+      '@wrenyard/model-call':
+        specifier: workspace:*
+        version: link:../../ai/ai
       '@wrenyard/execution':
         specifier: workspace:*
         version: link:../../execution
-      '@wrenyard/metrics':
-        specifier: workspace:*
-        version: link:../../metrics
       '@wrenyard/models':
         specifier: workspace:*
-        version: link:../../models
+        version: link:../../ai/models
       '@wrenyard/paths':
         specifier: workspace:*
         version: link:../../paths
@@ -536,7 +623,7 @@ importers:
         version: link:../../execution
       '@wrenyard/providers':
         specifier: workspace:*
-        version: link:../../providers
+        version: link:../../ai/provider
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -597,6 +684,9 @@ importers:
 
   packages/control:
     dependencies:
+      '@wrenyard/ai-protocol':
+        specifier: workspace:*
+        version: link:../ai/protocol
       '@wrenyard/paths':
         specifier: workspace:*
         version: link:../paths
@@ -647,6 +737,9 @@ importers:
 
   packages/features/agent-loop:
     dependencies:
+      '@wrenyard/ai-protocol':
+        specifier: workspace:*
+        version: link:../../ai/protocol
       '@wrenyard/auto-routing':
         specifier: workspace:*
         version: link:../auto-routing
@@ -674,10 +767,10 @@ importers:
     dependencies:
       '@wrenyard/models':
         specifier: workspace:*
-        version: link:../../models
+        version: link:../../ai/models
       '@wrenyard/providers':
         specifier: workspace:*
-        version: link:../../providers
+        version: link:../../ai/provider
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -719,43 +812,12 @@ importers:
 
   packages/features/gateway:
     dependencies:
-      '@wrenyard/metrics':
+      '@wrenyard/model-call':
         specifier: workspace:*
-        version: link:../../metrics
+        version: link:../../ai/ai
       '@wrenyard/providers':
         specifier: workspace:*
-        version: link:../../providers
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/features/model-call:
-    dependencies:
-      '@wrenyard/metrics':
-        specifier: workspace:*
-        version: link:../../metrics
-      '@wrenyard/models':
-        specifier: workspace:*
-        version: link:../../models
-      '@wrenyard/protocol':
-        specifier: workspace:*
-        version: link:../../protocol
-      '@wrenyard/providers':
-        specifier: workspace:*
-        version: link:../../providers
-      gpt-tokenizer:
-        specifier: 4.0.1
-        version: 4.0.1
+        version: link:../../ai/provider
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -777,7 +839,7 @@ importers:
         version: link:../../protocol
       '@wrenyard/providers':
         specifier: workspace:*
-        version: link:../../providers
+        version: link:../../ai/provider
       '@wrenyard/quota':
         specifier: workspace:*
         version: link:../quota
@@ -805,7 +867,7 @@ importers:
         version: link:../../paths
       '@wrenyard/providers':
         specifier: workspace:*
-        version: link:../../providers
+        version: link:../../ai/provider
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -825,24 +887,21 @@ importers:
       '@wrenyard/agent-loop':
         specifier: workspace:*
         version: link:../agent-loop
+      '@wrenyard/model-call':
+        specifier: workspace:*
+        version: link:../../ai/ai
+      '@wrenyard/ai-protocol':
+        specifier: workspace:*
+        version: link:../../ai/protocol
       '@wrenyard/auto-routing':
         specifier: workspace:*
         version: link:../auto-routing
-      '@wrenyard/metrics':
-        specifier: workspace:*
-        version: link:../../metrics
-      '@wrenyard/model-call':
-        specifier: workspace:*
-        version: link:../model-call
       '@wrenyard/models':
         specifier: workspace:*
-        version: link:../../models
+        version: link:../../ai/models
       '@wrenyard/protocol':
         specifier: workspace:*
         version: link:../../protocol
-      '@wrenyard/providers':
-        specifier: workspace:*
-        version: link:../../providers
       ajv:
         specifier: ^8.17.1
         version: 8.20.0
@@ -882,7 +941,7 @@ importers:
         version: link:../gateway
       '@wrenyard/models':
         specifier: workspace:*
-        version: link:../../models
+        version: link:../../ai/models
       '@wrenyard/paths':
         specifier: workspace:*
         version: link:../../paths
@@ -891,7 +950,7 @@ importers:
         version: link:../../protocol
       '@wrenyard/providers':
         specifier: workspace:*
-        version: link:../../providers
+        version: link:../../ai/provider
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -908,37 +967,6 @@ importers:
       tsx:
         specifier: ^4.22.4
         version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/metrics:
-    dependencies:
-      gpt-tokenizer:
-        specifier: 4.0.1
-        version: 4.0.1
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/models:
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
       typescript:
         specifier: ^5.9.0
         version: 5.9.3
@@ -960,35 +988,13 @@ importers:
 
   packages/protocol:
     dependencies:
+      '@wrenyard/ai-protocol':
+        specifier: workspace:*
+        version: link:../ai/protocol
       '@wrenyard/models':
         specifier: workspace:*
-        version: link:../models
+        version: link:../ai/models
     devDependencies:
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/providers:
-    dependencies:
-      '@wrenyard/models':
-        specifier: workspace:*
-        version: link:../models
-      '@wrenyard/paths':
-        specifier: workspace:*
-        version: link:../paths
-      smol-toml:
-        specifier: ^1.4.2
-        version: 1.9.1
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
       typescript:
         specifier: ^5.9.0
         version: 5.9.3

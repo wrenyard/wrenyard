@@ -17,7 +17,7 @@
  * automatic candidate after two consecutive failures on the same model. An
  * auxiliary call uses the route the selector ranked first.
  */
-import type { GatewayModel } from '@wrenyard/protocol/gateway';
+import type { GatewayModel } from '@wrenyard/ai-protocol';
 import { PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
 import {
   abortError,
@@ -35,7 +35,7 @@ import {
   type ToolSpec,
   type ToolChoice,
   type Usage,
-} from '../transport/index.ts';
+} from '@wrenyard/model-call/transport';
 import {
   callModelAttempt,
   settleWithAbort,
@@ -48,28 +48,7 @@ import {
 } from '@wrenyard/model-call';
 import type { ModelSpanFinishedEvent, ModelSpanStartedEvent } from '../ledger/events.ts';
 import type { AuxiliaryCallRole } from './roles.ts';
-import type { ModelMetadata } from './metadata.ts';
-
-// The pure metadata helper now lives in the shared model-call package; the
-// call runner re-exports it so existing consumers are unchanged.
-export { resolveModelMetadata } from '@wrenyard/model-call/metadata';
-export type { ModelMetadata } from '@wrenyard/model-call/metadata';
-
-// Reusable estimation and budget facts moved to `@wrenyard/model-call`; the
-// session entry points re-export them unchanged.
-export {
-  checkContextBudget,
-  estimateContentTokens,
-  estimateInputTokens,
-  estimateTokens,
-  hasSelectableReasoningEfforts,
-  isProviderDefaultReasoningOnly,
-  isReasoningEffortSupported,
-  IMAGE_INPUT_TOKEN_ESTIMATE,
-} from '@wrenyard/model-call';
-export type { ContextBudget, ContextBudgetFacts } from '@wrenyard/model-call';
-
-export type { Message, ModelContentPart, ToolCall, ToolSpec, Usage } from '../transport/index.ts';
+import type { ModelMetadata } from '@wrenyard/model-call/metadata';
 
 /** Every role that may issue a call. `reason` is the one expensive role. */
 export const CALL_ROLES = ['reason', 'memory-search', 'search', 'dispatch', 'reply', 'title', 'document', 'todo', 'vcs', 'project', 'status', 'suggestion', 'task-output'] as const;
@@ -144,7 +123,7 @@ export interface ModelCallInput {
   turn?: number;
   step?: number;
   /** Fully assembled request messages, supplied by the caller's view. */
-  messages: readonly import('../transport/index.ts').Message[];
+  messages: readonly import('@wrenyard/model-call/transport').Message[];
   /** Character count per assembled prompt layer. */
   layers: Record<string, number>;
   /** Required for `reason`; ignored for every other role. */
@@ -179,7 +158,7 @@ export interface ModelCallOutput {
   usage?: Usage;
   /** Native tool calls the model returned, in call order; empty when it returned none. */
   toolCalls: ToolCall[];
-  finishReason?: import('../transport/index.ts').FinishReason;
+  finishReason?: import('@wrenyard/model-call/transport').FinishReason;
   /** Measured facts of the call, produced by the transport. */
   metrics: ModelMetrics;
   /**
@@ -274,7 +253,7 @@ export class ModelCallError extends Error {
  */
 export function contextBudgetOf(
   publicId: string,
-  messages: readonly import('../transport/index.ts').Message[],
+  messages: readonly import('@wrenyard/model-call/transport').Message[],
   models: readonly GatewayModel[],
   requestedMaxOutputTokens?: number,
 ): ContextBudgetFacts {
@@ -289,8 +268,8 @@ export function contextBudgetOf(
  */
 export function sanitizeMessagesForRole(
   role: CallRole,
-  messages: readonly import('../transport/index.ts').Message[],
-): readonly import('../transport/index.ts').Message[] {
+  messages: readonly import('@wrenyard/model-call/transport').Message[],
+): readonly import('@wrenyard/model-call/transport').Message[] {
   if (role === 'reason') return messages;
   let replaced = false;
   const next = messages.map((message) => {

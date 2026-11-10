@@ -1,4 +1,4 @@
-import { countTPSTokens } from '@wrenyard/metrics';
+import { countTPSTokens } from '@wrenyard/model-call/metrics';
 import {
   GATEWAY_ADMISSION_REFUSED,
   GATEWAY_HEADERS,

@@ -14,7 +14,8 @@
  */
 import type { ReasoningEffort } from '@wrenyard/models';
 import type { SessionFile } from './attachments.ts';
-import type { AuxiliaryCallRole, ModelErrorKind, ModelMetrics } from './model.ts';
+import type { AuxiliaryCallRole } from './model.ts';
+import type { ModelErrorKind, ModelMetrics } from '@wrenyard/ai-protocol';
 
 // ─── Envelope ──────────────────────────────────────────────────────────────
 
