@@ -1,21 +1,10 @@
 /**
- * session public surface.
+ * Session public surface: the composition root.
  *
- * This module is the single composition root for the feature. It wires the
- * sibling modules into the engine ports and exposes the frozen `createSession`
- * contract:
- *
- *   ledger.ts         `Ledger` (init/append/read/listSessions/subscribe/close)
- *                     and the `LedgerEvent` union plus the snapshot types.
- *   workspace.ts      `WorkspaceFileSource` and the document catalogue.
- *   calls.ts          `createCallRunner({ transport, resolveAuxiliaryModel, append, now })`.
- *   transport/        `createModelTransport({ gateway })`, the one unified call
- *                     protocol, the three protocol adapters and the sole
- *                     same-route retry.
- *   media.ts          `FileStore` (attachments, artifact description, images).
- *
- * Everything else in the feature depends only on the port interfaces declared
- * in `ports.ts`.
+ * This module exports only what hosts consume; every name here is a commitment.
+ * Feature internals stay reachable inside the package through their own
+ * modules. The package subpaths are declared in `package.json` (`./model-metadata`,
+ * `./session-status`).
  */
 
 import { Ledger } from './ledger/store.ts';
@@ -25,6 +14,7 @@ import { createCallRunner, type CallRunner, type ReasonSelection, type Reasoning
 import { createModelTransport } from './transport/index.ts';
 import { FileStore } from './media.ts';
 import { createEngine } from './turn/engine.ts';
+import { SpanRecorder } from '@wrenyard/agent-loop';
 import {
   type CallsPort,
   type EnginePorts,
@@ -32,216 +22,51 @@ import {
   type SessionHost,
 } from './ports.ts';
 
+// ── Composition root contract ─────────────────────────────────────
 export type {
-  ActionBaseContext,
   AgentToolPort,
-  BuiltView,
-  CallFailureSummary,
-  CallRunRequest,
-  CallRunResult,
-  CallsPort,
-  EnginePorts,
-  FilesPort,
-  LedgerPort,
   LiveCall,
   ProjectInfo,
-  RecalledFile,
   Session,
   SessionHost,
-  SessionViewInfo,
-  SnapshotInput,
-  SnapshotProjectInput,
-  TurnPhase,
-  ViewMessage,
   WorkspaceMemoryPort,
 } from './ports.ts';
-export type { CompileViewInput } from './auxiliary/dispatch.ts';
-export {
-  createWorkspaceMemory,
-  type MemoryChange,
-  type MemoryFileEntry,
-  type MemoryFileText,
-  type MemoryRemoval,
-} from './memory-write.ts';
-export type { DocSearchViewInput } from './auxiliary/search.ts';
-export type { MemorySearchViewInput } from './auxiliary/memory.ts';
-export type { ReasonViewInput } from './reasoning/prompt.ts';
-export type { ReplyViewInput } from './auxiliary/reply.ts';
-export type { TitleViewInput } from './auxiliary/title.ts';
-export type {
-  ActionExecutionOutcome,
-  ActionRunContext,
-  ParsedAction,
-} from './reasoning/actions.ts';
-export { ActionRunner } from './reasoning/actions.ts';
-export type { SchemaValidation } from './auxiliary/dispatch.ts';
-export { validateJsonSchema } from './auxiliary/dispatch.ts';
-export type {
-  AuxiliaryRoute,
-  CallErrorFact,
-  CallRole,
-  ModelCallInput,
-  ModelCallOutput,
-  ReasonSelection,
-  ReasoningRetryPolicy,
-  SpanEventDraft,
-} from './model/request.ts';
-export {
-  CALL_ROLES,
-  IMAGE_INPUT_TOKEN_ESTIMATE,
-  checkContextBudget,
-  estimateContentTokens,
-  estimateInputTokens,
-  estimateTokens,
-  isReasoningEffortSupported,
-  resolveModelMetadata,
-  sanitizeMessagesForRole,
-  createCallRunner,
-} from './model/request.ts';
-export type { CallRunner } from './model/request.ts';
-export type { AuxiliaryCallRole } from './model/roles.ts';
-export { AUXILIARY_ROLE_ORDER } from './model/roles.ts';
-export { ROLE_ROUTE_REQUIREMENTS, AUXILIARY_LADDER, AUXILIARY_SCORE_WEIGHTS } from './model/route-requirements.ts';
-export type { AuxiliaryRoutePreview } from './model/roles.ts';
-export type { AttachmentInput, SessionFile, TaskArtifact } from './media.ts';
-export { FileStore, MEDIA_LIMITS } from './media.ts';
-export type { DocCatalogEntry } from './workspace.ts';
-export type {
-  ContextInspectCalibration,
-  ContextInspectFiles,
-  ContextInspectModel,
-  ContextInspectRequest,
-  ContextInspection,
-  ContextItem,
-  ContextItemKind,
-  ContextLayerId,
-  ContextLayerTokens,
-} from './context/inspect.ts';
-export { ContextInspector } from './context/inspect.ts';
-export type {
-  FinishReason,
-  Message,
-  MessageToolCall,
-  ModelAttempt,
-  ModelContentPart,
-  ModelErrorKind,
-  ModelEvent,
-  ModelRequest,
-  ModelMetrics,
-  ModelResult,
-  ModelToolCall,
-  ModelTransport,
-  ToolCall,
-  ToolChoice,
-  ToolSpec,
-  Usage,
-} from './transport/index.ts';
-export {
-  CHAT_REQUEST_MAX_BYTES,
-  GATEWAY_REQUEST_MAX_BYTES,
-  MESSAGES_REQUEST_MAX_BYTES,
-  ModelError,
-  RESPONSES_REQUEST_MAX_BYTES,
-  SESSION_PROTOCOLS,
-  abortError,
-  adapterForProtocol,
-  classifyStatus,
-  createModelTransport,
-  isContextOverflowError,
-  isModelError,
-  isQuotaCode,
-  normalizeStreamError,
-  type GatewayConnectionSource,
-  type ModelTransportOptions,
-  type SessionProtocol,
-} from './transport/index.ts';
-// The pure protocol-selection helpers come from the browser-safe protocol
-// module, so exporting them never pulls the Node transport in with them.
-export { selectSessionProtocol, supportsSession } from './transport/protocol.ts';
-export { ACTION_TOOL } from './reasoning/tool.ts';
-export { REPLY_TOOL } from './auxiliary/reply.ts';
-export type {
-  ActionFinishedEvent,
-  ActionStartedEvent,
-  ActionStatus,
-  ActionTitledEvent,
-  ActionType,
-  DocPick,
-  DocumentContentEvent,
-  DocumentFoundEvent,
-  FilesAttachedEvent,
-  LedgerEvent,
-  LedgerEventBase,
-  LedgerEventDraft,
-  LedgerEventType,
-  MemoryRecalledEvent,
-  ModelSpanFinishedEvent,
-  ModelSpanRequest,
-  ModelSpanStartedEvent,
-  ProjectSnapshot,
-  ReasoningCompletedEvent,
-  ReasoningThinkingEvent,
-  SessionCreatedEvent,
-  SessionSummary,
-  SpanContextEvent,
-  SpanError,
-  SpanFinishedEvent,
-  SpanKind,
-  SpanStartedEvent,
-  SpanStatus,
-  StepFinishedEvent,
-  StepStartedEvent,
-  StepStatus,
-  SystemNoticeEvent,
-  ReplySentEvent,
-  SessionTitledEvent,
-  TaskBrief,
-  TaskSpanFinishedEvent,
-  TaskSpanMetrics,
-  TaskSpanRequest,
-  TaskSpanStartedEvent,
-  TurnFinishedEvent,
-  TurnInterruptedEvent,
-  TurnModel,
-  TurnStartedEvent,
-  TurnStatus,
-  WorkspaceChangedEvent,
-  WorkspaceSnapshot,
-} from './ledger/store.ts';
-export { REPLY_FALLBACK_SOURCES, collectSessionFiles, stepId, turnId } from './ledger/store.ts';
-import { SpanRecorder } from '@wrenyard/agent-loop';
+export type { DocumentCommitContext } from './document-commit.ts';
 
-// The loop, its span recorder and the auxiliary definitions live in
-// `@wrenyard/agent-loop`; re-export the moved types so the session surface
-// keeps resolving for existing consumers.
-export { SpanRecorder } from '@wrenyard/agent-loop';
-export type {
-  AuxiliaryDefinition,
-  AuxiliaryDefinitionId,
-  AuxiliaryLoopOptions,
-  AuxiliaryLoopResult,
-  AuxiliaryRecordPort,
-  AuxiliaryRunnerPorts,
-  DefinitionPorts,
-  LoopRecord,
-  LoopRole,
-  LoopTool,
-  MethodCatalogPort,
-  MethodEffect,
-  MethodInfo,
-  ModelSpanDraft,
-  SpanContextDraft,
-  WorkspaceUpdate,
-} from '@wrenyard/agent-loop';
+// ── Ledger ────────────────────────────────────────────────────────
+export {
+  Ledger,
+  type ActionType,
+  type LedgerEvent,
+  type ReplySentEvent,
+  type SessionSummary,
+  type TurnModel,
+  type TurnStatus,
+} from './ledger/store.ts';
+
+// ── Workspace memory ──────────────────────────────────────────────
+export { createWorkspaceMemory } from './memory-write.ts';
+
+// ── Model routing ─────────────────────────────────────────────────
+export {
+  createCallRunner,
+  resolveModelMetadata,
+  type AuxiliaryRoute,
+} from './model/request.ts';
+export { AUXILIARY_ROLE_ORDER, type AuxiliaryRoutePreview } from './model/roles.ts';
+export { ROLE_ROUTE_REQUIREMENTS } from './model/route-requirements.ts';
+
+// ── Transport ─────────────────────────────────────────────────────
+export { createModelTransport, type ToolSpec } from './transport/index.ts';
+
+// ── Shapes hosts pass across the boundary ─────────────────────────
+export type { TaskArtifact } from './media.ts';
 
 /**
  * Options a host passes beside the host itself. Both members are optional: an
  * automatic main reasoning turn without `selectAutomaticRoutes` keeps the model
  * it started with, and retries without `retryPolicy` are on.
  */
-export { Ledger } from './ledger/store.ts';
-export type { DocumentCommit, DocumentCommitContext } from './document-commit.ts';
-
 export interface CreateSessionOptions {
   /** Shared authority for workspace documents and session events. */
   ledger?: Ledger;
