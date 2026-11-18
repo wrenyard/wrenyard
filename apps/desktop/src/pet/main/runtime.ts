@@ -32,8 +32,8 @@ export interface DesktopPetRuntimeOptions {
  * Desktop-owned Pet runtime. It owns only transparent observation windows and
  * read-only projections; the host owns lifecycle, persistence, tray UI and
  * product navigation. Visibility is orthogonal to disposal: `setVisible(false)`
- * pauses the model/animation ticks and hides windows, while `stop()` tears the
- * module down completely.
+ * pauses the model/animation ticks, hides the house and releases worker
+ * renderers, while `stop()` tears the module down completely.
  */
 export class DesktopPetRuntime {
   private statusValue: PetRuntimeStatus = 'stopped';
@@ -83,21 +83,22 @@ export class DesktopPetRuntime {
   }
 
   /**
-   * Overall visibility toggle, independent of disposal. Hiding pauses the
-   * model and animation ticks and hides every entity window; showing resumes
-   * ticks and re-shows the windows whose entity type is enabled, starting from
-   * the current shared snapshot rather than replaying missed events.
+   * Overall visibility toggle, independent of disposal. Hiding marks the entity
+   * manager hidden before pausing ticks: it releases worker windows and later
+   * subscription snapshots only update the model. Showing applies one current
+   * model snapshot, then resumes ticks without replaying missed events.
    */
   setVisible(visible: boolean): void {
     this.visibility = visible ? 'visible' : 'hidden';
     if (this.statusValue !== 'running') return;
     if (visible) {
       this.model?.tick();
-      this.startTicks();
       this.entityManager?.setVisible(true);
+      if (this.model) this.entityManager?.syncSnapshot(this.model.snapshot());
+      this.startTicks();
     } else {
-      this.stopTicks();
       this.entityManager?.setVisible(false);
+      this.stopTicks();
     }
   }
 
@@ -146,14 +147,17 @@ export class DesktopPetRuntime {
       },
       debugRenderer: this.options.debugRenderer,
     });
+    // Subscription replay can publish activity during setup. Apply visibility
+    // before creating windows so a hidden start never allocates worker renderers.
+    this.entityManager.setVisible(this.visibility === 'visible');
     this.entityManager.start();
     this.model.onChange((snapshot) => this.entityManager?.syncSnapshot(snapshot));
     this.entityManager.syncSnapshot(this.model.snapshot());
     this.applyProvidersToHouseTips(this.quotaProviders);
 
     // Consume the shared Desktop subscriptions. Attaching replays the latest
-    // stats/activity round so a hidden-then-shown Pet resumes from the current
-    // snapshot instead of the events it missed.
+    // stats/activity round and keeps the model current while hidden; showing
+    // applies that model's snapshot without replaying missed events.
     this.unsubscribe = this.options.subscriptions.subscribe(this.subscriptionHandlers());
 
     this.registerIpcHandlers();

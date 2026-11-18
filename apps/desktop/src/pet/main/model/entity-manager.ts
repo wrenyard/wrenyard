@@ -123,10 +123,7 @@ export class EntityManager {
     screen.removeListener('display-metrics-changed', this.onDisplayChanged);
     screen.removeListener('display-added', this.onDisplayChanged);
     screen.removeListener('display-removed', this.onDisplayChanged);
-    for (const worker of this.workers.values()) {
-      if (!worker.window.isDestroyed()) worker.window.destroy();
-    }
-    this.workers.clear();
+    this.releaseWorkers();
     if (this.house && !this.house.isDestroyed()) {
       this.house.destroy();
     }
@@ -182,6 +179,13 @@ export class EntityManager {
       this.lastDailyStats = snapshot.dailyStats;
     }
     this.sendHouseUpdate();
+
+    if (!this.visible) {
+      // Hidden snapshots only update the house projection. Worker windows were
+      // released at the visibility switch and are restored from one current
+      // snapshot when shown, so no paused tick is needed for cleanup.
+      return;
+    }
 
     const liveKeys = new Set<string>();
     for (const { view, infoCard } of workerUpdates) {
@@ -313,13 +317,14 @@ export class EntityManager {
   }
 
   /**
-   * Overall Pet visibility, distinct from per-entity toggles. Hiding keeps
-   * every window alive so re-showing resumes from the current snapshot without
-   * a rebuild; only a real dispose destroys windows. When shown, each window is
+   * Overall Pet visibility, distinct from per-entity toggles. Hiding releases
+   * worker windows immediately and keeps only the house hidden; the caller
+   * syncs the current model snapshot when showing. When shown, each window is
    * re-shown only if its own entity type is enabled.
    */
   setVisible(visible: boolean): void {
     this.visible = visible;
+    if (!visible) this.releaseWorkers();
     if (this.house && !this.house.isDestroyed()) {
       if (visible && this.config.entities.house) this.house.showInactive();
       else this.house.hide();
@@ -678,6 +683,16 @@ export class EntityManager {
       infoCard: worker.infoCard,
     };
     worker.window.webContents.send('worker:update', state);
+  }
+
+  /** Destroy all worker renderers and their retirement state in one pass. */
+  private releaseWorkers(): void {
+    for (const worker of this.workers.values()) {
+      this.destroyWorker(worker);
+    }
+    this.workers.clear();
+    this.retiredKeys.clear();
+    this.workerDragGrab = null;
   }
 
   private destroyWorker(worker: WorkerEntity): void {
