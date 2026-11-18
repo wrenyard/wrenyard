@@ -1,4 +1,5 @@
 /** Shared loop mechanics; session definitions and task-output policy live with their owners. */
+export { runAgentLoop } from './agent-loop.ts';
 export {
   bindCatalog,
   buildAuxiliaryUser,
@@ -8,19 +9,34 @@ export {
   protocolTools,
   runAuxiliaryLoop,
   toActionOutcome,
-} from './loop.ts';
+} from './auxiliary-loop.ts';
 export type {
   AuxiliaryLoopOptions,
   AuxiliaryLoopResult,
   LoopDeps,
   LoopRecord,
+  LoopRole,
   LoopTool,
   MethodEffect,
-} from './loop.ts';
+} from './auxiliary-loop.ts';
 export { SpanRecorder } from './span.ts';
+export type {
+  ModelSpanDraft,
+  ModelSpanFinishedDraft,
+  ModelSpanRequest,
+  ModelSpanStartedDraft,
+  SpanContextDraft,
+  SpanError,
+  SpanKind,
+  SpanRoute,
+  SpanStatus,
+} from './span.ts';
 export type {
   ActionExecutionOutcome,
   ActionRunContext,
+  AgentLoopModelStepOutcome,
+  AgentLoopStepOutcome,
+  AgentLoopStepStatus,
   CallRunRequest,
   CallRunResult,
   CallsPort,
@@ -28,7 +44,8 @@ export type {
   Message,
   MethodCatalogPort,
   MethodInfo,
+  RunAgentLoopOptions,
   ToolCall,
   ToolChoice,
   ToolSpec,
-} from './ports.ts';
+} from './types.ts';

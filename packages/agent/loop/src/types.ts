@@ -1,5 +1,5 @@
 /**
- * Loop-owned port types.
+ * Loop-owned port and contract types.
  *
  * The loop package must never import the session ledger, the session turn
  * runtime or a daemon protocol schema. The vocabulary it needs is therefore
@@ -18,6 +18,33 @@ import type {
   RetryAfterSource,
   Usage,
 } from '@wrenyard/ai-protocol'
+
+// ─── Multi-step agent loop contracts ────────────────────────────────────────
+
+/** Final status of one step recorded when its execution completes or unwinds. */
+export type AgentLoopStepStatus = 'done' | 'failed' | 'interrupted';
+
+/** Result of invoking the model for a single agent loop step. */
+export type AgentLoopModelStepOutcome =
+  | { ok: true; terminal?: boolean }
+  | { ok: false; error?: string; failure?: unknown };
+
+/** Result of running a step's post-model actions and validation checks. */
+export interface AgentLoopStepOutcome {
+  continueLoop: boolean;
+}
+
+/** Host callbacks driving the generic multi-step agent loop. */
+export interface RunAgentLoopOptions {
+  isFinished(): boolean;
+  isAborted(): boolean;
+  prepareStep(step: number): Promise<void>;
+  runModelStep(step: number): Promise<AgentLoopModelStepOutcome>;
+  executeStepActions(step: number): Promise<AgentLoopStepOutcome>;
+  finishStep(step: number, status: AgentLoopStepStatus): Promise<void>;
+  onTurnFailed(error: string | undefined, failure?: unknown): Promise<void>;
+  onTurnException(error: unknown): Promise<void>;
+}
 
 // ─── Model wire vocabulary ──────────────────────────────────────────────────
 

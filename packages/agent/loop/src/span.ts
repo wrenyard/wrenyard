@@ -22,7 +22,7 @@ import type {
   ModelMetrics,
   ReasoningEffort,
   Usage,
-} from './ports.ts';
+} from './types.ts';
 
 export type SpanKind = 'reasoning' | 'auxiliary';
 export type SpanStatus = 'ok' | 'failed' | 'aborted' | 'interrupted';

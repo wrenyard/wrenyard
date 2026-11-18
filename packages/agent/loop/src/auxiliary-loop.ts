@@ -32,7 +32,7 @@ import type {
   ToolSpec,
   Usage,
   WorkspaceChange,
-} from './ports.ts';
+} from './types.ts';
 import type { AuxiliaryRunRecordInput, TaskUsage } from '@wrenyard/protocol';
 
 /** Which auxiliary task is running; used for ledger call attribution. */
