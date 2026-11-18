@@ -21,14 +21,19 @@ updates. There is no separate agent runtime binary or Go build.
   `@wrenyard/daemon/supervisor`.
 - `packages/protocol` contains type-only IPC definitions grouped by feature.
   The session contract is implemented: the daemon hosts the ledger session over
-  `@wrenyard/session` and exposes the `session.*` IPC methods, with Desktop as
+  `@wrenyard/harness` (backed by `@wrenyard/session` and `@wrenyard/session-jsonl`)
+  and exposes the `session.*` IPC methods, with Desktop as
   the conversation client. Exec and provider have daemon handlers.
-- `packages/features/session` is the conversation core. Each main reasoning
+- `packages/session/session` (`@wrenyard/session`) owns the runtime-agnostic
+  session lifecycle, timeline, projections, and crash recovery, while
+  `packages/session/session-jsonl` (`@wrenyard/session-jsonl`) provides the durable
+  JSONL + `fsync` + `index.json` persistence backend.
+- `packages/harness` (`@wrenyard/harness`) is the conversation core. Each main reasoning
   request appends to the previous one, the main model declares typed `search`,
   `dispatch`, `document`, `vcs` and `project` actions through one native tool,
   cheap auxiliary models carry them out, and the request runs over Chat
   Completions, Responses or Anthropic Messages depending on the protocols the
-  model declares. See the [session feature](../packages/features/session/README.md).
+  model declares. See the [session harness](../packages/harness/README.md) and [session core](../packages/session/session/README.md).
 - Bots are daemon-hosted agents defined by `<workspace>/bots/<id>/` (or `<config root>/bots/<id>/` for a device-only bot), with each device's routines in `<config root>/bots/<id>/routines/`.
   The bot kernel queues wakes per bot, runs one turn at a time per bot over the
   session engine with the bot's own system prompt and its enabled native tools

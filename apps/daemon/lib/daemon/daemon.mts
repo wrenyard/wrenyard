@@ -5,7 +5,7 @@ import {
   type GatewayHealthWindowLike,
   type SelectorInputPort,
 } from '@wrenyard/auto-routing'
-import { ROLE_ROUTE_REQUIREMENTS } from '@wrenyard/session'
+import { ROLE_ROUTE_REQUIREMENTS } from '@wrenyard/harness'
 import { TASK_OUTPUT_ROUTE_REQUIREMENT } from '@wrenyard/task'
 import { BOT_ROUTING_REQUIREMENT } from './services/bot-agents/routing.mts'
 import { readAuxiliaryRoutingSettings } from '../config/task-settings.mts'
@@ -44,7 +44,8 @@ import type {
   WorkspaceSwitchResult,
 } from '../protocol/registry.mts'
 import { TaskService, isTaskRunRejection } from '../core/task/service.mts'
-import { Ledger, createSession, createWorkspaceMemory, type Session } from '@wrenyard/session'
+import { createDocumentAuthority, createSession, createWorkspaceMemory, type Session } from '@wrenyard/harness'
+import { createJsonlPersistence } from '@wrenyard/session-jsonl'
 import { resolveModelMetadata } from '@wrenyard/ai/metadata'
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
@@ -1439,9 +1440,17 @@ async function createForemanDaemonResources(
     })
     // init never blocks on document state: it only emits a bounded
     // presence-only diagnostic for a preserved legacy document-commit.json.
-    const documentLedger = new Ledger({ workspaceRoot, stateRoot: sessionStateRoot })
-    await documentLedger.init()
-    const workspaceDocService = new WorkspaceDocService(workspaceRoot, documentLedger)
+    const sessionPersistence = createJsonlPersistence({ workspaceRoot, stateRoot: sessionStateRoot })
+    await sessionPersistence.init()
+    const documentAuthority = createDocumentAuthority({
+      workspaceRoot,
+      stateRoot: sessionStateRoot,
+      persistence: sessionPersistence,
+    })
+    if (documentAuthority.hasLegacyPending()) {
+      console.warn('wrenyard: a preserved legacy document-commit.json exists; it is left untouched and the current document on disk should be reread')
+    }
+    const workspaceDocService = new WorkspaceDocService(workspaceRoot, documentAuthority)
     // The todo index is disposable and lives under the daemon local state root
     // (keyed by workspace), never inside the workspace tree or the runtime DB.
     const workspaceTodoService = new WorkspaceTodoService(
@@ -1615,7 +1624,11 @@ async function createForemanDaemonResources(
     })
     // A bot turn that fails twice on the same model continues on the next route
     // of the same automatic selection, inside the same turn.
-    const session = createSession(daemonSessionHost, { ledger: documentLedger, selectAutomaticRoutes: async () => selectModels() })
+    const session = createSession(daemonSessionHost, {
+      persistence: sessionPersistence,
+      documentCommitter: documentAuthority.committer,
+      selectAutomaticRoutes: async () => selectModels(),
+    })
     // The daemon-owned scheduler persists to the same state root as the session
     // ledger. A due routine wakes its owning bot agent through the `wake`
     // callback instead of sending into a session; the bot agent kernel owns the

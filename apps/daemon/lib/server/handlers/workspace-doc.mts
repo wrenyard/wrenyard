@@ -6,7 +6,7 @@
  * this module has no node:fs/node:path imports.
  */
 
-import type { DocumentCommitContext } from '@wrenyard/session'
+import type { DocumentCommitContext } from '@wrenyard/harness'
 import { INVALID_PARAMS, ProtocolError } from '../../protocol/errors.mts'
 import type {
   WorkspaceDocListParams, WorkspaceDocListResult,

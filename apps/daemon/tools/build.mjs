@@ -12,9 +12,9 @@ const repo = join(root, '..', '..');
 const dist = join(root, 'dist');
 const readJson = async (file) => JSON.parse(await readFile(file, 'utf8'));
 
-const session = await readJson(join(repo, 'packages', 'features', 'session', 'package.json'));
+const session = await readJson(join(repo, 'packages', 'harness', 'package.json'));
 const execution = await readJson(join(repo, 'packages', 'execution', 'package.json'));
-const requireFromSession = createRequire(join(repo, 'packages', 'features', 'session', 'package.json'));
+const requireFromSession = createRequire(join(repo, 'packages', 'harness', 'package.json'));
 // A package may not export ./package.json (sharp does not), so the manifest is
 // found by walking up from the resolved entry instead of requiring the subpath.
 const exact = async (name, range) => {

@@ -30,7 +30,8 @@ contain, and must not grow, any of the following:
 - desktop UI state, view models, or presentation projections
 - runtime dependency on any Wrenyard business package
 
-It also does not implement the session engine: `@wrenyard/session` owns the
+It also does not implement the session engine: `@wrenyard/harness` (layered over
+`@wrenyard/session` and `@wrenyard/session-jsonl`) owns the
 append-only session ledger, the workspace documents and recovery, and declares
 the product session DTOs it projects. This package no longer declares a
 `./session` subpath; the daemon's `session.*` wire surface is owned by
@@ -39,7 +40,7 @@ the product session DTOs it projects. This package no longer declares a
 ### Relationship to existing code
 
 This package is **not** the daemon session surface. The `session.*` conversation
-API lives on the daemon IPC and is built over `@wrenyard/session`; its
+API lives on the daemon IPC and is built over `@wrenyard/harness`; its
 params/results are declared with the daemon-owned schemas under
 `apps/daemon/lib/protocol`, not here. The JSON-RPC envelope shape is mirrored so
 an adapter can carry both, and no daemon wire type is imported here.
@@ -86,8 +87,8 @@ but nothing in this task runs it.
 
 The daemon IPC exposes the append-only session ledger as eight `session.*`
 methods. Their params/results are declared by the daemon-owned schemas in
-`apps/daemon/lib/protocol/methods/session.mts`; `@wrenyard/session` is the
-engine behind them.
+`apps/daemon/lib/protocol/methods/session.mts`; `@wrenyard/harness` and
+`@wrenyard/session` are the engine behind them.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -310,8 +311,8 @@ over a local HTTP server. Integrity is the sha256.
 
 ## Implementation status
 
-The session contract is the real, implemented surface: `@wrenyard/session` owns
-the append-only ledger, and the daemon's `session.*` IPC methods project and
+The session contract is the real, implemented surface: `@wrenyard/harness` owns
+the append-only conversation orchestration over `@wrenyard/session`, and the daemon's `session.*` IPC methods project and
 mutate it against the schemas declared in `apps/daemon/lib/protocol`. Exec and
 provider handlers also exist in the daemon. The protocol package itself has no
 IPC runtime wiring and never imports a feature implementation; its only runtime

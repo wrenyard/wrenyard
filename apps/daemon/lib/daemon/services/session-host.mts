@@ -3,14 +3,14 @@ import { readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import type { WrenyardGatewayConnection } from '@wrenyard/control'
 import type { TaskRunFacts } from '@wrenyard/protocol/task'
-import { getAuxiliaryDefinition } from '@wrenyard/session'
+import { getAuxiliaryDefinition } from '@wrenyard/harness'
 import {
   AUXILIARY_ROLE_ORDER,
   type AuxiliaryRoutePreview,
   type ProjectInfo,
   type SessionHost,
   type TaskArtifact,
-} from '@wrenyard/session'
+} from '@wrenyard/harness'
 import { ProjectManager } from '../../core/project/manager.mts'
 import { getDb } from '../../db/connection.mts'
 import { AuxiliaryRunStore } from '../../db/stores/auxiliary-run-store.mts'
@@ -52,7 +52,7 @@ const SESSION_CALLABLE_METHODS = new Set([
  * The method allowlist of the auxiliary definition currently running, or
  * undefined for an ordinary session call. The loop's catalog adapter sets
  * `auxiliaryDefinitionId`, whose definition data lives in
- * `@wrenyard/session`; the daemon never re-declares those lists.
+ * `@wrenyard/harness`; the daemon never re-declares those lists.
  */
 function auxiliaryAllowlist(
   context: { auxiliaryDefinitionId?: string } | undefined,
@@ -229,7 +229,7 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
   const { stateRoot, taskService } = options
   const projects = new ProjectManager({ workspaceRoot: options.workspaceRoot })
   // One row per finished auxiliary run, success or failure, straight into the
-  // stats store; the session package stays free of any store import. The db is
+  // stats store; the harness package stays free of any store import. The db is
   // resolved lazily so host construction never depends on init order.
   const auxiliaryRunStoreOf = (): AuxiliaryRunStore => new AuxiliaryRunStore(getDb())
   const listProjects = async (): Promise<ProjectInfo[]> => projects.listProjects().map(project => ({

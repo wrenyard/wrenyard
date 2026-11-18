@@ -17,9 +17,9 @@ import {
   type AuxiliaryRoute,
   type Session,
   type WorkspaceMemoryPort,
-} from '@wrenyard/session'
+} from '@wrenyard/harness'
 import type { ToolSpec } from '@wrenyard/ai/transport'
-import { errorTooltip } from '@wrenyard/session/session-status'
+import { errorTooltip } from '@wrenyard/harness/session-status'
 import type { TodoStatus, WorkspaceTodoService } from '../workspace-todo-service.mts'
 import {
   assertRealInside,

@@ -11,7 +11,7 @@
  * speaking it. Only a turn with neither falls back to its last published reply.
  */
 
-import type { LedgerEvent } from '@wrenyard/session'
+import type { LedgerEvent } from '@wrenyard/harness'
 
 /** What one turn has published so far. */
 interface TurnRecord {

@@ -18,7 +18,8 @@ screenshots ([中文](../README.zh-CN.md)).
 | Document | What it covers |
 | --- | --- |
 | [Architecture](architecture.md) | Package boundaries, the daemon, the gateway, execution and state |
-| [Session feature](../packages/features/session/README.md) | The append-only conversation ledger and how the main model acts |
+| [Session core](../packages/session/session/README.md) | Runtime-agnostic session lifecycle, timeline, projections, and crash recovery |
+| [Session harness](../packages/harness/README.md) | Conversation orchestrator, XML prompt projections, auxiliaries, and workspace tools |
 
 ## Developing Wrenyard
 

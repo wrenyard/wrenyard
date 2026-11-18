@@ -1,4 +1,4 @@
-import type { AuxiliaryRoute } from '@wrenyard/session'
+import type { AuxiliaryRoute } from '@wrenyard/harness'
 import type { ForemanServiceConfig } from '../../config/index.mts'
 
 /** The config fields one auxiliary model resolution reads. */

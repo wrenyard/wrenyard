@@ -1,4 +1,4 @@
-import type { Session, TurnModel } from '@wrenyard/session'
+import type { Session, TurnModel } from '@wrenyard/harness'
 import type { AgentModelRoute } from './bot-agents/tools.mts'
 
 /** The model-route source both the bot session tools and session.send share. */

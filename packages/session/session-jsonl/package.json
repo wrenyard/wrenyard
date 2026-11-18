@@ -1,0 +1,22 @@
+{
+  "name": "@wrenyard/session-jsonl",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "JSONL + fsync + index.json persistence adapter implementing @wrenyard/session SessionPersistencePort.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@wrenyard/protocol": "workspace:*",
+    "@wrenyard/session": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=24.19.0"
+  }
+}

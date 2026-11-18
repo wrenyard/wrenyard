@@ -20,7 +20,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { estimateTokens } from '@wrenyard/ai'
-import { errorTooltip } from '@wrenyard/session/session-status'
+import { errorTooltip } from '@wrenyard/harness/session-status'
 import {
   createSession,
   createWorkspaceMemory,
@@ -33,7 +33,8 @@ import {
   type SessionSummary,
   type TurnStatus,
   type WorkspaceMemoryPort,
-} from '@wrenyard/session'
+} from '@wrenyard/harness'
+import { createJsonlPersistence } from '@wrenyard/session-jsonl'
 import type { ToolSpec } from '@wrenyard/ai/transport'
 import type { RoutineRecord } from '../../../protocol/methods/routine.mts'
 import type { Scheduler } from '../scheduler.mts'
@@ -730,7 +731,15 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   })
 
   function contextSession(): Session {
-    if (context === undefined) context = createSession(botHost, { selectAutomaticRoutes: () => options.selectModels() })
+    if (context === undefined) {
+      context = createSession(botHost, {
+        persistence: createJsonlPersistence({
+          stateRoot: options.stateDir,
+          workspaceRoot: options.host.workspaceRoot,
+        }),
+        selectAutomaticRoutes: () => options.selectModels(),
+      })
+    }
     return context
   }
 

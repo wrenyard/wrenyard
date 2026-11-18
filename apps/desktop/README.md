@@ -16,7 +16,7 @@ while sessions run in the daemon-owned session feature and Pet remains an intern
 ```
 Desktop renderer + preload + Electron main
   |-- window, tray, product settings, Pet
-  `-- session bridge -> session IPC -> daemon session feature (@wrenyard/session)
+  `-- session bridge -> session IPC -> daemon session harness (@wrenyard/harness)
 ```
 
 - **Product navigation** — a 48px Wrenyard Activity Bar keeps a fixed,
@@ -155,7 +155,7 @@ Desktop renderer + preload + Electron main
   sessions, session history, summary preference, task ownership and recovery.
   Desktop receives versioned product snapshots over IPC. Closing Desktop
   detaches the view; daemon shutdown releases the backend. See
-  [session feature](../../packages/features/session/README.md).
+  [session harness](../../packages/harness/README.md).
 - **BrowserWindow hardening** — `contextIsolation: true`, `nodeIntegration:
   false`, `sandbox: true`, a bounded shell preload bridge, `window.open`
   denied, navigation away from the exact origin denied, all permission
@@ -199,7 +199,7 @@ Desktop is one Electron window with a persistent frame:
 | Command | Purpose |
 | --- | --- |
 | `pnpm --filter @wrenyard/desktop run build` | build the Desktop bundle (`dist/`) |
-| `pnpm --filter @wrenyard/desktop test` | Desktop shell tests (session engine tests live in packages/features/session/test) |
+| `pnpm --filter @wrenyard/desktop test` | Desktop shell tests (session core & persistence tests live in packages/session) |
 
 From the repository root: `pnpm --filter @wrenyard/desktop dev` runs
 `electron-vite dev --watch` (renderer HMR with React Refresh, preload changes

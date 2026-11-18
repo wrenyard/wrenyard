@@ -1,7 +1,7 @@
 import {
   type LiveCall,
   type Session,
-} from '@wrenyard/session'
+} from '@wrenyard/harness'
 import { INVALID_PARAMS, ProtocolError } from '../../protocol/errors.mts'
 import type {
   SessionEventsParams,

@@ -328,10 +328,10 @@ export function stageDaemon(stage) {
   copyFile(path.join(bundle, 'daemon.mjs'), path.join(daemonDir, 'daemon.mjs'));
   copyFile(path.join(bundle, 'package.json'), path.join(daemonDir, 'package.json'));
   const nodeModules = path.join(daemonDir, 'node_modules');
-  const session = path.join(ROOT, 'packages', 'features', 'session');
+  const harness = path.join(ROOT, 'packages', 'harness');
   const { dependencies } = readJson(path.join(bundle, 'package.json'));
   copyDependencyClosure([
-    ...Object.keys(dependencies).map((name) => [name, name === 'better-sqlite3' ? path.join(ROOT, 'packages', 'execution') : session]),
+    ...Object.keys(dependencies).map((name) => [name, name === 'better-sqlite3' ? path.join(ROOT, 'packages', 'execution') : harness]),
   ], nodeModules);
   pruneDependencyDevFiles(nodeModules);
   pruneNativePackages(nodeModules);

@@ -107,6 +107,9 @@ importers:
       '@wrenyard/gateway':
         specifier: workspace:*
         version: link:../../packages/features/gateway
+      '@wrenyard/harness':
+        specifier: workspace:*
+        version: link:../../packages/harness
       '@wrenyard/loop':
         specifier: workspace:*
         version: link:../../packages/agent/loop
@@ -130,7 +133,10 @@ importers:
         version: link:../../packages/features/quota
       '@wrenyard/session':
         specifier: workspace:*
-        version: link:../../packages/features/session
+        version: link:../../packages/session/session
+      '@wrenyard/session-jsonl':
+        specifier: workspace:*
+        version: link:../../packages/session/session-jsonl
       '@wrenyard/task':
         specifier: workspace:*
         version: link:../../packages/features/task
@@ -256,9 +262,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: 5.2.0
         version: 5.2.0(supports-color@7.2.0)(vite@6.4.4(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0))
-      '@wrenyard/session':
+      '@wrenyard/harness':
         specifier: workspace:*
-        version: link:../../packages/features/session
+        version: link:../../packages/harness
       '@xyflow/react':
         specifier: ^12.12.0
         version: 12.12.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(immer@11.1.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -882,55 +888,6 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
-  packages/features/session:
-    dependencies:
-      '@wrenyard/ai':
-        specifier: workspace:*
-        version: link:../../ai/ai
-      '@wrenyard/ai-protocol':
-        specifier: workspace:*
-        version: link:../../ai/protocol
-      '@wrenyard/auto-routing':
-        specifier: workspace:*
-        version: link:../auto-routing
-      '@wrenyard/loop':
-        specifier: workspace:*
-        version: link:../../agent/loop
-      '@wrenyard/models':
-        specifier: workspace:*
-        version: link:../../ai/models
-      '@wrenyard/protocol':
-        specifier: workspace:*
-        version: link:../../protocol
-      ajv:
-        specifier: ^8.17.1
-        version: 8.20.0
-      diff:
-        specifier: 9.0.0
-        version: 9.0.0
-      gpt-tokenizer:
-        specifier: 4.0.1
-        version: 4.0.1
-      sharp:
-        specifier: 0.35.5
-        version: 0.35.5(@types/node@22.20.1)
-      yaml:
-        specifier: ^2.7.0
-        version: 2.9.0
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
   packages/features/task:
     dependencies:
       '@wrenyard/auto-routing':
@@ -974,6 +931,58 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  packages/harness:
+    dependencies:
+      '@wrenyard/ai':
+        specifier: workspace:*
+        version: link:../ai/ai
+      '@wrenyard/ai-protocol':
+        specifier: workspace:*
+        version: link:../ai/protocol
+      '@wrenyard/auto-routing':
+        specifier: workspace:*
+        version: link:../features/auto-routing
+      '@wrenyard/loop':
+        specifier: workspace:*
+        version: link:../agent/loop
+      '@wrenyard/models':
+        specifier: workspace:*
+        version: link:../ai/models
+      '@wrenyard/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@wrenyard/session':
+        specifier: workspace:*
+        version: link:../session/session
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
+      diff:
+        specifier: 9.0.0
+        version: 9.0.0
+      gpt-tokenizer:
+        specifier: 4.0.1
+        version: 4.0.1
+      sharp:
+        specifier: 0.35.5
+        version: 0.35.5(@types/node@22.20.1)
+      yaml:
+        specifier: ^2.7.0
+        version: 2.9.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   packages/paths:
     devDependencies:
       '@types/node':
@@ -998,6 +1007,28 @@ importers:
         specifier: workspace:*
         version: link:../ai/models
     devDependencies:
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/session/session:
+    devDependencies:
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
+  packages/session/session-jsonl:
+    dependencies:
+      '@wrenyard/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@wrenyard/session':
+        specifier: workspace:*
+        version: link:../session
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
       typescript:
         specifier: ^5.9.0
         version: 5.9.3

@@ -7,7 +7,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import type { Ledger, DocumentCommitContext } from '@wrenyard/session'
+import type { DocumentAuthority, DocumentCommitContext } from '@wrenyard/harness'
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { ProjectManager } from '../../core/project/manager.mts'
@@ -53,7 +53,7 @@ export class WorkspaceDocError extends Error {
 export class WorkspaceDocService {
   private readonly workspaceRoot: string
 
-  constructor(workspaceRoot: string, private readonly commits: Pick<Ledger, 'commitDocument'>) {
+  constructor(workspaceRoot: string, private readonly commits: Pick<DocumentAuthority, 'commitDocument'>) {
     // Resolve the supplied root once, ensure the directory exists, then
     // canonicalize to handle symlinks (e.g. macOS /var -> /private/var)
     const resolvedRoot = resolve(workspaceRoot)
