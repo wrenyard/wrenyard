@@ -36,7 +36,7 @@ export function AssistantMessage({ turn, reply, reference, enter, onReply, attac
   // replies stay bare so no reserved footer space shows under them.
   const finalReply = turn.replies.at(-1) === reply;
   return (
-    <Message className={cn('group/msg', animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out')}>
+    <Message className={cn('group/msg', animate && 'wy-message-in')}>
       <MessageContent>
         <div className="flex items-end gap-2">
           <ReplyMenu text={reply.text} onReply={onReply}>

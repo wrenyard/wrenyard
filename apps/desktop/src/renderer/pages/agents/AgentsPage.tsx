@@ -113,7 +113,7 @@ function BotAvatar(props: { bot: AgentBot; className?: string }) {
     <span
       aria-hidden
       className={cn(
-        'flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] leading-none text-muted-foreground',
+        'flex size-5 shrink-0 items-center justify-center rounded-full bg-secondary-container text-[11px] leading-none text-on-secondary-container',
         props.className,
       )}
     >
@@ -167,7 +167,7 @@ function BotRowContent(props: { bot: AgentBot; onOpenSettings?: (id: string) => 
         <button
           type="button"
           aria-label={`打开 ${bot.name} 的设置`}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left hover:bg-muted"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-xl text-left transition-colors duration-fast hover:bg-surface-container/75"
           onClick={() => props.onOpenSettings?.(bot.id)}
         >
           {label}
@@ -357,7 +357,7 @@ type ConversationMode = 'group' | 'private';
 /** The group/private switch in the compact header. */
 function ModeSwitch(props: { mode: ConversationMode; onChange: (mode: ConversationMode) => void }) {
   return (
-    <div className="flex items-center gap-0.5 rounded-full border p-0.5" role="group" aria-label="对话模式">
+    <div className="flex items-center gap-0.5 rounded-full border border-border/50 bg-surface-container/70 p-0.5" role="group" aria-label="对话模式">
       <Button
         variant={props.mode === 'group' ? 'secondary' : 'ghost'}
         size="xs"
@@ -947,8 +947,8 @@ function MentionPicker(props: {
                 disabled={!bot.enabled}
                 className={cn(
                   'flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-sm',
-                  bot.enabled ? 'hover:bg-muted' : 'cursor-default opacity-50',
-                  isSelected && 'bg-muted',
+                  bot.enabled ? 'hover:bg-surface-container/70' : 'cursor-default opacity-50',
+                  isSelected && 'bg-secondary-container',
                 )}
                 // Pointerdown keeps the textarea's blur from racing the click.
                 onPointerDown={(event) => event.preventDefault()}
@@ -1117,7 +1117,7 @@ function GroupView(props: {
         working={workingBots}
         scrollToEndRef={scrollToEndRef}
       />
-      <div className="shrink-0 border-t bg-background px-4 py-3">
+      <div className="shrink-0 border-t bg-surface-canvas px-4 py-3">
         <GroupComposer
           agents={props.agents}
           bots={props.bots}
@@ -1320,7 +1320,7 @@ function PrivateView(props: {
         <button
           type="button"
           aria-label={`打开 ${props.bot.name} 的设置`}
-          className="flex items-center gap-2 rounded-md hover:bg-muted"
+          className="flex items-center gap-2 rounded-xl transition-colors duration-fast hover:bg-surface-container/75"
           onClick={() => { void navigate('settings', { category: 'bot', bot: props.bot.id }); }}
         >
           <span aria-hidden>{botIcon(props.bot)}</span>
@@ -1351,7 +1351,7 @@ function PrivateView(props: {
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <PrivateConversation id={props.bot.id} botNames={props.botNames} />
       </div>
-      <div className="shrink-0 border-t bg-background px-4 py-3">
+      <div className="shrink-0 border-t bg-surface-canvas px-4 py-3">
         <PrivateComposer
           botId={props.bot.id}
           enabled={props.bot.enabled}

@@ -65,7 +65,7 @@ export function SupplySettings({
       }}
       className="gap-6"
     >
-      <div className="border-b">
+      <div className="border-b border-border/60">
         <TabsList
           variant="line"
           className="h-8 w-full justify-start gap-4 rounded-none bg-transparent p-0"
@@ -97,8 +97,8 @@ export function SupplySettings({
       <TabsContent value="usage" className="flex flex-col gap-6">
         <ProviderUsage />
         {usageSettings.length > 0 && (
-          <section className="overflow-hidden rounded-xl border bg-card">
-            <div className="@container/field-group flex w-full flex-col divide-y">
+          <section className="overflow-hidden rounded-2xl border border-border/55 bg-surface-container-low/90">
+            <div className="@container/field-group flex w-full flex-col divide-y divide-border/50">
               {usageSettings.map((definition) => (
                 <SettingRow
                   key={definition.id}
@@ -115,8 +115,8 @@ export function SupplySettings({
 
       <TabsContent value="gateway" className="flex flex-col gap-6">
         {gatewaySettings.length > 0 && (
-          <section className="overflow-hidden rounded-xl border bg-card">
-            <div className="@container/field-group flex w-full flex-col divide-y">
+          <section className="overflow-hidden rounded-2xl border border-border/55 bg-surface-container-low/90">
+            <div className="@container/field-group flex w-full flex-col divide-y divide-border/50">
               {gatewaySettings.map((definition) => renderSetting(definition))}
             </div>
           </section>
@@ -126,8 +126,8 @@ export function SupplySettings({
 
       <TabsContent value="routing" className="flex flex-col gap-6">
         {routingSettings.length > 0 && (
-          <section className="overflow-hidden rounded-xl border bg-card">
-            <div className="@container/field-group flex w-full flex-col divide-y">
+          <section className="overflow-hidden rounded-2xl border border-border/55 bg-surface-container-low/90">
+            <div className="@container/field-group flex w-full flex-col divide-y divide-border/50">
               {routingSettings.map((definition) => renderSetting(definition))}
             </div>
           </section>
@@ -136,7 +136,7 @@ export function SupplySettings({
         <RoutingExclusionsSettings />
         <section className="flex flex-col gap-2">
           <h3 className="text-sm font-medium text-muted-foreground">路由测试</h3>
-          <div className="flex flex-col gap-3 overflow-hidden rounded-xl border bg-card p-4">
+          <div className="flex flex-col gap-3 rounded-2xl border border-border/55 bg-surface-container-low/90 p-4">
             <RoutingTest snapshot={snapshot} active={routingActive && tab === 'routing'} />
           </div>
         </section>

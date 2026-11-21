@@ -14,11 +14,27 @@
   --lamp-deep: #e8a33d;
   --terracotta: #c44e3a;
   --slate: #5a6b7a;
-    --background: var(--paper);
+    /* M3 tonal surface ramp layered from shell to container-highest, plus the
+       moss/ink tonal containers and warm elevation shadows. */
+    --surface-shell: #efe5cb;
+    --surface-canvas: #faf4e4;
+    --surface-container-lowest: #fdf9ee;
+    --surface-container-low: #f4ebd2;
+    --surface-container: #ede2c4;
+    --surface-container-high: #e6d8b5;
+    --surface-container-highest: #dfd0a8;
+    --primary-container: #dde9cf;
+    --on-primary-container: #243819;
+    --secondary-container: #e4d9bc;
+    --on-secondary-container: #2e2018;
+    --elevation-1: 0 1px 3px 0 rgb(46 32 24 / 0.06), 0 1px 2px -1px rgb(46 32 24 / 0.04);
+    --elevation-2: 0 4px 12px -2px rgb(46 32 24 / 0.09), 0 2px 4px -2px rgb(46 32 24 / 0.05);
+    --elevation-3: 0 12px 28px -4px rgb(46 32 24 / 0.13), 0 4px 10px -2px rgb(46 32 24 / 0.07);
+    --background: var(--surface-canvas);
     --foreground: var(--ink);
-    --card: var(--paper-raised);
+    --card: var(--surface-container-low);
     --card-foreground: var(--ink);
-    --popover: var(--paper-raised);
+    --popover: var(--surface-container-high);
     --popover-foreground: var(--ink);
     --primary: var(--moss-deep);
     --primary-foreground: var(--paper);
@@ -39,12 +55,12 @@
     --chart-4: var(--terracotta);
     --chart-5: var(--ink-soft);
     --radius: 0.625rem;
-    --sidebar: var(--paper-raised);
+    --sidebar: var(--surface-shell);
     --sidebar-foreground: var(--ink);
     --sidebar-primary: var(--moss-deep);
     --sidebar-primary-foreground: var(--paper);
-    --sidebar-accent: var(--paper-dim);
-    --sidebar-accent-foreground: var(--ink);
+    --sidebar-accent: var(--secondary-container);
+    --sidebar-accent-foreground: var(--on-secondary-container);
     --sidebar-border: var(--line);
     --sidebar-ring: var(--moss);
     --success: var(--moss-deep);
@@ -78,11 +94,28 @@
   --lamp-deep: #f0b44f;
   --terracotta: #e2705a;
   --slate: #93a4b4;
-  --background: var(--paper);
+  /* Dark "reading paper under a lamp": the shell recedes below the canvas and
+     containers step up in warmth; elevation pairs deep black shadows with a
+     faint warm rim so layered surfaces stay readable. */
+  --surface-shell: #17140f;
+  --surface-canvas: #211c16;
+  --surface-container-lowest: #14110d;
+  --surface-container-low: #27211a;
+  --surface-container: #2e271f;
+  --surface-container-high: #362f26;
+  --surface-container-highest: #3f372d;
+  --primary-container: #2f3e24;
+  --on-primary-container: #d8ebb8;
+  --secondary-container: #383026;
+  --on-secondary-container: #ece3d0;
+  --elevation-1: 0 1px 3px 0 rgb(0 0 0 / 0.30), 0 0 0 1px rgb(255 245 225 / 0.04);
+  --elevation-2: 0 6px 16px -2px rgb(0 0 0 / 0.40), 0 0 0 1px rgb(255 245 225 / 0.06);
+  --elevation-3: 0 16px 36px -6px rgb(0 0 0 / 0.54), 0 0 0 1px rgb(255 245 225 / 0.08);
+  --background: var(--surface-canvas);
   --foreground: var(--ink);
-  --card: var(--paper-raised);
+  --card: var(--surface-container-low);
   --card-foreground: var(--ink);
-  --popover: var(--paper-raised);
+  --popover: var(--surface-container-high);
   --popover-foreground: var(--ink);
   --primary: var(--moss-deep);
   --primary-foreground: var(--paper);
@@ -103,12 +136,12 @@
   --chart-4: var(--terracotta);
   --chart-5: var(--ink-soft);
   --radius: 0.625rem;
-  --sidebar: var(--paper-raised);
+  --sidebar: var(--surface-shell);
   --sidebar-foreground: var(--ink);
   --sidebar-primary: var(--moss-deep);
   --sidebar-primary-foreground: var(--paper);
-  --sidebar-accent: var(--paper-dim);
-  --sidebar-accent-foreground: var(--ink);
+  --sidebar-accent: var(--secondary-container);
+  --sidebar-accent-foreground: var(--on-secondary-container);
   --sidebar-border: var(--line);
   --sidebar-ring: var(--moss);
   --success: var(--moss-deep);

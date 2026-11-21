@@ -263,7 +263,7 @@ function SessionRow({
         </SidebarMenuButton>
       )}
       {!editing && session.running === true && (
-        <span className="pointer-events-none absolute top-1.5 right-1 flex size-5 items-center justify-center group-hover/menu-item:opacity-0 group-focus-within/menu-item:opacity-0 group-has-[[aria-expanded=true]]/menu-item:opacity-0">
+        <span className="pointer-events-none absolute top-2 right-1.5 flex size-5 items-center justify-center group-hover/menu-item:opacity-0 group-focus-within/menu-item:opacity-0 group-has-[[aria-expanded=true]]/menu-item:opacity-0">
           <Spinner className="size-3 text-muted-foreground" />
         </span>
       )}
@@ -471,10 +471,10 @@ export function SessionSidebar({
         }}
         render={<SidebarGroup />}
       >
-        <SidebarGroupLabel>
+        <SidebarGroupLabel className="text-[11px] font-medium tracking-wider text-muted-foreground/80">
           <CollapsibleTrigger className="group/label flex min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-xl outline-hidden ring-sidebar-ring focus-visible:ring-3">
             <span className="truncate">{label}</span>
-            <ChevronRight className="size-4 shrink-0 opacity-0 transition-transform group-hover/label:opacity-100 group-focus-visible/label:opacity-100 group-not-data-[panel-open]/label:opacity-100 group-data-[panel-open]/label:rotate-90" />
+            <ChevronRight className="size-4 shrink-0 opacity-0 transition-transform duration-fast ease-[var(--ease-m3-spring-fast)] group-hover/label:opacity-100 group-focus-visible/label:opacity-100 group-not-data-[panel-open]/label:opacity-100 group-data-[panel-open]/label:rotate-90" />
           </CollapsibleTrigger>
           {trailing}
         </SidebarGroupLabel>
@@ -594,7 +594,7 @@ export function SessionSidebar({
           </SidebarGroup>
         )}
       </SidebarContent>
-      {footer !== undefined && <SidebarFooter className="shrink-0 border-t border-sidebar-border bg-sidebar py-1">{footer}</SidebarFooter>}
+      {footer !== undefined && <SidebarFooter className="shrink-0 bg-transparent px-3 py-2">{footer}</SidebarFooter>}
     </Sidebar>
   );
 }

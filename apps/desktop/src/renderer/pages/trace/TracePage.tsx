@@ -185,7 +185,7 @@ export function TracePage() {
   const rangeStart = model?.summary.startedAt ? new Date(model.summary.startedAt).getTime() : now;
   const rangeEnd = model?.summary.running ? now : model?.summary.endedAt ? new Date(model.summary.endedAt).getTime() : now;
 
-  return <div className="flex h-full min-h-0 flex-col bg-background">
+  return <div className="flex h-full min-h-0 flex-col bg-surface-canvas">
     <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
       <div className="flex items-center gap-2"><Network className="size-4 text-primary" /><h1 className="text-sm font-semibold">会话追踪</h1><span className="text-xs text-muted-foreground">基于账本事件</span></div>
       {selectedId && <div className="flex items-center gap-1"><Button variant="ghost" size="sm" onClick={() => void copyAll()}>{copied ? <Check /> : <Copy />}{copied ? '已复制' : '复制全部 JSONL'}</Button><Button variant="ghost" size="icon-sm" aria-label="刷新" onClick={() => void loadSession(selectedId)}><RefreshCw /></Button></div>}
@@ -194,10 +194,10 @@ export function TracePage() {
     <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
       <ResizablePanel defaultSize="20%" minSize="15%" className="min-w-48 border-r">
         <div className="flex h-full min-h-0 flex-col">
-          <div className="border-b p-3"><div className="relative"><Search className="absolute top-2 left-2 size-3.5 text-muted-foreground" /><Input className="pl-7" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索会话" /></div></div>
+          <div className="border-b p-3"><div className="relative"><Search className="absolute top-2 left-2 size-3.5 text-muted-foreground" /><Input className="rounded-full pl-7" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索会话" /></div></div>
           <ScrollArea className="min-h-0 flex-1"><div className="space-y-1 p-2">
             {listLoading && <div className="p-3 text-xs text-muted-foreground">正在载入会话…</div>}
-            {!listLoading && filteredSessions.map((session) => <button key={session.sessionId} type="button" onClick={() => void loadSession(session.sessionId)} className={`w-full rounded-md px-3 py-2 text-left hover:bg-muted ${selectedId === session.sessionId ? 'bg-muted' : ''}`}>
+            {!listLoading && filteredSessions.map((session) => <button key={session.sessionId} type="button" onClick={() => void loadSession(session.sessionId)} className={`w-full rounded-xl px-3 py-2 text-left transition-colors duration-fast hover:bg-surface-container/70 ${selectedId === session.sessionId ? 'bg-secondary-container text-on-secondary-container' : ''}`}>
               <span className="block truncate text-sm">{session.title || '未命名会话'}</span><span className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground"><span>{new Date(session.updatedAt).toLocaleString()}</span>{session.running && <span className="text-primary">运行中</span>}</span>
             </button>)}
             {!listLoading && filteredSessions.length === 0 && <div className="p-3 text-xs text-muted-foreground">{query ? '没有匹配的会话' : '还没有会话'}</div>}
@@ -212,7 +212,7 @@ export function TracePage() {
             <Metric label="轮次 / 行动" value={`${model.summary.turns} / ${model.summary.actions}`} /><Metric label="推理 / 辅助 / 任务" value={`${model.summary.reasoning} / ${model.summary.auxiliary} / ${model.summary.tasks}`} /><Metric label="输入 / 缓存 / 输出" value={`${model.summary.usage.input} / ${model.summary.usage.cached} / ${model.summary.usage.output}`} /><Metric label="错误 / 警告" value={`${model.summary.errors} / ${model.summary.warnings}`} />
           </div>
           <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
-            <div className="relative min-w-32 flex-1"><Search className="absolute top-2 left-2 size-3.5 text-muted-foreground" /><Input className="h-7 pl-7 text-xs" value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="筛选节点" /></div>
+            <div className="relative min-w-32 flex-1"><Search className="absolute top-2 left-2 size-3.5 text-muted-foreground" /><Input className="h-7 rounded-full pl-7 text-xs" value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="筛选节点" /></div>
             <Button size="xs" variant={failedOnly ? 'secondary' : 'ghost'} onClick={() => setFailedOnly((value) => !value)}><Filter />仅看失败</Button>
             <select aria-label="节点种类" className="h-7 rounded-md border bg-background px-2 text-xs" value="" onChange={(event) => { const kind = event.target.value as TraceKind; if (kind) setKindFilter((current) => { const next = new Set(current); if (next.has(kind)) next.delete(kind); else next.add(kind); return next; }); }}><option value="">种类筛选</option>{(Object.keys(kindLabel) as TraceKind[]).filter((kind) => kind !== 'session').map((kind) => <option key={kind} value={kind}>{kindLabel[kind]}</option>)}</select>
             {kindFilter.size > 0 && <button className="text-xs text-muted-foreground" onClick={() => setKindFilter(new Set())}>清除种类</button>}
@@ -231,7 +231,7 @@ export function TracePage() {
           <Tabs defaultValue="overview" className="min-h-0 flex-1"><TabsList variant="line" className="mx-3 mt-2"><TabsTrigger value="overview">概览</TabsTrigger><TabsTrigger value="output">输出</TabsTrigger><TabsTrigger value="raw">原始</TabsTrigger></TabsList>
             <TabsContent value="overview" className="min-h-0 overflow-auto p-3"><SelectedNodeFields node={selectedNode} /></TabsContent>
             <TabsContent value="output" className="min-h-0 overflow-auto p-3"><pre className="whitespace-pre-wrap break-words text-xs leading-relaxed">{nodeOutput(selectedNode) || '该节点没有单独记录输出。'}</pre></TabsContent>
-            <TabsContent value="raw" className="flex min-h-0 flex-col p-3"><div className="mb-2 flex justify-end"><Button size="xs" variant="ghost" onClick={() => void copyText(eventRaw(selectedNode))}><Copy />复制节点事件</Button></div><pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/50 p-2 text-[10px]">{eventRaw(selectedNode) || '没有直接事件'}</pre></TabsContent>
+            <TabsContent value="raw" className="flex min-h-0 flex-col p-3"><div className="mb-2 flex justify-end"><Button size="xs" variant="ghost" onClick={() => void copyText(eventRaw(selectedNode))}><Copy />复制节点事件</Button></div><pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-muted/50 p-2 text-[10px]">{eventRaw(selectedNode) || '没有直接事件'}</pre></TabsContent>
           </Tabs>
         </div>}
       </ResizablePanel>
@@ -239,12 +239,12 @@ export function TracePage() {
   </div>;
 }
 
-function Metric({ label, value }: { label: string; value: string }) { return <div className="rounded-md bg-muted/50 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">{label}</div><div className="mt-0.5 truncate font-medium tabular-nums">{value}</div></div>; }
+function Metric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border border-border/45 bg-surface-container-low/90 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">{label}</div><div className="mt-0.5 truncate font-medium tabular-nums">{value}</div></div>; }
 
 /** Detail fields of the selected node; a running task span overlays live usage. */
 function SelectedNodeFields({ node }: { node: TraceNode }) {
   const live = useTaskUsageLiveByRun(node.kind === 'task' && node.running ? node.taskRunId : undefined);
-  return <div className="space-y-2">{nodeFields(node, live).map(([label, value]) => <div key={label} className="rounded-md bg-muted/50 p-2"><div className="text-[10px] text-muted-foreground">{label}</div><div className="mt-0.5 break-all whitespace-pre-wrap text-xs">{value}</div></div>)}</div>;
+  return <div className="space-y-2">{nodeFields(node, live).map(([label, value]) => <div key={label} className="rounded-xl border border-border/45 bg-surface-container-low/90 p-2"><div className="text-[10px] text-muted-foreground">{label}</div><div className="mt-0.5 break-all whitespace-pre-wrap text-xs">{value}</div></div>)}</div>;
 }
 function TraceRow({ node, depth, selected, expanded, rangeStart, rangeEnd, onSelect, onToggle }: { node: TraceNode; depth: number; selected: boolean; expanded: boolean; rangeStart: number; rangeEnd: number; onSelect: () => void; onToggle: () => void }) {
   const Icon = icons[node.kind];
@@ -259,7 +259,7 @@ function TraceRow({ node, depth, selected, expanded, rangeStart, rangeEnd, onSel
   const left = start === null ? 0 : Math.max(0, Math.min(100, ((start - rangeStart) / total) * 100));
   const width = start === null || end === null ? 1 : Math.max(1, Math.min(100 - left, ((end - start) / total) * 100));
   const hasChildren = node.children.length > 0;
-  return <div className={`group mb-0.5 grid h-9 grid-cols-[minmax(260px,1.1fr)_minmax(120px,0.8fr)_70px_72px] items-center rounded-md pr-2 text-xs ${selected ? 'bg-accent' : 'hover:bg-muted/70'}`}>
+  return <div className={`group mb-0.5 grid h-9 grid-cols-[minmax(260px,1.1fr)_minmax(120px,0.8fr)_70px_72px] items-center rounded-xl pr-2 text-xs transition-colors duration-fast ${selected ? 'bg-secondary-container text-on-secondary-container' : 'hover:bg-surface-container/70'}`}>
     <button type="button" onClick={onSelect} className="flex min-w-0 items-center gap-1.5 text-left" style={{ paddingLeft: 8 + depth * 16 }}>
       <span role="button" tabIndex={0} aria-label={expanded ? '折叠' : '展开'} onClick={(event) => { event.stopPropagation(); onToggle(); }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onToggle(); } }} className="grid size-4 shrink-0 place-items-center text-muted-foreground">{hasChildren ? expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" /> : <span className="size-1 rounded-full bg-border" />}</span>
       <Icon className={`size-3.5 shrink-0 ${node.kind === 'notice' ? 'text-amber-600' : node.kind === 'reasoning' ? 'text-violet-500' : 'text-muted-foreground'}`} />

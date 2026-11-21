@@ -8,6 +8,7 @@ import { UsageCard, UsageCardSkeletonBody } from '@/renderer/components/usage/Us
 import { QuotaCardActions, QuotaPanel } from '@/renderer/app/statusbar/QuotaPanel';
 import { shell } from '@/renderer/lib/desktop';
 import { useQuotaFocus } from '@/renderer/lib/quota-focus';
+import { useAnimatedPresence } from '@/renderer/lib/motion';
 import {
   closeSessionInspector,
   toggleSessionInspector,
@@ -33,7 +34,10 @@ export function SessionInspectorToggle() {
               size="icon-sm"
               aria-label="会话详情"
               aria-pressed={open}
-              className={cn(open && 'bg-muted')}
+              className={cn(
+                'rounded-full size-8 transition-[background-color,color,transform] duration-fast ease-[var(--ease-m3-spring-fast)]',
+                open && 'bg-secondary-container text-on-secondary-container',
+              )}
               onClick={() => toggleSessionInspector()}
             />
           )}
@@ -96,12 +100,15 @@ function SessionInspectorUsageBody({ hydrating }: { hydrating: boolean }) {
 
 export function SessionInspector({ draft, usageHydrating = false }: { draft: boolean; usageHydrating?: boolean }) {
   const { open } = useSessionInspectorState();
+  // The inspector stays mounted through its exit so both the flow rail and the
+  // narrow overlay slide and fade instead of snapping.
+  const presence = useAnimatedPresence(open, 240);
   const focus = useQuotaFocus();
   const asideRef = useRef<HTMLElement | null>(null);
   const [rowWidth, setRowWidth] = useState(0);
 
   useEffect(() => {
-    if (!open) return;
+    if (!presence.mounted) return;
     const parent = asideRef.current?.parentElement;
     if (parent === null || parent === undefined) return;
     const observer = new ResizeObserver((entries) => {
@@ -111,27 +118,33 @@ export function SessionInspector({ draft, usageHydrating = false }: { draft: boo
     observer.observe(parent);
     setRowWidth(parent.clientWidth);
     return () => observer.disconnect();
-  }, [open]);
+  }, [presence.mounted]);
 
-  if (!open) return null;
+  if (!presence.mounted) return null;
 
   const overlay = rowWidth > 0 && rowWidth < NARROW_ROW_MAX;
+  const shown = presence.state === 'open';
 
   return (
     <>
       {overlay ? (
         <div
-          className="absolute inset-0 z-30 bg-(--overlay)"
+          className={cn(
+            'absolute inset-0 z-30 bg-(--overlay) backdrop-blur-[2px] transition-opacity duration-[320ms] ease-[var(--ease-m3-spring-spatial)]',
+            shown ? 'opacity-100' : 'opacity-0',
+          )}
           onMouseDown={() => closeSessionInspector()}
         />
       ) : null}
       <aside
         ref={asideRef}
         className={cn(
-          'absolute inset-y-0 right-(--session-scrollbar) w-80 flex min-h-0 flex-col bg-background',
-          // The border and shadow belong to the narrow overlay only: in flow
-          // the panel floats over the transcript's scrollbar-gutter space.
-          overlay && 'right-0 z-40 border-l shadow-lg',
+          'absolute inset-y-0 right-(--session-scrollbar) w-80 flex min-h-0 flex-col border-l border-border/40 bg-surface-canvas transition-[transform,opacity] duration-[320ms] ease-[var(--ease-m3-spring-spatial)]',
+          // The elevation belongs to the narrow overlay only: in flow the
+          // panel floats over the transcript's scrollbar-gutter space with a
+          // subtle hairline separation.
+          overlay && 'right-0 z-40 shadow-lg',
+          shown ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-4 opacity-0',
         )}
         data-slot="session-inspector"
       >

@@ -493,8 +493,8 @@ export function SettingsPage({
         {group.label !== '' && (
           <h3 className="text-sm font-medium text-muted-foreground">{group.label}</h3>
         )}
-        <div className="overflow-hidden rounded-xl border bg-card">
-          <div className="@container/field-group flex w-full flex-col divide-y">
+        <div className="overflow-hidden rounded-2xl border border-border/55 bg-surface-container-low/90">
+          <div className="@container/field-group flex w-full flex-col divide-y divide-border/50">
             {group.definitions.map(renderRow)}
           </div>
         </div>
@@ -581,7 +581,7 @@ export function SettingsPage({
                               key={definition.id}
                               type="button"
                               onClick={() => activateResult(category.id, definition.id)}
-                              className="flex flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:bg-muted/50"
+                              className="flex flex-col items-start gap-0.5 rounded-xl px-3 py-2 text-left transition-colors duration-fast hover:bg-surface-container focus-visible:bg-surface-container"
                             >
                               <span className="text-sm font-medium">
                                 <HighlightedText text={definition.title} terms={query.terms} />
@@ -606,7 +606,7 @@ export function SettingsPage({
                             key={`${shortcut.category}-${shortcut.title}`}
                             type="button"
                             onClick={() => activateResult('shortcuts')}
-                            className="flex flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:bg-muted/50"
+                            className="flex flex-col items-start gap-0.5 rounded-xl px-3 py-2 text-left transition-colors duration-fast hover:bg-surface-container focus-visible:bg-surface-container"
                           >
                             <span className="text-sm font-medium">
                               <HighlightedText text={shortcut.title} terms={query.terms} />
@@ -626,7 +626,7 @@ export function SettingsPage({
                     key={category.id}
                     className={visible ? 'flex flex-col gap-6' : 'hidden'}
                   >
-                    <header className="flex flex-col gap-1">
+                    <header className="wy-stagger-in flex flex-col gap-1">
                       <h1 className="flex items-center gap-3 text-xl font-semibold">
                         {settingsCategoryLabel(category.id)}
                         {category.id === 'pet' && <PetStatusBadge />}

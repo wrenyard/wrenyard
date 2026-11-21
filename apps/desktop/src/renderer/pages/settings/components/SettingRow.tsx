@@ -333,10 +333,10 @@ export function SettingRow({ definition, binding, highlightTerms = [], flashed =
       data-setting-id={definition.id}
       data-flash={flashed ? 'true' : undefined}
       tabIndex={-1}
-      className="group/setting relative flex gap-3 px-4 py-3 outline-none transition-colors hover:bg-muted/40 focus-within:bg-muted/40 data-[flash=true]:bg-primary/10"
+      className="group/setting relative flex gap-3 px-4 py-3 outline-none transition-colors duration-fast hover:bg-surface-container/70 focus-within:bg-surface-container/70 data-[flash=true]:bg-primary/10"
     >
       <div className="relative flex w-5 shrink-0 justify-center self-stretch">
-        {modified && <span aria-hidden="true" className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />}
+        {modified && <span aria-hidden="true" className="absolute inset-y-1 left-0 w-1 rounded-full bg-primary" />}
         {!isCustom && <GearMenu definition={definition} binding={binding} canReset={canReset} />}
       </div>
       <Field

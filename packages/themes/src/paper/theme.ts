@@ -6,8 +6,8 @@ export const paperTheme = {
   description: '暖色纸本外观',
   modes: {
     light: {
-      windowBackground: '#f7efd8',
-      titleBarOverlay: { color: '#f7efd8', symbolColor: '#2e2018' },
+      windowBackground: '#efe5cb',
+      titleBarOverlay: { color: '#efe5cb', symbolColor: '#2e2018' },
       codeTheme: 'github-light',
       foreground: '#2e2018',
       mutedForeground: '#766856',
@@ -15,8 +15,8 @@ export const paperTheme = {
       destructiveForeground: '#ffffff',
     },
     dark: {
-      windowBackground: '#1c1813',
-      titleBarOverlay: { color: '#1c1813', symbolColor: '#ece3d0' },
+      windowBackground: '#17140f',
+      titleBarOverlay: { color: '#17140f', symbolColor: '#ece3d0' },
       codeTheme: 'github-dark-default',
       foreground: '#ece3d0',
       mutedForeground: '#94866f',

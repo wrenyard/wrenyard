@@ -714,6 +714,18 @@ html[data-theme-switching] *::after {
     --font-mono: var(--app-font-mono);
     --font-weight-medium: var(--app-font-weight-medium);
     --font-weight-semibold: var(--app-font-weight-semibold);
+    /* M3 tonal surface & container colors (M3 Expressive spec §1). */
+    --color-surface-shell: var(--surface-shell);
+    --color-surface-canvas: var(--surface-canvas);
+    --color-surface-container-lowest: var(--surface-container-lowest);
+    --color-surface-container-low: var(--surface-container-low);
+    --color-surface-container: var(--surface-container);
+    --color-surface-container-high: var(--surface-container-high);
+    --color-surface-container-highest: var(--surface-container-highest);
+    --color-primary-container: var(--primary-container);
+    --color-on-primary-container: var(--on-primary-container);
+    --color-secondary-container: var(--secondary-container);
+    --color-on-secondary-container: var(--on-secondary-container);
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -796,15 +808,24 @@ html[data-platform="win32"] {
   --titlebar-inset-end: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
 }
 
-/* Keep shell actions aligned with the native window controls. */
+/* Keep shell actions aligned with the native window controls. Titlebar
+   buttons are M3 circular buttons: pill radius, silky colour/transform
+   transitions and a subtle spring press. */
 [data-titlebar] [data-slot="button"] {
-  border-radius: 4px;
-  transition: background-color 120ms ease, color 120ms ease;
+  border-radius: 9999px;
+  transition: background-color var(--duration-fast) var(--ease-m3-standard),
+    color var(--duration-fast) var(--ease-m3-standard),
+    transform var(--duration-fast) var(--ease-m3-spring-fast);
 }
 
 [data-titlebar] [data-slot="button"]:active {
   translate: none;
-  scale: none;
+}
+
+[data-titlebar] [data-slot="button"]:where(
+    :not([aria-haspopup]):not(:disabled):not([data-disabled])
+  ):active {
+  scale: 0.94;
 }
 
 [data-titlebar] [data-slot="button"]:hover {
@@ -886,26 +907,73 @@ html[data-platform="win32"] {
 @theme {
   /* Canonical motion tokens. Tailwind's `duration-*` utilities resolve the
      `--transition-duration-*` namespace, so the spec's `--duration-*` names
-     hold the values and are re-exported for the utilities. */
-  --duration-instant: 80ms;
-  --duration-fast: 140ms;
-  --duration-base: 200ms;
-  --duration-slow: 280ms;
+     hold the values and are re-exported for the utilities. The easing set is
+     the M3 Expressive family: emphasized decelerate/accelerate pairs for
+     enter/exit, standard for small moves and `linear()` springs with a hint
+     of overshoot for spatial glide (indicators, panels). */
+  --duration-instant: 90ms;
+  --duration-fast: 180ms;
+  --duration-base: 280ms;
+  --duration-slow: 400ms;
+  --duration-expressive: 480ms;
   --transition-duration-instant: var(--duration-instant);
   --transition-duration-fast: var(--duration-fast);
   --transition-duration-base: var(--duration-base);
   --transition-duration-slow: var(--duration-slow);
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
-  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-m3-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --ease-m3-emphasized-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-m3-emphasized-accelerate: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --ease-m3-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-m3-spring-spatial: linear(
+    0,
+    0.012 1.5%,
+    0.048 3%,
+    0.19 6%,
+    0.45 10%,
+    0.73 15%,
+    0.92 20%,
+    1.015 26%,
+    1.026 31%,
+    1.018 37%,
+    1.006 46%,
+    1.001 58%,
+    1
+  );
+  --ease-m3-spring-fast: linear(
+    0,
+    0.018 1.5%,
+    0.075 3%,
+    0.28 6%,
+    0.62 11%,
+    0.88 17%,
+    1.012 24%,
+    1.018 29%,
+    1.007 38%,
+    1.001 50%,
+    1
+  );
+  --ease-out: var(--ease-m3-emphasized-decelerate);
+  --ease-in: var(--ease-m3-emphasized-accelerate);
+  --ease-in-out: var(--ease-m3-emphasized);
 }
 
-/* Page switch: the page host fades in from 4px below; the shell rail carries
-   its own `view-transition-name` so the chrome stays put. */
+/* Page switch: the old page accelerates out with a slight shrink while the
+   new one decelerates in from below; the shell chrome keeps its own
+   `view-transition-name` so it stays put. */
+@keyframes wy-page-exit {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.992);
+  }
+}
 @keyframes wy-page-enter {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(10px) scale(0.992);
   }
   to {
     opacity: 1;
@@ -934,7 +1002,7 @@ html[data-platform="win32"] {
 }
 /* Keep the stable three-row chrome outside the changing page snapshot. */
 [data-titlebar] { view-transition-name: app-titlebar; }
-[data-slot="sidebar"][data-collapsible="icon"] { view-transition-name: app-sidebar; }
+[data-slot="sidebar-wrapper"] > [data-slot="sidebar"] { view-transition-name: app-sidebar; }
 ::view-transition-old(app-titlebar),
 ::view-transition-new(app-titlebar),
 ::view-transition-old(app-sidebar),
@@ -942,10 +1010,10 @@ html[data-platform="win32"] {
   animation: none;
 }
 ::view-transition-old(app-page) {
-  animation: wy-fade-out var(--duration-fast) var(--ease-in) both;
+  animation: wy-page-exit 160ms var(--ease-m3-emphasized-accelerate) both;
 }
 ::view-transition-new(app-page) {
-  animation: wy-page-enter var(--duration-base) var(--ease-out) both;
+  animation: wy-page-enter 340ms var(--ease-m3-emphasized-decelerate) both;
 }
 
 /* Session switch: the conversation fades in; the sidebar selection is left
@@ -962,12 +1030,118 @@ html[data-platform="win32"] {
   animation: wy-conversation-enter var(--duration-fast) var(--ease-out) both;
 }
 
-/* Panel collapse/expand: width eased at `slow`. The class is dropped while a
-   resize handle is dragged so dragging stays instant. */
+/* Panel collapse/expand: width eased at `slow` with the spatial spring so
+   the moving edge glides with a hint of overshoot. The class is dropped
+   while a resize handle is dragged so dragging stays instant. */
 .motion-panel {
   transition-property: flex-grow, flex-basis;
   transition-duration: var(--duration-slow);
-  transition-timing-function: var(--ease-in-out);
+  transition-timing-function: var(--ease-m3-spring-spatial);
+}
+
+/* ------------------------------------------------------------------ */
+/* M3 Expressive motion utilities                                     */
+/* ------------------------------------------------------------------ */
+
+/* Accordion container: a CSS Grid `0fr` <-> `1fr` height animation. The child
+   wrapper must be a single <div> that clips the overflow. Visibility flips
+   with the animation so collapsed content is neither visible nor focusable,
+   yet stays on screen while the close transition plays. */
+.wy-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows 300ms var(--ease-m3-emphasized-decelerate),
+    opacity 220ms var(--ease-m3-emphasized-decelerate),
+    visibility 0s linear 300ms;
+}
+.wy-collapse[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transition: grid-template-rows 300ms var(--ease-m3-emphasized-decelerate),
+    opacity 220ms var(--ease-m3-emphasized-decelerate),
+    visibility 0s;
+}
+.wy-collapse > div {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Staggered list entry: each item fades in from below with a 45ms offset per
+   `--stagger-index`. */
+@keyframes wy-stagger-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.wy-stagger-in {
+  animation: wy-stagger-enter 380ms var(--ease-m3-emphasized-decelerate) both;
+  animation-delay: calc(var(--stagger-index, 0) * 45ms);
+}
+
+/* Chat message entry: a soft rise-and-settle. */
+@keyframes wy-message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.wy-message-in {
+  animation: wy-message-enter 320ms var(--ease-m3-emphasized-decelerate) both;
+}
+
+/* Side panel / inspector: presence-driven glide. The host element carries
+   `data-presence` from `useAnimatedPresence`; entering slides in from the
+   inline end and exiting retracts. */
+.wy-panel-animated {
+  transition: transform 340ms var(--ease-m3-spring-spatial),
+    opacity 220ms var(--ease-m3-emphasized-decelerate),
+    width 340ms var(--ease-m3-spring-spatial);
+}
+.wy-panel-animated[data-presence="entering"] {
+  opacity: 0;
+  transform: translateX(16px);
+}
+.wy-panel-animated[data-presence="exiting"] {
+  opacity: 0;
+  transform: translateX(16px);
+}
+.wy-panel-animated[data-presence="open"],
+.wy-panel-animated[data-presence="closed"] {
+  opacity: 1;
+  transform: none;
+}
+
+/* State layer ripple spawned imperatively by `triggerM3Ripple`. */
+@keyframes wy-ripple {
+  from {
+    transform: scale(0);
+    opacity: 0.14;
+  }
+  to {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+.wy-ripple-ink {
+  position: absolute;
+  border-radius: 9999px;
+  pointer-events: none;
+  background: currentColor;
+  opacity: 0.14;
+  transform: scale(0);
+  animation: wy-ripple 480ms var(--ease-m3-emphasized-decelerate) forwards;
 }
 
 /* Running status: a slow (2s) pulse. */
@@ -1123,12 +1297,11 @@ html[data-platform="win32"] {
   transition-property: translate, scale, background-color, border-color, color,
     box-shadow, opacity;
   transition-duration: var(--duration-fast);
-  transition-timing-function: var(--ease-out);
+  transition-timing-function: var(--ease-m3-spring-fast);
 }
 
 :where([data-slot="button"]):where(:not([aria-haspopup]):not(:disabled):not([data-disabled])):active {
-  translate: 0 0.5px;
-  scale: 0.99;
+  scale: 0.975;
 }
 
 /* Cards: colour and shadow feedback only; static cards never lift or move. */
@@ -1179,12 +1352,17 @@ html[data-theme-switching] *::after {
    `data-motion="reduce"`. */
 @media (prefers-reduced-motion: reduce) {
   :root {
+    --duration-instant: 90ms;
     --duration-fast: 100ms;
     --duration-base: 100ms;
     --duration-slow: 100ms;
+    --duration-expressive: 100ms;
     --transition-duration-fast: 100ms;
     --transition-duration-base: 100ms;
     --transition-duration-slow: 100ms;
+    /* Flatten the M3 springs so nothing overshoots. */
+    --ease-m3-spring-spatial: linear;
+    --ease-m3-spring-fast: linear;
     --animate-pulse: none;
   }
   *,
@@ -1228,6 +1406,23 @@ html[data-theme-switching] *::after {
   .motion-panel {
     transition-property: none;
   }
+  /* M3 Expressive utilities collapse to <=100ms opacity-only fades, and the
+     ripple is switched off entirely. */
+  .wy-collapse {
+    transition-property: opacity;
+    transition-duration: 100ms;
+  }
+  .wy-stagger-in,
+  .wy-message-in {
+    animation: none;
+  }
+  .wy-panel-animated {
+    transition-property: opacity;
+    transition-duration: 100ms;
+  }
+  .wy-ripple-ink {
+    display: none;
+  }
   [data-slot="button"]:active {
     translate: none;
     scale: none;
@@ -1246,12 +1441,17 @@ html[data-theme-switching] *::after {
 }
 
 html[data-motion="reduce"] {
+  --duration-instant: 90ms;
   --duration-fast: 100ms;
   --duration-base: 100ms;
   --duration-slow: 100ms;
+  --duration-expressive: 100ms;
   --transition-duration-fast: 100ms;
   --transition-duration-base: 100ms;
   --transition-duration-slow: 100ms;
+  /* Flatten the M3 springs so nothing overshoots. */
+  --ease-m3-spring-spatial: linear;
+  --ease-m3-spring-fast: linear;
   --animate-pulse: none;
 }
 html[data-motion="reduce"] *,
@@ -1300,6 +1500,25 @@ html[data-motion="reduce"]::view-transition-new(app-page) {
 
 html[data-motion="reduce"] .motion-panel {
   transition-property: none;
+}
+
+html[data-motion="reduce"] .wy-collapse {
+  transition-property: opacity;
+  transition-duration: 100ms;
+}
+
+html[data-motion="reduce"] .wy-stagger-in,
+html[data-motion="reduce"] .wy-message-in {
+  animation: none;
+}
+
+html[data-motion="reduce"] .wy-panel-animated {
+  transition-property: opacity;
+  transition-duration: 100ms;
+}
+
+html[data-motion="reduce"] .wy-ripple-ink {
+  display: none;
 }
 
 html[data-motion="reduce"] [data-slot="button"]:active {

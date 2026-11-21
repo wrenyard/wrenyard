@@ -78,7 +78,7 @@ export function TaskRunTimeLimitSettings() {
   const displayPlaceholder = limit.value === null || limit.value === undefined ? String(DEFAULT_MINUTES) : undefined;
 
   return (
-    <section className="flex flex-col gap-2 overflow-hidden rounded-xl border bg-card p-4">
+    <section className="flex flex-col gap-2 overflow-hidden rounded-2xl border border-border/55 bg-surface-container-low/90 p-4">
       <div className="flex flex-col gap-1">
         <Label htmlFor="task-run-time-limit">任务运行时限（分钟）</Label>
         <p className="text-xs text-muted-foreground">默认 60 分钟，可设置范围 5–600。</p>

@@ -107,7 +107,7 @@ function TreeGroup({ label, count, open, onToggle, children }: {
         className="group/collapsible [&[data-open]>button>svg:first-child]:rotate-90"
       >
         <SidebarMenuButton render={<CollapsibleTrigger />} className="pr-8" title={label}>
-          <ChevronRight className="transition-transform" />
+          <ChevronRight className="transition-transform duration-fast ease-[var(--ease-m3-spring-fast)]" />
           <Folder />
           <span>{label}</span>
         </SidebarMenuButton>

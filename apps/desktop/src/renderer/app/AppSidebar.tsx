@@ -139,7 +139,12 @@ export function AppSidebar({ page, onOpenUpdate }: AppSidebarProps) {
     <SidebarHeader>
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton tooltip="新建对话" onClick={() => executeCommand('session.newDraft')}>
+          {/* M3 Extended Tonal FAB pill. */}
+          <SidebarMenuButton
+            tooltip="新建对话"
+            className="mb-1 h-10 rounded-full bg-primary-container font-medium text-on-primary-container shadow-xs hover:bg-[color-mix(in_oklch,var(--primary-container),var(--on-primary-container)_8%)]"
+            onClick={() => executeCommand('session.newDraft')}
+          >
             <SquarePen />
             <span>新建对话</span>
           </SidebarMenuButton>
@@ -191,7 +196,7 @@ export function AppSidebar({ page, onOpenUpdate }: AppSidebarProps) {
   );
 
   const footer = (
-    <div className="flex w-full items-center gap-1">
+    <div className="flex w-full items-center gap-1 px-2 py-2">
       <DaemonItem onOpenUpdate={onOpenUpdate} />
       <Tooltip>
         <TooltipTrigger
@@ -203,8 +208,10 @@ export function AppSidebar({ page, onOpenUpdate }: AppSidebarProps) {
               aria-label={SETTINGS_NAV.label}
               aria-current={page === SETTINGS_NAV.id ? 'page' : undefined}
               className={cn(
-                'shrink-0 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-                page === SETTINGS_NAV.id && 'bg-sidebar-accent text-sidebar-accent-foreground',
+                'shrink-0 rounded-full size-9 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                // Subtle gear rotation on hover.
+                '[&_svg]:transition-transform [&_svg]:duration-base [&_svg]:ease-[var(--ease-m3-spring-fast)] hover:[&_svg]:rotate-45',
+                page === SETTINGS_NAV.id && 'bg-secondary-container text-on-secondary-container',
               )}
               onClick={() => void shell.navigate(SETTINGS_NAV.id)}
             />

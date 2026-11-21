@@ -94,7 +94,7 @@ function ProviderUsageCard({ entry, now, currency }: { entry: ProviderCatalogSna
   const hasDetail = quota !== undefined && (quota.windows.length > 0 || quota.balances.length > 0);
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border bg-card p-4">
+    <div className="flex flex-col gap-3 rounded-2xl border border-border/55 bg-surface-container-low p-4">
       <div className="flex items-center gap-2">
         <BrandIcon brand={providerBrand(entry.id)} />
         <span className="truncate font-medium">{entry.label || entry.id}</span>

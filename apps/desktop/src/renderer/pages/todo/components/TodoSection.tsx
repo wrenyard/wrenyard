@@ -81,11 +81,13 @@ export function TodoSection({
           />
         }
       >
-        <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
+        <ChevronRight className={cn('size-3.5 transition-transform duration-fast ease-[var(--ease-m3-spring-fast)]', open && 'rotate-90')} />
         <span className={cn(uppercase && 'uppercase')}>{label}</span>
         <span className="ml-auto tabular-nums">{count}</span>
       </CollapsibleTrigger>
-      <CollapsibleContent className="h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-fast data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0">
+      {/* The Wave 1 CollapsibleContent default carries the M3 emphasized
+          decelerate height animation; nothing local is overridden here. */}
+      <CollapsibleContent>
         {children}
       </CollapsibleContent>
     </Collapsible>

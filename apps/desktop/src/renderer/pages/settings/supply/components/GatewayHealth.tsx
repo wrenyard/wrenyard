@@ -134,7 +134,7 @@ export function GatewayHealth({ active }: GatewayHealthProps) {
     return (
       <section className="flex flex-col gap-2">
         <h3 className="text-sm font-medium text-muted-foreground">{SECTION_TITLE}</h3>
-        <div className="overflow-hidden rounded-xl border bg-card p-4">
+        <div className="overflow-hidden rounded-2xl border border-border/55 bg-surface-container-low/90 p-4">
           <Skeleton className="h-24 w-full" />
         </div>
       </section>
@@ -170,7 +170,7 @@ export function GatewayHealth({ active }: GatewayHealthProps) {
         const routes = (grouped.get(provider) ?? []).filter((route) => route.last24h.requests > 0);
         if (routes.length === 0) return null;
         return (
-          <div key={provider} className="flex flex-col gap-2 overflow-hidden rounded-xl border bg-card">
+          <div key={provider} className="flex flex-col gap-2 overflow-hidden rounded-2xl border border-border/55 bg-surface-container-low/90">
             <p className="border-b px-4 py-2 text-sm font-medium">{provider}</p>
             <Table>
               <TableHeader>
@@ -207,7 +207,7 @@ export function GatewayHealth({ active }: GatewayHealthProps) {
         );
       })}
       {poolEntries.length > 0 && (
-        <div className="flex flex-col gap-2 overflow-hidden rounded-xl border bg-card">
+        <div className="flex flex-col gap-2 overflow-hidden rounded-2xl border border-border/55 bg-surface-container-low/90">
           <p className="border-b px-4 py-2 text-sm font-medium">额度池汇总</p>
           <Table>
             <TableHeader>

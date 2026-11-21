@@ -126,7 +126,7 @@ export function ActivityHeatmap({ daily, todayKey }: { daily: StatsDailySnapshot
             <span>{HEATMAP_QUIET_LABEL}</span>
             <div className="flex items-center gap-1">
               {LEGEND_LEVELS.map((level) => (
-                <span key={level} className={cn('size-3 rounded-sm', LEVEL_CLASS[level])} aria-hidden />
+                <span key={level} className={cn('size-3 rounded-[4px]', LEVEL_CLASS[level])} aria-hidden />
               ))}
             </div>
             <span>{HEATMAP_LOUD_LABEL}</span>
@@ -145,7 +145,7 @@ export function ActivityHeatmap({ daily, todayKey }: { daily: StatsDailySnapshot
           <div className="grid grid-flow-col grid-rows-7" style={columnStyle} role="list">
             {visibleSlots.map((slot, index) => {
               const day = slot.day;
-              if (!day) return <span key={index} className="size-3 rounded-sm" aria-hidden />;
+              if (!day) return <span key={index} className="size-3 rounded-[4px]" aria-hidden />;
               const isToday = todayKey !== undefined && day.dayKey === todayKey;
               const lines = heatmapTooltipLines(day);
               return (
@@ -158,7 +158,7 @@ export function ActivityHeatmap({ daily, todayKey }: { daily: StatsDailySnapshot
                         aria-label={lines.join('，')}
                         tabIndex={day.totalTokens > 0 || isToday ? 0 : -1}
                         className={cn(
-                          'size-3 rounded-sm',
+                          'size-3 rounded-[4px] transition-transform duration-instant ease-[var(--ease-m3-spring-fast)] hover:scale-125',
                           LEVEL_CLASS[slot.level],
                           isToday && 'ring-1 ring-ring',
                         )}

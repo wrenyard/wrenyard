@@ -147,7 +147,7 @@ export function ProviderSupply({
 
       <section className="flex flex-col gap-2">
         <h3 className="text-sm font-medium text-muted-foreground">已激活</h3>
-        <div className="overflow-hidden rounded-xl border bg-card">
+        <div className="overflow-hidden rounded-2xl border border-border/55 bg-surface-container-low/90">
           {orderedConfigured.length === 0 ? (
             <p className="px-3 py-2 text-sm text-muted-foreground">{ACTIVATED_EMPTY}</p>
           ) : (
@@ -180,7 +180,7 @@ export function ProviderSupply({
 
       <section className="flex flex-col gap-2">
         <h3 className="text-sm font-medium text-muted-foreground">未配置</h3>
-        <div className="overflow-hidden rounded-xl border bg-card">
+        <div className="overflow-hidden rounded-2xl border border-border/55 bg-surface-container-low/90">
           {unconfigured.length === 0 ? (
             <p className="px-3 py-2 text-sm text-muted-foreground">{UNCONFIGURED_EMPTY}</p>
           ) : (
@@ -228,7 +228,7 @@ function SortableRow({
               transform: CSS.Transform.toString(transform),
               transition,
             }}
-            className="relative z-0 bg-card data-[dragging=true]:z-10 data-[dragging=true]:opacity-80"
+            className="relative z-0 bg-surface-container-low/90 data-[dragging=true]:z-10 data-[dragging=true]:opacity-80"
           />
         }
       >

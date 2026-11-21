@@ -192,7 +192,7 @@ export function RoutinesSection(props: { botId: string; botName?: string; filter
           </Table>
         )}
         {creating ? (
-          <div className="flex flex-col gap-2 rounded-lg border p-3">
+          <div className="flex flex-col gap-2 rounded-2xl border border-border/55 bg-surface-container/50 p-4">
             <Textarea value={prompt} rows={2} placeholder="例行任务提示词" onChange={(event) => setPrompt(event.target.value)} />
             <div className="flex flex-wrap items-center gap-4">
               <Field className="flex items-center gap-2">

@@ -38,7 +38,7 @@ function appendToken(value: string, token: string): string {
  */
 export function SettingsSearch({ value, resultCount, onChange }: SettingsSearchProps) {
   return (
-    <InputGroup>
+    <InputGroup className="h-10 rounded-full bg-surface-container/80 border-border/50 px-1.5 shadow-none focus-within:bg-surface-container-low focus-within:shadow-[var(--elevation-1)] has-[[data-slot=input-group-control]:focus-visible]:ring-0">
       <InputGroupAddon align="inline-start">
         <Search />
       </InputGroupAddon>

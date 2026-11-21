@@ -67,7 +67,7 @@ export function TodoDetail({ todo, rowId, now }: TodoDetailProps) {
   };
 
   return (
-    <section role="region" aria-labelledby={rowId} className="ml-9 mb-2 mt-1 rounded-lg border bg-card px-4 py-3 text-sm">
+    <section role="region" aria-labelledby={rowId} className="ml-9 mb-2 mt-1 rounded-xl border border-border/50 bg-surface-container-low/80 px-4 py-3 text-sm">
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span className="font-mono">{todo.id}</span>
         <span>{TODO_STATUS_LABEL[todo.status]}</span>

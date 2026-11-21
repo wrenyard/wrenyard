@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from '@/renderer/components/ui/card';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import type { MetricCard } from '../model/stats.js';
@@ -6,8 +7,12 @@ import type { MetricCard } from '../model/stats.js';
 export function MetricCards({ cards, loading = false }: { cards: MetricCard[]; loading?: boolean }) {
   return (
     <div className="grid grid-cols-1 gap-4 @xl/main:grid-cols-2 @5xl/main:grid-cols-4">
-      {cards.map((card) => (
-        <Card key={card.label}>
+      {cards.map((card, index) => (
+        <Card
+          key={card.label}
+          className="wy-stagger-in transition-shadow duration-fast"
+          style={{ '--stagger-index': index } as CSSProperties}
+        >
           <CardHeader>
             <CardDescription>{card.label}</CardDescription>
             {loading

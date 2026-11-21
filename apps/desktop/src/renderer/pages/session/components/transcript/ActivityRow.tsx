@@ -30,7 +30,7 @@ export function ActivityRowStatus({ running, failed, cancelled }: { running?: bo
 /** Scrollable monospace box for a step's output or code. */
 export function OutputBox({ children }: { children: ReactNode }) {
   return (
-    <pre className="max-h-80 overflow-auto rounded-lg border bg-background/60 px-3 py-2 font-mono text-xs whitespace-pre-wrap">
+    <pre className="max-h-80 overflow-auto rounded-xl border bg-background/60 px-3 py-2 font-mono text-xs whitespace-pre-wrap">
       {children}
     </pre>
   );
@@ -79,7 +79,7 @@ export function ActivityRow({
             type="button"
             id={headerId}
             className={cn(
-              'flex w-full items-center gap-2 text-left text-sm hover:bg-muted/40',
+              'flex w-full items-center gap-2 text-left text-sm transition-colors duration-fast hover:bg-surface-container/60',
               compact ? 'px-2 py-1.5' : 'px-3 py-2',
             )}
           />
@@ -96,7 +96,7 @@ export function ActivityRow({
       <CollapsibleContent
         role="region"
         aria-labelledby={headerId}
-        className="h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-fast data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0"
+        className="duration-[280ms] ease-[var(--ease-m3-emphasized-decelerate)]"
       >
         <div className={cn('flex flex-col gap-2 text-sm', compact ? 'px-2 pb-2 pt-1' : 'px-3 pb-3 pt-1')}>
           {children}

@@ -31,16 +31,24 @@ export function UsageCard({ id, title, children, actions, footer, defaultOpen = 
   });
 
   return (
-    <section className={cn('flex flex-col rounded-xl border bg-card px-4 py-2.5', className)} data-slot="usage-card">
+    <section className={cn('flex flex-col rounded-2xl border border-border/50 bg-surface-container-low/90 px-4 py-3', className)} data-slot="usage-card">
       <div className="flex h-7 items-center gap-2">
         <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-medium" aria-expanded={open} onClick={toggle}>
           <span className="truncate">{title}</span>
-          <ChevronDown className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform duration-fast', !open && '-rotate-90')} aria-hidden="true" />
+          <ChevronDown className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform duration-fast ease-[var(--ease-m3-spring-fast)]', !open && '-rotate-90')} aria-hidden="true" />
         </button>
         {actions}
       </div>
-      {open && <div className="flex flex-col gap-1.5">{children}</div>}
-      {open && footer !== undefined && <div className="mt-2 flex items-center justify-between gap-2">{footer}</div>}
+      {/* Both the body and the footer expand and retract through the
+          grid-based `.wy-collapse` animation instead of hard mounts. */}
+      <div className="wy-collapse" data-open={open ? 'true' : 'false'}>
+        <div className="flex flex-col gap-1.5">{children}</div>
+      </div>
+      {footer !== undefined && (
+        <div className="wy-collapse" data-open={open ? 'true' : 'false'}>
+          <div className="pt-2 flex items-center justify-between gap-2">{footer}</div>
+        </div>
+      )}
     </section>
   );
 }

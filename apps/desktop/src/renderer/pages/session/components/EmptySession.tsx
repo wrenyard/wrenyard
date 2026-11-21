@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import { useMiniMode } from '@/renderer/lib/mini';
 import { useThemeIcon } from '@/renderer/lib/theme';
 import { EmptyActivity } from './EmptyActivity.js';
@@ -26,7 +26,9 @@ export function EmptySession({ children }: { children?: ReactNode }) {
           ? 'flex w-full flex-col items-start gap-4 px-4 pt-4 text-left'
           : 'mx-auto flex w-full max-w-3xl flex-col items-start gap-6 px-4 pt-12 text-left'}
       >
-        <div className="flex flex-col items-start gap-2">
+        {/* Staggered M3 entrance: the greeting, the figures and the heatmap
+            each carry the next `--stagger-index`. */}
+        <div className="wy-stagger-in flex flex-col items-start gap-2" style={{ '--stagger-index': 0 } as CSSProperties}>
           <img className="size-6 rounded" src={themeIcon} alt="" aria-hidden="true" />
           <h1 className={mini ? 'text-lg font-semibold' : 'text-2xl font-semibold tracking-tight'}>
             {`${greeting}，有什么要一起做的？`}
@@ -35,8 +37,12 @@ export function EmptySession({ children }: { children?: ReactNode }) {
             <p className="text-sm/relaxed text-muted-foreground">可以随时发送多条消息，并行推进多个轮次。</p>
           )}
         </div>
-        <EmptyStats compact={mini} />
-        {mini ? <EmptyActivity weeks={12} /> : <EmptyActivity />}
+        <div className="wy-stagger-in w-full" style={{ '--stagger-index': 1 } as CSSProperties}>
+          <EmptyStats compact={mini} />
+        </div>
+        <div className="wy-stagger-in" style={{ '--stagger-index': 2 } as CSSProperties}>
+          {mini ? <EmptyActivity weeks={12} /> : <EmptyActivity />}
+        </div>
       </div>
       <div className="flex-1" />
       {/* A draft card renders its composer here, not through the page's mini

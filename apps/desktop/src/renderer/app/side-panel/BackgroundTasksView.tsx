@@ -6,7 +6,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
-  ChevronDown,
   ChevronRight,
   Square,
   SquareArrowOutUpRight,
@@ -489,8 +488,8 @@ export function BackgroundTasksView() {
       >
         <div
           className={cn(
-            'group/task flex h-9 items-center gap-1 rounded-lg px-3',
-            expanded && 'ring-1 ring-ring bg-accent/40',
+            'group/task flex h-9 items-center gap-1 rounded-2xl px-3 transition-colors duration-fast hover:bg-surface-container/80',
+            expanded && 'bg-surface-container ring-1 ring-primary/35',
           )}
         >
           <button
@@ -525,11 +524,13 @@ export function BackgroundTasksView() {
             )}
           </span>
           <button type="button" className="shrink-0 text-muted-foreground" onClick={() => toggleExpand(key)} aria-label={expanded ? '收起' : '展开'}>
-            {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+            <ChevronRight className={cn('size-4 transition-transform duration-fast ease-[var(--ease-m3-spring-fast)]', expanded && 'rotate-90')} />
           </button>
         </div>
-        {expanded ? (
-          <div className="flex flex-col gap-2 px-1 pb-2">
+        {/* The task's detail block expands through the grid-based
+            `.wy-collapse` animation instead of a hard conditional mount. */}
+        <div className="wy-collapse" data-open={expanded ? 'true' : 'false'}>
+          <div className="pb-2 flex flex-col gap-2 px-1">
             <div className="max-h-80 overflow-auto rounded-lg border bg-muted/30">
               <TaskTranscript
                 key={task.taskRunId}
@@ -577,7 +578,7 @@ export function BackgroundTasksView() {
               ) : null}
             </p>
           </div>
-        ) : null}
+        </div>
       </div>
     );
   };
@@ -590,7 +591,7 @@ export function BackgroundTasksView() {
       <button
         key={graph.taskgraphId}
         type="button"
-        className="flex h-9 items-center gap-2 rounded-lg px-3 text-left hover:bg-accent/40"
+        className="flex h-9 items-center gap-2 rounded-2xl px-3 text-left transition-colors duration-fast hover:bg-surface-container/80"
         onClick={() => void shell.openTaskGraph(graph.taskgraphId)}
       >
         <span className="min-w-0 flex-1 truncate text-sm" title={title}>{title}</span>
@@ -617,30 +618,32 @@ export function BackgroundTasksView() {
               className="mb-1 flex w-full items-center gap-1 px-2 py-1 text-sm text-muted-foreground"
               onClick={() => setRunningGroupOpen((open) => !open)}
             >
-              {runningGroupOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+              <ChevronRight className={cn('size-4 transition-transform duration-fast ease-[var(--ease-m3-spring-fast)]', runningGroupOpen && 'rotate-90')} />
               <span>运行中 {runningCount}</span>
             </button>
-            {runningGroupOpen ? (
-              <div className="mb-3 flex flex-col gap-1">
+            {/* Both sections expand and retract through the grid-based
+                `.wy-collapse` animation instead of hard conditional mounts. */}
+            <div className="wy-collapse" data-open={runningGroupOpen ? 'true' : 'false'}>
+              <div className="pb-3 flex flex-col gap-1">
                 {runningGraphs.map((graph) => renderGraphRow(graph, true))}
                 {runningTasks.map((task) => renderTaskRow(task, true))}
               </div>
-            ) : null}
+            </div>
 
             <button
               type="button"
               className="mb-1 flex w-full items-center gap-1 px-2 py-1 text-sm text-muted-foreground"
               onClick={() => setFinishedGroupOpen((open) => !open)}
             >
-              {finishedGroupOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+              <ChevronRight className={cn('size-4 transition-transform duration-fast ease-[var(--ease-m3-spring-fast)]', finishedGroupOpen && 'rotate-90')} />
               <span>已结束 {finishedCount}</span>
             </button>
-            {finishedGroupOpen ? (
+            <div className="wy-collapse" data-open={finishedGroupOpen ? 'true' : 'false'}>
               <div className="flex flex-col gap-1">
                 {finishedGraphsList.map((graph) => renderGraphRow(graph, false))}
                 {finishedTasksList.map((task) => renderTaskRow(task, false))}
               </div>
-            ) : null}
+            </div>
           </>
         )}
       </div>

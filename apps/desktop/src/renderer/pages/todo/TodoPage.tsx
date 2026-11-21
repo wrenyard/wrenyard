@@ -245,7 +245,7 @@ export function TodoPage() {
       <PageHeader>
         <PageTitle>待办</PageTitle>
         <PageActions>
-          <InputGroup className="h-7 w-56 text-sm">
+          <InputGroup className="h-7 w-56 rounded-full bg-surface-container/80 text-sm">
             <InputGroupAddon>
               <Search className="size-3.5" />
             </InputGroupAddon>

@@ -7,9 +7,9 @@ import { useMiniMode } from '@/renderer/lib/mini';
 import { startViewTransition } from '@/renderer/lib/motion';
 import { useIsMobile } from '@/renderer/hooks/use-mobile';
 import { Sidebar, SidebarInset, SidebarProvider } from '@/renderer/components/ui/sidebar';
+import { cn } from 'cn';
 import { AppSidebar } from '@/renderer/app/AppSidebar';
 import { SidePanel } from '@/renderer/app/side-panel/SidePanel';
-import { useSidePanelState } from '@/renderer/lib/side-panel';
 import { useShellSidebarResize } from '@/renderer/app/useShellSidebarResize';
 import { TitleBar } from '@/renderer/app/TitleBar';
 import { TitleBarPageProvider } from '@/renderer/lib/titlebar';
@@ -114,7 +114,6 @@ export function AppShell() {
   // and the fixed container move together.
   const isMobile = useIsMobile();
   const sidebarResize = useShellSidebarResize(!mini && shellSidebarOpen && !isMobile);
-  const sidePanelState = useSidePanelState();
   // The left sidebar collapses fully off-canvas, so a closed sidebar occupies 0.
   const leftSidebarWidth = shellSidebarOpen ? sidebarResize.width : 0;
 
@@ -140,7 +139,7 @@ export function AppShell() {
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col"
+      className="flex h-full min-h-0 flex-col bg-surface-shell"
       data-mini={mini ? 'true' : undefined}
       onMouseDown={(event) => {
         // Do not let a mouse click move keyboard focus onto a button: a lingering
@@ -169,13 +168,28 @@ export function AppShell() {
           {/* Settings directory in the shell left column; hidden but mounted otherwise. */}
           {!mini && (
             <div className={active === 'settings' && settingsSidebarOpen ? 'flex min-h-0 flex-col shrink-0' : 'hidden'}>
-              <Sidebar collapsible="none" className="shrink-0 border-r">
+              <Sidebar collapsible="none" className="shrink-0">
                 <div ref={setSettingsSidebarHost} className="flex min-h-0 flex-1 flex-col" />
               </Sidebar>
             </div>
           )}
           {!mini && shellSidebarOpen && !isMobile && <div {...sidebarResize.handleProps} />}
-          <SidebarInset className="motion-surface-page flex min-h-0 min-w-0 flex-col">
+          {/* M3 inset workspace sheet: outside mini mode the page area floats
+              as a rounded canvas sheet over the recessed shell surface. The
+              left margin appears only while the shell sidebar is closed so the
+              sheet stays symmetrically framed; `data-shell-resizing` (set on
+              the provider while the separator is dragged) suppresses the
+              margin/radius/shadow transitions so dragging stays instant. */}
+          <SidebarInset
+            className={cn(
+              'motion-surface-page flex min-h-0 min-w-0 flex-col',
+              !mini && cn(
+                'bg-surface-canvas overflow-hidden md:mr-2 md:mb-2 md:rounded-[20px] md:ring-1 md:ring-border/60 md:shadow-[var(--elevation-1)]',
+                !shellSidebarOpen && !isMobile && 'md:ml-2',
+                'transition-[margin,border-radius,box-shadow] duration-[380ms] ease-[var(--ease-m3-spring-spatial)] [[data-shell-resizing=true]_&]:transition-none',
+              ),
+            )}
+          >
             {endpointSettled ? (
               // Generation-keyed boundary: a committed switch remounts the page
               // tree, so page-owned state cannot leak across hosts.
@@ -210,7 +224,9 @@ export function AppShell() {
           </SidebarInset>
           <UpdateDialog open={updateOpen} onOpenChange={setUpdateOpen} />
         </SidebarProvider>
-        {!mini && sidePanelState.view !== null && <SidePanel reservedWidth={isMobile ? 0 : leftSidebarWidth} />}
+        {/* Always mounted outside mini mode; the panel plays its own enter
+            and exit presence animation. */}
+        {!mini && <SidePanel reservedWidth={isMobile ? 0 : leftSidebarWidth} />}
       </div>
     </div>
   );

@@ -9,7 +9,7 @@ export function SidePanelView({ title, children }: {
   children: ReactNode;
 }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background">
+    <div className="flex min-h-0 w-(--side-panel-width) shrink-0 flex-1 flex-col bg-transparent">
       <div className="flex h-12 items-center justify-between gap-2 px-4">
         <span className="text-sm font-medium">{title}</span>
         <div className="flex items-center gap-1">

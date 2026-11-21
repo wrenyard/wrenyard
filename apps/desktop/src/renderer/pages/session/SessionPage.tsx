@@ -395,7 +395,7 @@ export function SessionPage() {
               viewport edge instead of narrowing the transcript. */}
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             {empty ? (
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col pr-(--session-rail)">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col pr-(--session-rail) transition-[padding-right] duration-[360ms] ease-[var(--ease-m3-spring-spatial)]">
                 <EmptySession>
                   {errorAlert}
                   {composer}
@@ -406,7 +406,7 @@ export function SessionPage() {
                 <MessageScrollerProvider key={sessionKey} autoScroll>
                   <MessageScroller className={cn('min-h-0 flex-1', conversationEnter && 'motion-conversation-enter')}>
                     {/* The scroller owns follow-bottom, so browser scroll anchoring must not compete during streaming. */}
-                    <MessageScrollerViewport ref={viewportRef} className="scroll-fade-b pr-(--session-rail) [overflow-anchor:none] overflow-x-hidden">
+                    <MessageScrollerViewport ref={viewportRef} className="scroll-fade-b pr-(--session-rail) transition-[padding-right] duration-[360ms] ease-[var(--ease-m3-spring-spatial)] [overflow-anchor:none] overflow-x-hidden">
                       <MessageScrollerContent className={cn('w-full pt-(--header-height) pb-4 gap-5', mini ? 'px-3' : 'mx-auto max-w-3xl px-4')}>
                         {hydrating && (
                           <div role="status" className="py-8 text-center text-sm text-muted-foreground">
@@ -439,7 +439,7 @@ export function SessionPage() {
                     <MessageScrollerButton className="-translate-x-[calc(50%+var(--session-rail)/2)]" />
                   </MessageScroller>
                 </MessageScrollerProvider>
-                <div className="pr-(--session-rail)">
+                <div className="pr-(--session-rail) transition-[padding-right] duration-[360ms] ease-[var(--ease-m3-spring-spatial)]">
                   <div className={cn('w-full', mini ? 'px-4 pt-2 pb-5' : 'mx-auto max-w-3xl px-4 pb-4')}>
                   {errorAlert}
                   {composer}

@@ -39,7 +39,7 @@ function RoutinesBotEntry(props: {
   const botNameMatched = key !== '' && props.bot.name.trim().toLowerCase().includes(key);
   if (!props.bot.enabled) {
     return (
-      <div className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+      <div className="flex items-center gap-2 rounded-2xl border border-border/55 bg-surface-container-low/80 px-3 py-2 text-sm">
         <span className="font-medium">{props.bot.name}</span>
         <StatusBadge tone="muted" label="已停用" />
         {!routines.isPending && (
@@ -112,7 +112,7 @@ export function RoutinesPage() {
         <PageTitle>自动化</PageTitle>
       </PageHeader>
       <PageContent>
-        <InputGroup className="max-w-sm">
+        <InputGroup className="max-w-sm rounded-full bg-surface-container/80">
           <InputGroupAddon>
             <Search className="size-4" />
           </InputGroupAddon>

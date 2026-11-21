@@ -65,7 +65,11 @@ export interface SettingsTocProps {
 }
 
 function countBadge(count: number) {
-  return <span className="ml-auto text-xs tabular-nums text-sidebar-foreground/60">{count}</span>;
+  return (
+    <span className="ml-auto rounded-full bg-sidebar-accent/60 px-1.5 py-px text-[11px] font-medium tabular-nums text-sidebar-foreground/70">
+      {count}
+    </span>
+  );
 }
 
 /**
@@ -131,7 +135,7 @@ export function SettingsToc({
                 <span>{category.label}</span>
                 {category.id !== 'bot' && countBadge(category.count)}
                 <ChevronRight
-                  className={cn('ml-1 transition-transform', open && 'rotate-90')}
+                  className={cn('ml-1 transition-transform duration-fast ease-[var(--ease-m3-spring-fast)]', open && 'rotate-90')}
                   aria-hidden="true"
                 />
               </CollapsibleTrigger>

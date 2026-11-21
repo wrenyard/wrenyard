@@ -51,8 +51,8 @@ export function TaskDetail({
   };
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-3">
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[20px] border border-border/55 bg-surface-container-low/90">
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/50 px-4 py-3">
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="flex min-w-0 items-baseline gap-2">
             <h2 className="truncate font-medium">{row.display_name}</h2>
@@ -82,7 +82,7 @@ export function TaskDetail({
       </header>
 
       {error !== '' ? (
-        <div className="border-b px-4 py-3">
+        <div className="border-b border-border/50 px-4 py-3">
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
             <AlertAction>

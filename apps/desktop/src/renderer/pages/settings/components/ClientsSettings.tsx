@@ -269,7 +269,7 @@ export function ClientsSettings() {
         <p role="alert" className="text-sm text-destructive">{error}</p>
       )}
 
-      <div className="overflow-hidden rounded-xl border bg-card">
+      <div className="overflow-hidden rounded-2xl border border-border/55 bg-surface-container-low/90">
         <ul className="flex flex-col divide-y">
           {clients === null && loading
             ? [0, 1, 2].map((index) => (

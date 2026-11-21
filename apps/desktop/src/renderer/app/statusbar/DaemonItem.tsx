@@ -262,7 +262,7 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
           title={status}
           aria-label={`Daemon 连接状态：${status}`}
           aria-haspopup="dialog"
-          className="h-7 w-full min-w-0 justify-start gap-1.5 rounded-xl px-2 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          className="h-9 w-full min-w-0 justify-start gap-1.5 rounded-full px-3 bg-surface-container/70 hover:bg-surface-container text-sidebar-foreground transition-colors duration-fast"
         >
           {remoteStateValue === 'remote' ? (
             <Server className="size-4 shrink-0" />
@@ -274,7 +274,13 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
             <Unplug className="size-4 shrink-0" />
           )}
           <span className="min-w-0 flex-1 truncate text-left">{status}</span>
-          <span aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT_CLASS[tone])} />
+          <span aria-hidden className="relative flex size-2 shrink-0 items-center justify-center">
+            {/* Subtle halo pulsing around the online dot. */}
+            {tone === 'online' && (
+              <span className="absolute inset-0 animate-ping rounded-full bg-success opacity-60 motion-reduce:animate-none [[data-motion=reduce]_&]:animate-none" />
+            )}
+            <span className={cn('size-2 rounded-full', DOT_CLASS[tone])} />
+          </span>
           <ChevronUp className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         </Button>
       </PopoverTrigger>
@@ -411,9 +417,11 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
             <span className="ml-auto truncate text-xs text-muted-foreground">
               {remoteState ? REMOTE_STATE_LABEL[remoteState.state] : ''}
             </span>
-            <ChevronRight className={cn('size-3.5 transition-transform', remoteMenuOpen && 'rotate-90')} aria-hidden />
+            <ChevronRight className={cn('size-3.5 transition-transform duration-fast ease-[var(--ease-m3-spring-fast)]', remoteMenuOpen && 'rotate-90')} aria-hidden />
           </Button>
-          {remoteMenuOpen ? (
+          {/* The remote submenu expands and retracts through the grid-based
+              `.wy-collapse` animation instead of a hard conditional mount. */}
+          <div className="wy-collapse" data-open={remoteMenuOpen ? 'true' : 'false'}>
             <div className="ml-4 flex flex-col gap-1 border-l border-border/60 pl-2" data-remote-menu>
               <Button
                 type="button"
@@ -452,7 +460,7 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
                 </Button>
               ) : null}
             </div>
-          ) : null}
+          </div>
         </div>
       </PopoverContent>
     </Popover>

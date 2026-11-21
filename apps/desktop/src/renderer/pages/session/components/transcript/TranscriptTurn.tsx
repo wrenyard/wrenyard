@@ -107,7 +107,8 @@ export function TranscriptUserMessage({ turn, sessionId, botNames }: { turn: Tur
   return (
     <div className="group/msg flex flex-col items-end gap-1.5">
       <span className="self-end px-1 text-xs text-muted-foreground">{userSpeakerLabel(turn.user.sender, botNames)}</span>
-      <div className="max-w-[85%] rounded-2xl bg-muted px-4 py-2.5 text-sm whitespace-pre-wrap break-words">
+      {/* M3 tonal user bubble with a soft bottom-right corner. */}
+      <div className="max-w-[85%] rounded-[22px] rounded-br-[6px] bg-primary-container/75 px-4 py-2.5 text-sm text-on-primary-container whitespace-pre-wrap break-words">
         {turn.user.text}
         {attachments.length > 0 && (
           <MediaAttachments items={attachments} sessionId={sessionId} className="mt-2" />

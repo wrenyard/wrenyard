@@ -15,11 +15,13 @@ interface StatCell {
 /** One compact figure: muted label, tabular value, optional one-line note. */
 function Cell({ label, value, note, title, compact }: StatCell & { compact: boolean }) {
   return (
+    // M3 tonal stat card: a low container that lifts to the plain container
+    // on hover with a spring-eased colour/border swap.
     <div
       title={title}
       className={compact
-        ? 'flex flex-col gap-0.5 rounded-lg border bg-card/50 px-2.5 py-2'
-        : 'flex flex-col gap-1 rounded-lg border bg-card/50 px-3 py-2.5'}
+        ? 'flex flex-col gap-0.5 rounded-2xl border border-border/50 bg-surface-container-low/90 px-3 py-2.5 transition-[background-color,border-color,transform] duration-fast ease-[var(--ease-m3-spring-fast)] hover:bg-surface-container'
+        : 'flex flex-col gap-1 rounded-2xl border border-border/50 bg-surface-container-low/90 px-4 py-3.5 transition-[background-color,border-color,transform] duration-fast ease-[var(--ease-m3-spring-fast)] hover:bg-surface-container'}
     >
       <span className="text-xs text-muted-foreground">{label}</span>
       <span className={compact ? 'text-base font-semibold tabular-nums' : 'text-xl font-semibold tabular-nums'}>

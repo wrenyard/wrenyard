@@ -77,6 +77,7 @@ function ToggleGroupItem({
           variant: context.variant || variant,
           size: context.size || size,
         }),
+        "rounded-full transition-all duration-fast ease-[var(--ease-m3-spring-fast)] data-[pressed]:bg-secondary-container data-[pressed]:text-on-secondary-container",
         className
       )}
       {...props}

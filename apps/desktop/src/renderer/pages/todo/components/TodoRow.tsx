@@ -103,8 +103,8 @@ export function TodoRow({
         onClick={onToggle}
         onKeyDown={onKeyDown}
         className={cn(
-          'group flex min-h-9 w-full items-center gap-3 rounded-md px-2 py-1.5 text-left hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-          expanded && 'bg-muted/40',
+          'group flex min-h-9 w-full items-center gap-3 rounded-xl px-2 py-1.5 text-left transition-colors duration-fast hover:bg-surface-container/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          expanded && 'bg-surface-container/90',
           // The 1500ms highlight fade is intentionally separate from motion tokens.
           highlighted && 'bg-primary/10 transition-colors duration-[1500ms]',
         )}
@@ -162,10 +162,8 @@ export function TodoRow({
           </Tooltip>
         </span>
       </button>
-      <CollapsibleContent
-        id={detailId}
-        className="h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-fast data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0"
-      >
+      {/* Inherits the Wave 1 CollapsibleContent height animation. */}
+      <CollapsibleContent id={detailId}>
         <TodoDetail todo={todo} rowId={rowId} now={now} />
       </CollapsibleContent>
     </Collapsible>

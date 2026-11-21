@@ -95,7 +95,7 @@ export function RoutingExclusionsSettings() {
       {providers.length === 0 ? (
         <p className="text-sm text-muted-foreground">暂无可用的供应商目录。</p>
       ) : (
-        <div className="overflow-hidden rounded-xl border bg-card">
+        <div className="overflow-hidden rounded-2xl border border-border/55 bg-surface-container-low/90">
           <div className="flex flex-col divide-y">
             {providers.map((provider) => {
               const id = provider.id;

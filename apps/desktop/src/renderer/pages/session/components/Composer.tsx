@@ -586,7 +586,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   return (
     <div className="relative">
       {dragActive && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/70 text-sm font-medium text-primary">
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[26px] border-2 border-dashed border-primary/60 bg-surface-canvas/80 backdrop-blur-xs text-sm font-medium text-primary wy-stagger-in">
           松开以添加文件
         </div>
       )}
@@ -675,7 +675,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
           <InputGroupButton
             type="button"
             size="icon-sm"
-            className="size-6 rounded-full bg-muted p-0 text-muted-foreground hover:bg-muted/80 hover:text-foreground [&_svg]:size-3.5"
+            className="size-7 rounded-full bg-surface-container p-0 text-muted-foreground hover:bg-surface-container-high hover:text-foreground [&_svg]:size-4"
             aria-label="添加附件"
             title="添加附件"
             disabled={disabled || attachments.length >= MAX_ATTACHMENTS}

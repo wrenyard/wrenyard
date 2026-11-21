@@ -68,7 +68,9 @@ export function EmptyActivity({ weeks = 26 }: { weeks?: number }) {
 
   return (
     <div className="flex flex-col items-start gap-2">
-      <div className="grid grid-flow-col grid-rows-7 gap-1" role="list">
+      {/* M3 tonal card around the heatmap strip. */}
+      <div className="rounded-2xl border border-border/45 bg-surface-container-low/75 px-4 py-3.5">
+        <div className="grid grid-flow-col grid-rows-7 gap-1" role="list">
         {model.slots.map((slot, index) => {
           const day = slot.day;
           if (!day) return <span key={index} className="size-2.5" aria-hidden />;
@@ -84,7 +86,7 @@ export function EmptyActivity({ weeks = 26 }: { weeks?: number }) {
                     aria-label={lines.join('，')}
                     tabIndex={day.totalTokens > 0 || isToday ? 0 : -1}
                     className={cn(
-                      'size-2.5 rounded-full',
+                      'size-2.5 rounded-full transition-transform duration-instant ease-[var(--ease-m3-spring-fast)] hover:scale-125',
                       RELATIVE_CLASS[levelFor(day.totalTokens, thresholds)],
                       isToday && 'ring-1 ring-ring ring-offset-1 ring-offset-background',
                     )}
@@ -99,6 +101,7 @@ export function EmptyActivity({ weeks = 26 }: { weeks?: number }) {
             </Tooltip>
           );
         })}
+        </div>
       </div>
       <span className="text-xs text-muted-foreground">{parts.join(' · ')}</span>
     </div>

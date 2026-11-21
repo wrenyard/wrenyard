@@ -168,14 +168,17 @@ export function PromptInput({
   }, [watchCompactWidth]);
 
   // Shared container overrides win over the InputGroup defaults through its own
-  // cn merge; the field's focus ring is replaced by a border tint.
-  const containerBase = 'h-auto border-border bg-background shadow-none has-[[data-slot=input-group-control]:focus-visible]:ring-0 has-[[data-slot=input-group-control]:focus-visible]:border-foreground/20';
-  // The 24px leading and send circles sit 9px (1px border + 8px padding) from
-  // every edge, so their arcs are concentric with the pill's: the row is a
-  // fixed 42px tall (the 32px toolbar controls plus 4px above and below) and
-  // the expanded box uses the matching 21px radius.
-  const compactLayout = 'flex-row flex-nowrap items-center gap-1 rounded-full h-[42px] px-2 py-1';
-  const expandedLayout = 'flex-col items-stretch gap-0 rounded-[21px] p-0';
+  // cn merge. The floating M3 composer sits on a low tonal container with a
+  // level-2 elevation; focusing a control tints the border, raises it to
+  // level-3 and swaps the fill to the canvas surface, with the field's focus
+  // ring suppressed in favour of the shadow change.
+  const containerBase = 'h-auto border-border/70 bg-surface-container-low dark:bg-surface-container shadow-[var(--elevation-2)] transition-[border-radius,box-shadow,border-color,background-color] duration-base ease-[var(--ease-m3-emphasized)] has-[[data-slot=input-group-control]:focus-visible]:ring-0 has-[[data-slot=input-group-control]:focus-visible]:border-primary/45 has-[[data-slot=input-group-control]:focus-visible]:shadow-[var(--elevation-3)] has-[[data-slot=input-group-control]:focus-visible]:bg-surface-canvas';
+  // The 28px leading and 32px send circles sit inside the 46px compact pill
+  // (1px border + 6px vertical padding each side), so their arcs stay
+  // concentric with the pill's; the expanded box uses the matching 26px radius
+  // with a 2px inner padding.
+  const compactLayout = 'flex-row flex-nowrap items-center gap-1 rounded-full h-[46px] px-2.5 py-1.5';
+  const expandedLayout = 'flex-col items-stretch gap-0 rounded-[26px] p-0.5';
   // Padding, line height and font are shared by the textarea and its ghost mirror.
   const compactText = 'py-0 pl-1 pr-0 leading-6';
   const expandedText = 'px-3 py-2 leading-[22px]';
@@ -183,9 +186,10 @@ export function PromptInput({
   const fieldText = `text-base md:text-sm [[data-mini]_&]:text-sm border border-transparent break-words ${expanded ? expandedText : compactText}`;
   const compactTextareaClass = 'h-6 min-h-6 field-sizing-fixed overflow-hidden';
   const expandedTextareaClass = 'min-h-9 max-h-[200px] field-sizing-content overflow-y-auto';
-  // Shared by both layouts; only one branch renders at a time.
+  // Shared by both layouts; only one branch renders at a time. The send
+  // control is a circular M3 FAB with a spring press.
   const sendButton = submitControl ?? (
-    <InputGroupButton type="submit" variant="default" size="icon-sm" className="size-6 shrink-0 rounded-full p-0 [&_svg]:size-3.5" disabled={!canSubmit} aria-label="发送" title="发送">
+    <InputGroupButton type="submit" variant="default" size="icon-sm" className="size-8 shrink-0 rounded-full p-0 shadow-xs transition-all duration-fast ease-[var(--ease-m3-spring-fast)] enabled:hover:scale-105 enabled:active:scale-95 [&_svg]:size-4" disabled={!canSubmit} aria-label="发送" title="发送">
       <ArrowUp />
     </InputGroupButton>
   );

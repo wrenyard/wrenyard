@@ -5,6 +5,7 @@
  * animation state and one-shot effects.
  */
 import { useEffect, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import { flushSync } from 'react-dom';
 
 type ViewTransitionDocument = Document & {
@@ -18,6 +19,104 @@ export function prefersReducedMotion(): boolean {
   const explicit = document.documentElement.dataset.motion;
   if (explicit === 'reduce') return true;
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** Lifecycle phases of a presence-animated element (`.wy-panel-animated`). */
+export type AnimatedPresenceState = 'entering' | 'open' | 'exiting' | 'closed';
+
+/**
+ * Mount/unmount wrapper that keeps an element in the DOM for its exit
+ * transition. Consumers render while `mounted` and mirror `state` onto a
+ * `data-presence` attribute; the CSS motion classes do the animating.
+ */
+export function useAnimatedPresence(open: boolean, exitMs = 240): {
+  mounted: boolean;
+  state: AnimatedPresenceState;
+} {
+  const [mounted, setMounted] = useState(open);
+  const [state, setState] = useState<AnimatedPresenceState>(
+    open ? 'entering' : 'closed',
+  );
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      if (prefersReducedMotion()) {
+        setState('open');
+        return;
+      }
+      setState('entering');
+      // Promote to `open` only after the entering styles have painted twice,
+      // so the transition from the offset pose actually runs.
+      let secondFrame = 0;
+      const firstFrame = requestAnimationFrame(() => {
+        secondFrame = requestAnimationFrame(() => setState('open'));
+      });
+      return () => {
+        cancelAnimationFrame(firstFrame);
+        cancelAnimationFrame(secondFrame);
+      };
+    }
+
+    setState((current) => (current === 'closed' ? 'closed' : 'exiting'));
+    if (prefersReducedMotion()) {
+      setMounted(false);
+      setState('closed');
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setMounted(false);
+      setState('closed');
+    }, exitMs);
+    return () => window.clearTimeout(timer);
+  }, [open, exitMs]);
+
+  return { mounted, state };
+}
+
+/**
+ * Input of `triggerM3Ripple`: a React pointer event. The DOM-flavoured name is
+ * a local alias so both spellings of the union refer to the same shape.
+ */
+type PointerEvent<TTarget extends HTMLElement = HTMLElement> =
+  ReactPointerEvent<TTarget>;
+
+/** Fallback removal window; the ripple animation itself runs 480ms. */
+const RIPPLE_REMOVE_FALLBACK_MS = 520;
+
+/**
+ * Spawn an M3 state-layer ripple inside `event.currentTarget` from the press
+ * point. The ink element carries the `.wy-ripple-ink` class from
+ * `globals.css`; it removes itself on `animationend`, with a timeout fallback.
+ */
+export function triggerM3Ripple(
+  event: PointerEvent<HTMLElement> | ReactPointerEvent<HTMLElement>,
+): void {
+  if (prefersReducedMotion()) return;
+  // Primary button only; anything else (right/middle click, touch idles) bails.
+  if (event.button !== 0) return;
+  const host = event.currentTarget;
+  if (!host) return;
+  if (
+    host.hasAttribute('disabled') ||
+    host.getAttribute('aria-disabled') === 'true' ||
+    (host instanceof HTMLButtonElement && host.disabled)
+  ) {
+    return;
+  }
+
+  const rect = host.getBoundingClientRect();
+  const diameter = Math.max(rect.width, rect.height) * 1.9;
+  const radius = diameter / 2;
+  const ink = document.createElement('span');
+  ink.className = 'wy-ripple-ink';
+  ink.style.left = `${event.clientX - rect.left - radius}px`;
+  ink.style.top = `${event.clientY - rect.top - radius}px`;
+  ink.style.width = `${diameter}px`;
+  ink.style.height = `${diameter}px`;
+  ink.addEventListener('animationend', () => ink.remove(), { once: true });
+  window.setTimeout(() => ink.remove(), RIPPLE_REMOVE_FALLBACK_MS);
+  host.appendChild(ink);
 }
 
 /**

@@ -44,7 +44,11 @@ function TitleBarButton({ label, tooltip, disabled, pressed, onClick, children }
             aria-label={label}
             aria-pressed={pressed}
             disabled={disabled}
-            className={cn(pressed === true && 'bg-muted')}
+            className={cn(
+              // M3 circular icon button with a spring press.
+              'rounded-full size-8 transition-[background-color,color,transform] duration-fast ease-[var(--ease-m3-spring-fast)]',
+              pressed === true && 'bg-secondary-container text-on-secondary-container',
+            )}
             onClick={onClick}
           />
         )}
@@ -98,7 +102,7 @@ export function TitleBar() {
     return (
       <header
         data-titlebar
-        className={cn('flex h-(--titlebar-height) shrink-0 items-center gap-1 border-b bg-sidebar pr-1.5 pl-1.5', DRAG)}
+        className={cn('flex h-(--titlebar-height) shrink-0 items-center gap-1 bg-surface-shell pr-1.5 pl-1.5', DRAG)}
       >
         <div className={cn('flex shrink-0 items-center', NO_DRAG)}>
           <Tooltip>
@@ -176,7 +180,7 @@ export function TitleBar() {
     <header
       data-titlebar
       className={cn(
-        'flex h-(--titlebar-height) shrink-0 items-center gap-1 border-b bg-sidebar pr-(--titlebar-inset-end) pl-(--titlebar-inset-start)',
+        'flex h-(--titlebar-height) shrink-0 items-center gap-1 bg-surface-shell pr-(--titlebar-inset-end) pl-(--titlebar-inset-start)',
         DRAG,
       )}
     >

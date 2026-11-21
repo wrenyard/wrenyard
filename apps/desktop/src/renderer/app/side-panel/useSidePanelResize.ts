@@ -34,6 +34,8 @@ function writeStoredWidth(value: number): void {
 
 export interface SidePanelResize {
   width: number;
+  /** True while a drag is in progress, so width transitions can be suppressed. */
+  resizing: boolean;
   handleProps: HTMLAttributes<HTMLDivElement>;
 }
 
@@ -154,5 +156,5 @@ export function useSidePanelResize(enabled: boolean, reservedWidth: number): Sid
     onKeyDown,
   };
 
-  return { width, handleProps };
+  return { width, resizing, handleProps };
 }

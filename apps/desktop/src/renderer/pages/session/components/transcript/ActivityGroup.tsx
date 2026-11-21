@@ -228,7 +228,7 @@ export function ActivityGroup({ items, contextItems, sessionId, onCancelTask, wo
           render={(
             <button
               type="button"
-              className="group/act inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-0.5 transition-colors hover:text-foreground"
+              className="group/act inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 transition-colors duration-fast hover:bg-surface-container/70 hover:text-foreground"
             />
           )}
         >
@@ -248,7 +248,7 @@ export function ActivityGroup({ items, contextItems, sessionId, onCancelTask, wo
         {working !== undefined && (runningTaskCount ?? 0) > 0 && (
           <button
             type="button"
-            className="inline-flex shrink-0 items-center rounded py-0.5 transition-colors hover:text-foreground"
+            className="inline-flex shrink-0 items-center rounded-full px-2.5 py-1 transition-colors duration-fast hover:bg-surface-container/70 hover:text-foreground"
             onClick={() => openSidePanel('tasks', { sessionId })}
           >
             · {runningTaskCount} 个任务
@@ -263,16 +263,17 @@ export function ActivityGroup({ items, contextItems, sessionId, onCancelTask, wo
               <button
                 type="button"
                 aria-label={open ? '收起步骤' : '展开步骤'}
-                className="inline-flex shrink-0 items-center rounded-md py-0.5 transition-colors hover:text-foreground"
+                className="inline-flex shrink-0 items-center rounded-full py-1 transition-colors duration-fast hover:bg-surface-container/70 hover:text-foreground"
               />
             )}
           >
-            <ChevronRight className={cn('size-3.5 shrink-0 transition-transform', open && 'rotate-90')} />
+            <ChevronRight className={cn('size-3.5 shrink-0 transition-transform duration-fast ease-[var(--ease-m3-spring-fast)]', open && 'rotate-90')} />
           </CollapsibleTrigger>
         )}
       </div>
-      <CollapsibleContent className="h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-fast data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0">
-        <div className="mt-1.5 overflow-hidden rounded-xl border bg-card/40">
+      <CollapsibleContent className="duration-[300ms] ease-[var(--ease-m3-emphasized-decelerate)]">
+        {/* M3 tonal expanded card. */}
+        <div className="mt-2 overflow-hidden rounded-2xl border border-border/55 bg-surface-container-low/85">
           <div className="divide-y divide-border/60">
             {items.map((item) => (
               <ActivityItemRow

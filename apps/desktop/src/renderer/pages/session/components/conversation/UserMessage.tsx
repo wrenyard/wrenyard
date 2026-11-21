@@ -49,7 +49,7 @@ export function UserMessage({ text, at, attachments, sessionId, pending, onRetry
   return (
     <Message
       align="end"
-      className={cn('group/msg', animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out')}
+      className={cn('group/msg', animate && 'wy-message-in')}
     >
       <MessageContent className="gap-1">
         {attachments !== undefined && attachments.length > 0 && (
@@ -66,10 +66,17 @@ export function UserMessage({ text, at, attachments, sessionId, pending, onRetry
             )}
             <div className="flex items-end justify-end gap-2">
               <ReplyMenu text={text} onReply={onReply}>
-                <Bubble variant="default" align="end">
-                  <BubbleContent className="rounded-2xl px-3 py-1.5">
+                {/* M3 tonal user bubble: the primary-container fill is pushed
+                    onto the content through the same descendant selector the
+                    Bubble variants use, so it wins over `variant="default"`. */}
+                <Bubble
+                  variant="default"
+                  align="end"
+                  className="*:data-[slot=bubble-content]:bg-primary-container/75 *:data-[slot=bubble-content]:text-on-primary-container"
+                >
+                  <BubbleContent className="rounded-[22px] rounded-br-[6px] px-4 py-2.5">
                     {quote !== undefined && (
-                      <div className="mb-1 line-clamp-2 rounded-lg bg-primary-foreground/15 px-2 py-1 text-xs opacity-80">{quote}</div>
+                      <div className="mb-1 line-clamp-2 rounded-lg bg-on-primary-container/10 px-2 py-1 text-xs opacity-80">{quote}</div>
                     )}
                     <span className="block whitespace-pre-wrap text-pretty">{body}</span>
                   </BubbleContent>

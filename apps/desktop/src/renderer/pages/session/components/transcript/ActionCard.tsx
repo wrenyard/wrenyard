@@ -30,7 +30,7 @@ function TaskRow({ action, onCancelTask }: { action: ActionModel; onCancelTask: 
     void cancelTask(taskRunId, onCancelTask);
   };
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs">
+    <div className="flex flex-wrap items-center gap-2 rounded-xl bg-muted/40 px-2 py-1.5 text-xs">
       <ListTodo className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="font-medium">{task?.taskName ?? '任务'}</span>
       {task?.runtime !== undefined && <span className="text-muted-foreground">{task.runtime}</span>}
@@ -93,7 +93,7 @@ function DispatchInput({ action, compile, contextItems }: { action: ActionModel;
     ? ''
     : stepName({ kind: 'call', call: compile }, { contextItems, actionTitle: () => action.title || undefined });
   return (
-    <div className="rounded-lg border">
+    <div className="rounded-xl border">
       <ActivityRow
         verb="派发输入"
         subject={name}
@@ -157,7 +157,7 @@ export function ActionRow({ action, calls, contextItems, sessionId, onCancelTask
         <p className="text-xs text-muted-foreground">{action.subtitle}</p>
       )}
       {nested.length > 0 && (
-        <div className="flex flex-col divide-y divide-border/60 rounded-lg border">
+        <div className="flex flex-col divide-y divide-border/60 rounded-xl border">
           {nested.map((call) => <NestedCallRow key={call.id} call={call} name={nameOf(call)} />)}
         </div>
       )}
@@ -179,7 +179,7 @@ export function ActionRow({ action, calls, contextItems, sessionId, onCancelTask
         // The task's answer reads like a reply, not like tool output.
         <AppMarkdown className="text-sm leading-relaxed">{action.result}</AppMarkdown>
       ) : (
-        <div className="max-h-80 overflow-auto rounded-lg border bg-background/60 px-3 py-2 text-sm">
+        <div className="max-h-80 overflow-auto rounded-xl border bg-background/60 px-3 py-2 text-sm">
           <AppMarkdown className="text-sm">{action.result}</AppMarkdown>
         </div>
       ))}
